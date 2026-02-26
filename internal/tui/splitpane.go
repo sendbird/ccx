@@ -341,6 +341,18 @@ func (fs *FoldState) HandleKey(key string) foldResult {
 			return foldHandled
 		}
 		return foldHandled
+	case "pgdown":
+		fs.BlockCursor = min(fs.BlockCursor+10, nBlocks-1)
+		return foldHandled
+	case "pgup":
+		fs.BlockCursor = max(fs.BlockCursor-10, 0)
+		return foldHandled
+	case "home":
+		fs.BlockCursor = 0
+		return foldHandled
+	case "end":
+		fs.BlockCursor = nBlocks - 1
+		return foldHandled
 	case "f":
 		fs.Collapsed = defaultFolds(fs.Entry)
 		fs.Formatted = nil
