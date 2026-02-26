@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -1404,11 +1405,26 @@ func (a *App) handleTick() tea.Cmd {
 			}
 		}
 		if changed && !a.isFiltering() {
+			// Remember currently selected session so cursor follows it after re-sort
+			selectedID := ""
+			if sel, ok := a.sessionList.SelectedItem().(sessionItem); ok {
+				selectedID = sel.sess.ID
+			}
+
+			sort.Slice(a.sessions, func(i, j int) bool {
+				return a.sessions[i].ModTime.After(a.sessions[j].ModTime)
+			})
+
 			items := make([]list.Item, len(a.sessions))
+			newIdx := 0
 			for i, s := range a.sessions {
 				items[i] = sessionItem{sess: s}
+				if s.ID == selectedID {
+					newIdx = i
+				}
 			}
 			a.sessionList.SetItems(items)
+			a.sessionList.Select(newIdx)
 		}
 		// Refresh preview for live sessions (auto-scroll to bottom)
 		a.refreshSessionPreviewLive()
