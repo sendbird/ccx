@@ -2095,14 +2095,15 @@ func (a *App) renderAgentPreviewContent() {
 	lineCount := 0
 	for i, e := range a.agentPreviewMsgs {
 		a.agentPreviewStarts[i] = lineCount
-		msg := renderCompactMessage(e, previewW, 3)
 		if i == cursor {
-			// Highlight selected message
-			for _, line := range strings.Split(strings.TrimRight(msg, "\n"), "\n") {
-				sb.WriteString(selectedRowStyle.Render(line) + "\n")
-				lineCount++
-			}
+			// Render selected message fully expanded
+			rp := renderFullMessageWithCursor(e, previewW, defaultFolds(e), nil, -1)
+			content := rp.content
+			sb.WriteString(content)
+			lineCount += strings.Count(content, "\n")
 		} else {
+			// Compact one-liner for non-selected messages
+			msg := renderCompactMessage(e, previewW, 1)
 			sb.WriteString(msg)
 			lineCount += strings.Count(msg, "\n")
 		}

@@ -367,14 +367,14 @@ func renderCompactMessage(e session.Entry, width, maxLines int) string {
 	for _, block := range e.Content {
 		switch block.Type {
 		case "text":
-			text := strings.TrimSpace(block.Text)
+			text := strings.TrimSpace(stripANSI(block.Text))
 			if text != "" {
 				textParts = append(textParts, text)
 			}
 		case "tool_use":
 			tools = append(tools, block.ToolName)
 		case "tool_result":
-			text := strings.TrimSpace(block.Text)
+			text := strings.TrimSpace(stripANSI(block.Text))
 			if text != "" {
 				// Truncate long tool results
 				if len(text) > 200 {
@@ -510,7 +510,7 @@ func renderFullMessageWithCursor(e session.Entry, width int, folds foldSet, form
 			}
 			sb.WriteString(toolBlockStyle.Render("Tool: " + block.ToolName))
 			if folded {
-				summary := block.ToolInput
+				summary := stripANSI(block.ToolInput)
 				if len(summary) > 60 {
 					summary = summary[:57] + "..."
 				}
@@ -520,7 +520,7 @@ func renderFullMessageWithCursor(e session.Entry, width int, folds foldSet, form
 				sb.WriteString("\n")
 				lineCount++
 				if block.ToolInput != "" {
-					input := block.ToolInput
+					input := stripANSI(block.ToolInput)
 					if formatted {
 						input = tryFormatJSON(input)
 					}
@@ -542,7 +542,7 @@ func renderFullMessageWithCursor(e session.Entry, width int, folds foldSet, form
 				sb.WriteString(cursorPrefix)
 			}
 			if folded {
-				summary := block.Text
+				summary := stripANSI(block.Text)
 				if len(summary) > 60 {
 					summary = summary[:57] + "..."
 				}
@@ -551,7 +551,7 @@ func renderFullMessageWithCursor(e session.Entry, width int, folds foldSet, form
 			} else {
 				sb.WriteString(style.Render(prefix) + "\n")
 				lineCount++
-				text := block.Text
+				text := stripANSI(block.Text)
 				if formatted {
 					text = tryFormatJSON(text)
 				}
