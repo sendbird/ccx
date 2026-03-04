@@ -4,6 +4,8 @@ A terminal UI for browsing, inspecting, and managing [Claude Code](https://docs.
 
 ccx gives you a full-cycle view of what Claude Code has been doing across all your projects — browse sessions, read conversations, inspect tool calls, view agent hierarchies, and get aggregated stats.
 
+![demo](demo.gif)
+
 ## Install
 
 ```bash
@@ -72,13 +74,15 @@ Full-screen message viewer with block-level navigation.
 - **Live modal** (`L` in session view) — real-time pane capture of active sessions
 - **Send input** (`I`) — inline prompt to send text to a running Claude Code session via tmux
 - **Jump to pane** (`J`) — switch to the tmux pane running the session
-- **Resume** (`r`) — reopen a session in Claude Code
 
-### Session Management
+### Session Actions (`x` menu)
 
-- **Delete** (`d`) — remove session files (with confirmation)
-- **Move** (`M`) — relocate a session to a different project directory
-- **Manual refresh** (`R`) — one-shot refresh of session data
+Press `x` to open the actions menu, then pick an action:
+
+- **d** — delete session
+- **m** — move session to a different project directory
+- **w** — create a git worktree from session
+- **r** — resume session in Claude Code
 
 ## Keybindings
 
@@ -92,9 +96,7 @@ Full-screen message viewer with block-level navigation.
 | `G` | Cycle group mode (flat/project/tree) |
 | `Tab` | Toggle/cycle session preview |
 | `[` / `]` | Adjust split pane ratio |
-| `r` | Resume session in Claude Code |
-| `d` | Delete session |
-| `M` | Move session to different project |
+| `x` | Actions menu (delete/move/worktree/resume) |
 | `L` | Open live modal for active session |
 | `I` | Send input to live session (tmux) |
 | `J` | Jump to tmux pane |
