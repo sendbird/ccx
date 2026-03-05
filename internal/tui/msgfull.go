@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -19,6 +20,7 @@ type navFrame struct {
 	items    []convItem
 	listIdx  int // cursor position to restore
 	agent    session.Subagent
+	task     session.TaskItem
 	fromView viewState // which view pushed this frame
 }
 
@@ -74,12 +76,21 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleCopyModeKeys(msg)
 	}
 
+	// Search input mode intercepts all keys
+	if a.msgFull.searching {
+		return a.handleMsgFullSearchInput(msg)
+	}
+
 	key := msg.String()
 
 	switch key {
 	case "q":
 		return a, tea.Quit
 	case "esc":
+		if a.msgFull.searchTerm != "" {
+			a.clearMsgFullSearch()
+			return a, nil
+		}
 		return a.popNavFrame()
 	case "v":
 		a.enterMsgFullCopyMode()
@@ -91,6 +102,21 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		openInPager(stripANSI(a.msgFull.content))
 		return a, nil
+	case "/":
+		a.startMsgFullSearch()
+		return a, nil
+	}
+
+	// Search navigation (when search term is active)
+	if a.msgFull.searchTerm != "" {
+		switch key {
+		case "n":
+			a.nextMsgFullSearchMatch()
+			return a, nil
+		case "N":
+			a.prevMsgFullSearchMatch()
+			return a, nil
+		}
 	}
 
 	// allMessages mode: only scroll, no blocks/folds/navigation
@@ -194,6 +220,7 @@ func (a *App) pushNavFrame() {
 		items:    a.conv.items,
 		listIdx:  a.convList.Index(),
 		agent:    a.conv.agent,
+		task:     a.conv.task,
 		fromView: a.state,
 	}
 	a.navStack = append(a.navStack, frame)
@@ -240,6 +267,7 @@ func (a *App) popNavFrame() (tea.Model, tea.Cmd) {
 		a.conv.agents = frame.agents
 		a.conv.items = frame.items
 		a.conv.agent = frame.agent
+		a.conv.task = frame.task
 		a.msgFull.allMessages = false
 
 		contentH := ContentHeight(a.height)
@@ -341,4 +369,144 @@ func (a *App) msgFullBreadcrumb() string {
 	}
 	m := a.msgFull.merged[a.msgFull.idx]
 	return fmt.Sprintf(" > #%d %s", m.startIdx+1, strings.ToUpper(m.entry.Role))
+}
+
+// handleMsgFullSearchInput handles key events while the search input is active.
+func (a *App) handleMsgFullSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "enter":
+		a.commitMsgFullSearch()
+		return a, nil
+	case "esc":
+		a.cancelMsgFullSearch()
+		return a, nil
+	}
+	var cmd tea.Cmd
+	a.msgFull.searchInput, cmd = a.msgFull.searchInput.Update(msg)
+	return a, cmd
+}
+
+// startMsgFullSearch activates the search input in msgFull view.
+func (a *App) startMsgFullSearch() {
+	ti := textinput.New()
+	ti.Prompt = "/"
+	ti.Placeholder = ""
+	ti.CharLimit = 200
+	ti.Width = a.width - 20
+	ti.Focus()
+	a.msgFull.searchInput = ti
+	a.msgFull.searching = true
+}
+
+// commitMsgFullSearch commits the current search input and finds matches.
+func (a *App) commitMsgFullSearch() {
+	term := a.msgFull.searchInput.Value()
+	a.msgFull.searching = false
+	if term == "" {
+		a.msgFull.searchTerm = ""
+		a.msgFull.searchLines = nil
+		return
+	}
+	a.msgFull.searchTerm = term
+	a.buildMsgFullSearchMatches()
+	// Jump to first match at or after current viewport
+	a.jumpMsgFullSearchForward()
+}
+
+// cancelMsgFullSearch closes search without changing the term.
+func (a *App) cancelMsgFullSearch() {
+	a.msgFull.searching = false
+}
+
+// clearMsgFullSearch clears search state entirely.
+func (a *App) clearMsgFullSearch() {
+	a.msgFull.searching = false
+	a.msgFull.searchTerm = ""
+	a.msgFull.searchLines = nil
+	a.msgFull.searchIdx = 0
+}
+
+// buildMsgFullSearchMatches finds all lines matching the search term.
+func (a *App) buildMsgFullSearchMatches() {
+	term := strings.ToLower(a.msgFull.searchTerm)
+	fullPlain := stripANSI(a.msgFull.content)
+	lines := strings.Split(fullPlain, "\n")
+	a.msgFull.searchLines = nil
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), term) {
+			a.msgFull.searchLines = append(a.msgFull.searchLines, i)
+		}
+	}
+	a.msgFull.searchIdx = 0
+}
+
+// jumpMsgFullSearchForward jumps to the next match at or after the viewport.
+func (a *App) jumpMsgFullSearchForward() {
+	if len(a.msgFull.searchLines) == 0 {
+		return
+	}
+	offset := a.msgFull.vp.YOffset
+	// Find the first match at or after current offset
+	for i, line := range a.msgFull.searchLines {
+		if line >= offset {
+			a.msgFull.searchIdx = i
+			a.scrollToSearchMatch()
+			return
+		}
+	}
+	// Wrap around
+	a.msgFull.searchIdx = 0
+	a.scrollToSearchMatch()
+}
+
+// jumpMsgFullSearchBackward jumps to the previous match.
+func (a *App) jumpMsgFullSearchBackward() {
+	if len(a.msgFull.searchLines) == 0 {
+		return
+	}
+	offset := a.msgFull.vp.YOffset
+	// Find the last match before current offset
+	for i := len(a.msgFull.searchLines) - 1; i >= 0; i-- {
+		if a.msgFull.searchLines[i] < offset {
+			a.msgFull.searchIdx = i
+			a.scrollToSearchMatch()
+			return
+		}
+	}
+	// Wrap around
+	a.msgFull.searchIdx = len(a.msgFull.searchLines) - 1
+	a.scrollToSearchMatch()
+}
+
+// nextMsgFullSearchMatch moves to the next match.
+func (a *App) nextMsgFullSearchMatch() {
+	if len(a.msgFull.searchLines) == 0 {
+		return
+	}
+	a.msgFull.searchIdx = (a.msgFull.searchIdx + 1) % len(a.msgFull.searchLines)
+	a.scrollToSearchMatch()
+}
+
+// prevMsgFullSearchMatch moves to the previous match.
+func (a *App) prevMsgFullSearchMatch() {
+	if len(a.msgFull.searchLines) == 0 {
+		return
+	}
+	a.msgFull.searchIdx--
+	if a.msgFull.searchIdx < 0 {
+		a.msgFull.searchIdx = len(a.msgFull.searchLines) - 1
+	}
+	a.scrollToSearchMatch()
+}
+
+// scrollToSearchMatch scrolls viewport to show the current search match.
+func (a *App) scrollToSearchMatch() {
+	if a.msgFull.searchIdx < 0 || a.msgFull.searchIdx >= len(a.msgFull.searchLines) {
+		return
+	}
+	line := a.msgFull.searchLines[a.msgFull.searchIdx]
+	maxOffset := max(a.msgFull.vp.TotalLineCount()-a.msgFull.vp.Height, 0)
+	target := min(max(line-a.msgFull.vp.Height/3, 0), maxOffset)
+	a.msgFull.vp.YOffset = target
 }

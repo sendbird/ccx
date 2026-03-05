@@ -521,3 +521,79 @@ func timeAgo(t time.Time) string {
 		return t.Format("Jan 02")
 	}
 }
+
+// renderHelpOverlay renders a help screen showing badge descriptions and search filters.
+func renderHelpOverlay(width, height int) string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+
+	var sb strings.Builder
+	sb.WriteString(titleStyle.Render("  ccx — Help") + "\n\n")
+
+	sb.WriteString(headerStyle.Render("  Badges") + "\n")
+	badges := []struct{ badge, desc string }{
+		{"[LIVE]", "Session has a running Claude process"},
+		{"[BUSY]", "Session is actively responding"},
+		{"[M]", "Session has CLAUDE.md memory file"},
+		{"[W]", "Session uses a git worktree"},
+		{"[T]", "Session has todos (TodoWrite)"},
+		{"[K]", "Session has tasks (TaskCreate/TaskUpdate)"},
+		{"[P]", "Session has a plan file"},
+		{"[A]", "Session spawned subagents (Task tool)"},
+		{"[C]", "Session hit context limit (compacted)"},
+		{"[S]", "Session used skills"},
+		{"[X]", "Session used MCP tools"},
+	}
+	for _, b := range badges {
+		sb.WriteString(fmt.Sprintf("    %-8s %s\n", b.badge, dimStyle.Render(b.desc)))
+	}
+
+	sb.WriteString("\n" + headerStyle.Render("  Search Filters") + "\n")
+	filters := []struct{ filter, desc string }{
+		{"is:live", "Live sessions"},
+		{"is:busy", "Busy (responding) sessions"},
+		{"is:wt", "Worktree sessions"},
+		{"is:team", "Team sessions"},
+		{"has:mem", "Sessions with memory"},
+		{"has:todo", "Sessions with todos"},
+		{"has:task", "Sessions with tasks"},
+		{"has:plan", "Sessions with plans"},
+		{"has:agent", "Sessions with subagents"},
+		{"has:compact", "Sessions with compaction"},
+		{"has:skill", "Sessions with skills"},
+		{"has:mcp", "Sessions with MCP tools"},
+		{"team:<name>", "Filter by team name"},
+	}
+	for _, f := range filters {
+		sb.WriteString(fmt.Sprintf("    %-14s %s\n", f.filter, dimStyle.Render(f.desc)))
+	}
+
+	sb.WriteString("\n" + headerStyle.Render("  Keybindings") + "\n")
+	keys := []struct{ key, desc string }{
+		{"↵ / →", "Open session / preview"},
+		{"g", "Open project directory"},
+		{"e", "Edit session files"},
+		{"x", "Actions menu (delete, move, worktree)"},
+		{"/", "Search / filter sessions"},
+		{"G", "Cycle grouping (flat → project → tree)"},
+		{"S", "Global stats"},
+		{"R", "Refresh session list"},
+		{"tab", "Toggle/cycle preview mode"},
+		{"L", "Live session modal (tmux)"},
+		{"?", "This help screen"},
+	}
+	for _, k := range keys {
+		sb.WriteString(fmt.Sprintf("    %-14s %s\n", k.key, dimStyle.Render(k.desc)))
+	}
+
+	text := sb.String()
+	lines := strings.Split(text, "\n")
+	// Pad to fill height
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return strings.Join(lines, "\n")
+}

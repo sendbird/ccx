@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -132,6 +133,55 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 	var line string
 	switch ci.kind {
 	case convTask:
+		// Group header row
+		if ci.groupTag != "" {
+			// ci.task.Status carries "completed/total" as a formatted string
+			counter := ci.task.Status
+			counterStyle := dimStyle
+			// Parse completed/total to color green when all done
+			var comp, total int
+			if _, err := fmt.Sscanf(counter, "%d/%d", &comp, &total); err == nil && comp == total && total > 0 {
+				counterStyle = lipgloss.NewStyle().Foreground(colorAccent)
+			}
+
+			var label string
+			if ci.count > 0 {
+				// Expandable header (last task-touching message)
+				fold := "▸"
+				if !ci.folded {
+					fold = "▾"
+				}
+				if selected {
+					label = fmt.Sprintf("%s Tasks [%s]", fold, counter+" ✓")
+				} else {
+					label = fmt.Sprintf("%s Tasks [%s]", fold, counterStyle.Render(counter+" ✓"))
+				}
+			} else {
+				// Marker header — show per-message operation summary
+				opDesc := ci.task.Subject
+				style := dimStyle
+				if selected {
+					style = selectedStyle
+				}
+				maxW := width - len(indent) - 12
+				if opDesc != "" {
+					if maxW > 3 && len(opDesc) > maxW {
+						opDesc = opDesc[:maxW-3] + "..."
+					}
+					label = "· " + style.Render(opDesc)
+				} else {
+					if selected {
+						label = fmt.Sprintf("· Tasks [%s]", counter+" ✓")
+					} else {
+						label = fmt.Sprintf("· Tasks [%s]", counterStyle.Render(counter+" ✓"))
+					}
+				}
+			}
+			line = fmt.Sprintf("%s%s %s", indent, cursor, label)
+			fmt.Fprint(w, clamp.Render(line))
+			return
+		}
+
 		status := "○"
 		switch ci.task.Status {
 		case "completed":
@@ -139,19 +189,24 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		case "in_progress":
 			status = lipgloss.NewStyle().Foreground(colorAssistant).Render("◉")
 		}
+		idLabel := ""
+		if ci.task.ID != "" {
+			idLabel = dimStyle.Render("#"+ci.task.ID) + " "
+		}
 		subj := ci.task.Subject
-		maxW := width - len(indent) - 6
+		idW := lipgloss.Width(idLabel)
+		maxW := width - len(indent) - 6 - idW
 		style := dimStyle
 		if selected {
 			style = selectedStyle
 		}
 		if filterTerm != "" && maxW > 0 {
-			line = fmt.Sprintf("%s%s %s %s", indent, cursor, status, highlightSnippet(subj, filterTerm, maxW, style))
+			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, highlightSnippet(subj, filterTerm, maxW, style))
 		} else {
 			if maxW > 3 && len(subj) > maxW {
 				subj = subj[:maxW-3] + "..."
 			}
-			line = fmt.Sprintf("%s%s %s %s", indent, cursor, status, style.Render(subj))
+			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, style.Render(subj))
 		}
 	case convAgent:
 		a := ci.agent
@@ -214,11 +269,47 @@ func convMsgPreview(e session.Entry, maxW int) string {
 
 // buildConvItems builds a flattened conversation item list from merged messages,
 // with inline task and agent sub-items under assistant messages.
+// A collapsible task group header appears at every task-touching message.
+// Individual task rows (expandable) are attached only under the LAST one.
 func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem) []convItem {
+	// First pass: find all task-touching message indices and the last one.
+	var taskMsgIndices []int
+	if len(tasks) > 0 {
+		for i, m := range merged {
+			if m.entry.Role != "assistant" {
+				continue
+			}
+			for _, block := range m.entry.Content {
+				if block.Type == "tool_use" && (block.ToolName == "TaskCreate" || block.ToolName == "TaskUpdate" || block.ToolName == "TodoWrite") {
+					taskMsgIndices = append(taskMsgIndices, i)
+					break
+				}
+			}
+		}
+	}
+	lastTaskMsgIdx := -1
+	if len(taskMsgIndices) > 0 {
+		lastTaskMsgIdx = taskMsgIndices[len(taskMsgIndices)-1]
+	}
+	taskMsgSet := make(map[int]bool, len(taskMsgIndices))
+	for _, idx := range taskMsgIndices {
+		taskMsgSet[idx] = true
+	}
+
+	// Pre-compute task completion stats and ID lookup
+	completed := 0
+	tasksByID := make(map[string]session.TaskItem, len(tasks))
+	for _, t := range tasks {
+		if t.Status == "completed" {
+			completed++
+		}
+		tasksByID[t.ID] = t
+	}
+
 	var items []convItem
 	assignedAgents := make(map[string]bool) // track agents already placed
 
-	for _, m := range merged {
+	for mi, m := range merged {
 		parentIdx := len(items)
 		items = append(items, convItem{
 			kind:   convMsg,
@@ -256,22 +347,34 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 			})
 		}
 
-		// Add task sub-items if this message has TaskCreate/TaskUpdate tool calls
-		hasTaskTool := false
-		for _, block := range m.entry.Content {
-			if block.Type == "tool_use" && (block.ToolName == "TaskCreate" || block.ToolName == "TaskUpdate" || block.ToolName == "TodoWrite") {
-				hasTaskTool = true
-				break
+		// Attach task group header at every task-touching message.
+		// The last one is expandable (count > 0, has children); earlier ones are markers (count = 0).
+		if taskMsgSet[mi] {
+			expandable := mi == lastTaskMsgIdx
+			headerCount := 0
+			if expandable {
+				headerCount = len(tasks)
 			}
-		}
-		if hasTaskTool && len(tasks) > 0 {
-			for _, t := range tasks {
-				items = append(items, convItem{
-					kind:      convTask,
-					task:      t,
-					indent:    1,
-					parentIdx: parentIdx,
-				})
+			// Build per-message operation summary
+			ops := taskOpSummaryResult(m.entry, tasksByID)
+			items = append(items, convItem{
+				kind:      convTask,
+				groupTag:  "tasks",
+				count:     headerCount,
+				folded:    true,
+				indent:    1,
+				parentIdx: parentIdx,
+				task:      session.TaskItem{Status: fmt.Sprintf("%d/%d", completed, len(tasks)), Subject: ops.compact, Description: ops.detailed},
+			})
+			if expandable {
+				for _, t := range tasks {
+					items = append(items, convItem{
+						kind:      convTask,
+						task:      t,
+						indent:    2,
+						parentIdx: parentIdx,
+					})
+				}
 			}
 		}
 	}
@@ -279,9 +382,106 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 	return items
 }
 
+// taskOpResult holds both compact (for list label) and detailed (for preview) summaries.
+type taskOpResult struct {
+	compact  string // one-line summary for conv list
+	detailed string // multi-line detail for preview
+}
+
+func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskItem) taskOpResult {
+	var compactParts []string
+	var detailLines []string
+	for _, b := range entry.Content {
+		if b.Type != "tool_use" {
+			continue
+		}
+		switch b.ToolName {
+		case "TaskCreate":
+			var input struct {
+				Subject     string `json:"subject"`
+				Description string `json:"description"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			subj := input.Subject
+			compactSubj := subj
+			if len(compactSubj) > 30 {
+				compactSubj = compactSubj[:27] + "..."
+			}
+			if compactSubj != "" {
+				compactParts = append(compactParts, "+"+compactSubj)
+			}
+			detail := "+ Created: " + subj
+			if input.Description != "" {
+				desc := input.Description
+				if len(desc) > 120 {
+					desc = desc[:117] + "..."
+				}
+				detail += "\n    " + desc
+			}
+			detailLines = append(detailLines, detail)
+		case "TaskUpdate":
+			var input struct {
+				TaskID string `json:"taskId"`
+				Status string `json:"status"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			if input.Status == "" {
+				continue
+			}
+			icon := "○"
+			switch input.Status {
+			case "completed":
+				icon = "✓"
+			case "in_progress":
+				icon = "◉"
+			}
+			compactLabel := icon + " #" + input.TaskID
+			detailLabel := icon + " #" + input.TaskID
+			if t, ok := tasksByID[input.TaskID]; ok {
+				compactSubj := t.Subject
+				if len(compactSubj) > 25 {
+					compactSubj = compactSubj[:22] + "..."
+				}
+				compactLabel = icon + " " + compactSubj
+				detailLabel += " " + t.Subject
+			}
+			compactParts = append(compactParts, compactLabel)
+			detailLines = append(detailLines, detailLabel)
+		case "TodoWrite":
+			compactParts = append(compactParts, "todo updated")
+			detailLines = append(detailLines, "Todo list updated")
+		}
+	}
+	return taskOpResult{
+		compact:  strings.Join(compactParts, ", "),
+		detailed: strings.Join(detailLines, "\n"),
+	}
+}
+
+// visibleConvItems returns only the items that should be displayed,
+// hiding children of folded group headers.
+func visibleConvItems(items []convItem) []convItem {
+	var visible []convItem
+	skipIndent := -1 // when >= 0, skip items with indent > skipIndent
+	for _, it := range items {
+		if skipIndent >= 0 {
+			if it.indent > skipIndent {
+				continue
+			}
+			skipIndent = -1
+		}
+		visible = append(visible, it)
+		if it.groupTag != "" && it.folded {
+			skipIndent = it.indent
+		}
+	}
+	return visible
+}
+
 func newConvList(items []convItem, width, height int) list.Model {
-	listItems := make([]list.Item, len(items))
-	for i, ci := range items {
+	vis := visibleConvItems(items)
+	listItems := make([]list.Item, len(vis))
+	for i, ci := range vis {
 		listItems[i] = ci
 	}
 
@@ -311,6 +511,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.conv.messages = entries
 	a.conv.merged = filterConversation(mergeConversationTurns(entries))
 	a.conv.agent = session.Subagent{}
+	a.conv.task = session.TaskItem{}
 
 	// Load agents
 	agents, _ := session.FindSubagents(sess.FilePath)
@@ -367,7 +568,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !sp.Show {
 			a.liveTail = false
 			a.conv.split.BottomAlign = false
-			if a.conv.agent.ShortID != "" {
+			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" {
 				return a.popNavFrame()
 			}
 			a.state = viewSessions
@@ -381,7 +582,18 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
+		// Toggle fold on expandable group headers; marker headers are no-op
+		if item.groupTag != "" {
+			if item.count > 0 {
+				a.toggleConvGroupFold(item)
+			}
+			return a, nil
+		}
 		switch item.kind {
+		case convTask:
+			// Drill into task — show conversation entries related to this task
+			a.pushNavFrame()
+			return a.openTaskConversation(item.task)
 		case convAgent:
 			// Push nav stack and open agent as conversation split view
 			a.pushNavFrame()
@@ -445,7 +657,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if key == "left" {
 			a.liveTail = false
 			a.conv.split.BottomAlign = false
-			if a.conv.agent.ShortID != "" {
+			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" {
 				return a.popNavFrame()
 			}
 			a.state = viewSessions
@@ -532,8 +744,17 @@ func (a *App) updateConvPreview() {
 	case convAgent:
 		entry = buildAgentPreviewEntry(item.agent)
 	case convTask:
-		// Show task details
-		a.setConvPreviewText(renderTaskSummary(item.task, sp.PreviewWidth(a.width, a.splitRatio)))
+		pw := sp.PreviewWidth(a.width, a.splitRatio)
+		if item.groupTag != "" && item.count > 0 {
+			// Expandable group header: show full task board
+			a.setConvPreviewText(a.renderConvTaskBoard(pw))
+		} else if item.groupTag != "" {
+			// Marker header: show per-message operation summary
+			a.setConvPreviewText(renderTaskMarkerPreview(item, pw))
+		} else {
+			// Individual task: show task details
+			a.setConvPreviewText(renderTaskSummary(item.task, pw))
+		}
 		return
 	}
 
@@ -639,6 +860,24 @@ func buildAgentPreviewEntry(agent session.Subagent) session.Entry {
 
 
 
+// renderTaskMarkerPreview renders the preview for a task marker header (non-expandable).
+// item.task.Description holds newline-separated operation details from taskOpDetail().
+func renderTaskMarkerPreview(item convItem, width int) string {
+	var sb strings.Builder
+	sb.WriteString(dimStyle.Render("── Task Operations ──") + "\n\n")
+	if item.task.Description != "" {
+		for _, line := range strings.Split(item.task.Description, "\n") {
+			if line == "" {
+				continue
+			}
+			sb.WriteString("  " + wrapText(line, width-4) + "\n\n")
+		}
+	} else {
+		sb.WriteString(dimStyle.Render("  No task operations at this point") + "\n")
+	}
+	return sb.String()
+}
+
 // renderTaskSummary renders a summary for a task in the preview pane.
 func renderTaskSummary(task session.TaskItem, width int) string {
 	var sb strings.Builder
@@ -735,7 +974,8 @@ func (a *App) refreshConversation() tea.Cmd {
 	oldIdx := a.convList.Index()
 	contentH := ContentHeight(a.height)
 	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
-	if oldIdx < len(a.conv.items) {
+	visCount := len(a.convList.Items())
+	if oldIdx < visCount {
 		a.convList.Select(oldIdx)
 	}
 	a.conv.split.CacheKey = ""
@@ -743,10 +983,176 @@ func (a *App) refreshConversation() tea.Cmd {
 	return nil
 }
 
+// renderConvTaskBoard renders a full task board for the preview pane,
+// reusing the same style as buildTasksPlanContent in app.go.
+func (a *App) renderConvTaskBoard(width int) string {
+	tasks := a.conv.sess.Tasks
+	if len(tasks) == 0 {
+		return dimStyle.Render("No tasks")
+	}
+
+	completed := 0
+	for _, t := range tasks {
+		if t.Status == "completed" {
+			completed++
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(dimStyle.Render(fmt.Sprintf("── Tasks [%d/%d] ──", completed, len(tasks))) + "\n\n")
+	for _, t := range tasks {
+		icon := "○"
+		style := dimStyle
+		switch t.Status {
+		case "completed":
+			icon = "✓"
+			style = lipgloss.NewStyle().Foreground(colorAccent)
+		case "in_progress":
+			icon = "◉"
+			style = lipgloss.NewStyle().Foreground(colorAssistant)
+		}
+		idTag := ""
+		if t.ID != "" {
+			idTag = dimStyle.Render("#"+t.ID) + " "
+		}
+		sb.WriteString(style.Render(fmt.Sprintf("  %s ", icon)) + idTag + style.Render(t.Subject) + "\n")
+		if t.Description != "" {
+			descW := width - 6
+			if descW < 20 {
+				descW = 20
+			}
+			sb.WriteString(dimStyle.Render(wrapText("    "+t.Description, descW)) + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// toggleConvGroupFold toggles the fold state of a group header in the conversation
+// items list and rebuilds the visible list, preserving cursor on the header.
+func (a *App) toggleConvGroupFold(header convItem) {
+	// Find the group header in the full items slice and toggle its fold state.
+	for i := range a.conv.items {
+		if a.conv.items[i].groupTag == header.groupTag && a.conv.items[i].parentIdx == header.parentIdx {
+			a.conv.items[i].folded = !a.conv.items[i].folded
+			break
+		}
+	}
+
+	// Rebuild visible list; find the header's new index.
+	vis := visibleConvItems(a.conv.items)
+	contentH := ContentHeight(a.height)
+	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	for i, v := range vis {
+		if v.groupTag == header.groupTag && v.parentIdx == header.parentIdx {
+			a.convList.Select(i)
+			break
+		}
+	}
+	a.conv.split.CacheKey = ""
+	a.updateConvPreview()
+}
+
 // renderConvSplit renders the conversation split view.
 func (a *App) renderConvSplit() string {
 	sp := &a.conv.split
 	return sp.Render(a.width, a.height, a.splitRatio)
+}
+
+// extractTaskEntries returns entries related to a specific task.
+// It finds ranges where the task was in_progress and collects all entries
+// in those ranges, plus the TaskCreate and final TaskUpdate entries.
+func extractTaskEntries(entries []session.Entry, taskID string) []session.Entry {
+	type taskRange struct{ start, end int }
+	var ranges []taskRange
+	curStart := -1
+
+	for i, e := range entries {
+		for _, b := range e.Content {
+			if b.Type != "tool_use" || (b.ToolName != "TaskUpdate" && b.ToolName != "TaskCreate") {
+				continue
+			}
+			var input struct {
+				TaskID string `json:"taskId"`
+				Status string `json:"status"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			if input.TaskID != taskID {
+				continue
+			}
+			if input.Status == "in_progress" && curStart < 0 {
+				curStart = i
+			} else if input.Status == "completed" && curStart >= 0 {
+				ranges = append(ranges, taskRange{curStart, i})
+				curStart = -1
+			}
+		}
+	}
+	// Unclosed range (still in progress)
+	if curStart >= 0 {
+		ranges = append(ranges, taskRange{curStart, len(entries) - 1})
+	}
+
+	if len(ranges) == 0 {
+		// Fallback: collect all entries that mention this task ID
+		for _, e := range entries {
+			for _, b := range e.Content {
+				if b.Type == "tool_use" && (b.ToolName == "TaskUpdate" || b.ToolName == "TaskCreate") {
+					var input struct {
+						TaskID string `json:"taskId"`
+					}
+					json.Unmarshal([]byte(b.ToolInput), &input)
+					if input.TaskID == taskID {
+						return []session.Entry{e}
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// Collect unique entries from all ranges
+	included := make(map[int]bool)
+	var result []session.Entry
+	for _, r := range ranges {
+		for i := r.start; i <= r.end && i < len(entries); i++ {
+			if !included[i] {
+				included[i] = true
+				result = append(result, entries[i])
+			}
+		}
+	}
+	return result
+}
+
+// openTaskConversation opens a conversation view filtered to entries related to a task.
+func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
+	taskEntries := extractTaskEntries(a.conv.messages, task.ID)
+	if len(taskEntries) == 0 {
+		a.copiedMsg = "No entries for task " + task.ID
+		return a, nil
+	}
+
+	merged := filterConversation(mergeConversationTurns(taskEntries))
+	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
+	items := buildConvItems(merged, agents, nil)
+
+	a.conv.sess = a.currentSess
+	a.conv.messages = taskEntries
+	a.conv.merged = merged
+	a.conv.agents = agents
+	a.conv.items = items
+	a.conv.agent = session.Subagent{}
+	a.conv.task = task
+
+	contentH := ContentHeight(a.height)
+	a.conv.split.Focus = false
+	a.conv.split.CacheKey = ""
+	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+
+	a.state = viewConversation
+	a.updateConvPreview()
+	return a, nil
 }
 
 // openAgentConversation loads an agent's messages and opens them in conversation split view.
@@ -767,6 +1173,7 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	a.conv.agents = agents
 	a.conv.items = items
 	a.conv.agent = agent
+	a.conv.task = session.TaskItem{}
 
 	contentH := ContentHeight(a.height)
 	a.conv.split.Focus = false

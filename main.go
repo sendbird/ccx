@@ -19,14 +19,16 @@ func main() {
 		tmuxEnabled  bool
 		tmuxAutoLive bool
 		worktreeDir  string
+		searchQuery  string
 	)
 
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.BoolVar(&showVersion, "v", false, "print version and exit (shorthand)")
 	flag.StringVar(&claudeDir, "dir", "", "path to Claude data directory (default: ~/.claude)")
-	flag.BoolVar(&tmuxEnabled, "tmux", false, "enable tmux integration (send input, jump to pane, live modal)")
+	flag.BoolVar(&tmuxEnabled, "tmux", false, "enable tmux integration (auto-detected if inside tmux)")
 	flag.BoolVar(&tmuxAutoLive, "tmux-auto-live", false, "auto-enter live session in same tmux window on startup")
 	flag.StringVar(&worktreeDir, "worktree-dir", ".worktree", "subdirectory name for git worktrees")
+	flag.StringVar(&searchQuery, "search", "", "start with session list filtered by search query")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "ccx — Claude Code Explorer\n\n")
 		fmt.Fprintf(os.Stderr, "Usage: ccx [flags]\n\n")
@@ -46,6 +48,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Auto-detect tmux unless explicitly set
+	if !tmuxEnabled && os.Getenv("TMUX") != "" {
+		tmuxEnabled = true
+	}
+
 	if len(sessions) == 0 {
 		dir := claudeDir
 		if dir == "" {
@@ -59,6 +66,7 @@ func main() {
 		TmuxEnabled:  tmuxEnabled,
 		TmuxAutoLive: tmuxAutoLive,
 		WorktreeDir:  worktreeDir,
+		SearchQuery:  searchQuery,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

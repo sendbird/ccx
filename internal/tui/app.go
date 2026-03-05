@@ -132,6 +132,9 @@ type App struct {
 	actionsSess session.Session
 	editChoices []editChoice // available files to edit
 
+	// Help overlay (? key)
+	showHelp bool
+
 	// Move project
 	moveMode      bool
 	moveInput     textinput.Model
@@ -163,7 +166,8 @@ type App struct {
 		agents   []session.Subagent
 		items    []convItem
 		split    SplitPane
-		agent    session.Subagent // non-zero when viewing agent conversation
+		agent session.Subagent  // non-zero when viewing agent conversation
+		task  session.TaskItem  // non-zero when viewing task conversation
 	}
 	convList list.Model
 
@@ -179,6 +183,13 @@ type App struct {
 		folds       FoldState
 		content     string
 		allMessages bool // true when showing full conversation (all messages concatenated)
+
+		// Viewport search
+		searching   bool
+		searchInput textinput.Model
+		searchTerm  string   // committed search term
+		searchLines []int    // line numbers that match
+		searchIdx   int      // current match index in searchLines
 	}
 
 	// Navigation stack for agent drill-down
@@ -200,6 +211,7 @@ type Config struct {
 	TmuxEnabled  bool   // enable tmux integration (I, J, live modal)
 	TmuxAutoLive bool   // auto-enter live session in same tmux window on startup
 	WorktreeDir  string // subdirectory name for worktrees (default ".worktree")
+	SearchQuery  string // initial search filter for session list
 }
 
 func NewApp(sessions []session.Session, cfg Config) *App {
@@ -329,7 +341,10 @@ func (a *App) View() string {
 	case viewSessions:
 		title = a.renderBreadcrumb()
 		content = a.renderSessionSplit()
-		if a.moveMode {
+		if a.showHelp {
+			content = renderHelpOverlay(a.width, ContentHeight(a.height))
+			help = formatHelp("press any key to close")
+		} else if a.moveMode {
 			help = "  " + a.moveInput.View() + helpStyle.Render("  enter:move esc:cancel")
 		} else if a.worktreeMode {
 			help = "  " + a.worktreeInput.View() + helpStyle.Render("  enter:create esc:cancel")
@@ -345,9 +360,12 @@ func (a *App) View() string {
 				h += " tab:mode esc:close ←→:focus []:resize"
 			}
 			if a.config.TmuxEnabled && inTmux() {
-				h += " L:live I:input J:jump"
+				h += " L:live"
+				if item, ok := a.sessionList.SelectedItem().(sessionItem); ok && item.sess.IsLive {
+					h += " I:input J:jump"
+				}
 			}
-			help = formatHelp(h + " /:search q:quit")
+			help = formatHelp(h + " /:search ?:help q:quit")
 		}
 
 	case viewGlobalStats:
@@ -368,7 +386,7 @@ func (a *App) View() string {
 		}
 		sp := &a.conv.split
 		h := "↵open c:full e:edit L:live R:refresh"
-		if a.config.TmuxEnabled && inTmux() {
+		if a.config.TmuxEnabled && inTmux() && a.currentSess.IsLive {
 			h += " I:input J:jump"
 		}
 		if sp.Show {
@@ -386,18 +404,28 @@ func (a *App) View() string {
 	case viewMessageFull:
 		title = a.renderBreadcrumb()
 		content = a.renderMessageFull()
-		if a.msgFull.allMessages {
+		if a.msgFull.searching {
+			help = "  " + a.msgFull.searchInput.View() + helpStyle.Render("  enter:search esc:cancel")
+		} else if a.msgFull.allMessages {
 			if a.copyModeActive {
 				help = formatHelp("all messages  ↑↓:move v/sp:select y/↵:copy home/end esc:cancel")
 			} else {
-				help = formatHelp("all messages  ↑↓:scroll v:copy y:all o:pager esc:back q:quit")
+				sh := "all messages  ↑↓:scroll v:copy y:all o:pager /:search"
+				if a.msgFull.searchTerm != "" {
+					sh += fmt.Sprintf(" [%d/%d] n/N:match", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
+				}
+				help = formatHelp(sh + " esc:back q:quit")
 			}
 		} else {
 			pos := fmt.Sprintf("#%d/%d", a.msgFull.idx+1, len(a.msgFull.merged))
 			if a.copyModeActive {
 				help = formatHelp(pos + "  ↑↓:move v/sp:select y/↵:copy home/end esc:cancel")
 			} else {
-				help = formatHelp(pos + "  ↑↓:blocks ←→:fold n/N:msg f/F:all v:copy y:all o:pager esc:back q:quit")
+				sh := pos + "  ↑↓:blocks ←→:fold n/N:msg f/F:all v:copy y:all o:pager /:search"
+				if a.msgFull.searchTerm != "" {
+					sh = pos + fmt.Sprintf("  [%d/%d] n/N:match ↑↓:blocks ←→:fold f/F:all v:copy y:all o:pager", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
+				}
+				help = formatHelp(sh + " esc:back q:quit")
 			}
 		}
 	}
@@ -447,6 +475,12 @@ func (a *App) overlayModal(base string) string {
 func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	sp := &a.sessSplit
 	key := msg.String()
+
+	// Help overlay: any key closes it
+	if a.showHelp {
+		a.showHelp = false
+		return a, nil
+	}
 
 	// Clear actions menu on any unrelated key
 	if a.actionsMenu {
@@ -564,6 +598,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case "S":
 		return a.openGlobalStats()
+	case "?":
+		a.showHelp = true
+		return a, nil
 	// Session has custom tab/shift+tab (mode cycling)
 	case "tab":
 		if !sp.Show {
@@ -2501,6 +2538,9 @@ func (a *App) resizeAll() tea.Cmd {
 	if a.sessionList.Width() == 0 {
 		a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode)
 		a.sessSplit.CacheKey = ""
+		if a.config.SearchQuery != "" {
+			applyListFilter(&a.sessionList, a.config.SearchQuery)
+		}
 		cmd = a.autoSelectSession()
 	} else if a.state == viewSessions {
 		idx := a.sessionList.Index()
@@ -2621,6 +2661,15 @@ func (a *App) renderBreadcrumb() string {
 				"agent:" + a.conv.agent.ShortID,
 				viewConversation,
 			})
+		}
+		if a.conv.task.ID != "" {
+			label := "task:" + a.conv.task.ID
+			if len(a.conv.task.Subject) > 30 {
+				label += " " + a.conv.task.Subject[:27] + "..."
+			} else if a.conv.task.Subject != "" {
+				label += " " + a.conv.task.Subject
+			}
+			crumbs = append(crumbs, crumb{label, viewConversation})
 		}
 	case viewMessageFull:
 		crumbs = []crumb{

@@ -46,6 +46,15 @@ func startListSearch(l *list.Model) tea.Cmd {
 	return cmd
 }
 
+// applyListFilter sets the filter text and applies it,
+// leaving the list in FilterApplied state with results narrowed.
+func applyListFilter(l *list.Model, query string) {
+	if l.Width() == 0 || query == "" {
+		return
+	}
+	l.SetFilterText(query)
+}
+
 // syncFilterVisibility is intentionally a no-op. The filter bar inside the
 // list is always hidden; the filter input is rendered in the bottom help line.
 func syncFilterVisibility(_ *list.Model) {}
