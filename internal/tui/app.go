@@ -145,18 +145,14 @@ type App struct {
 	worktreeInput textinput.Model
 	worktreeSess  session.Session
 
-	// Live modal (overlay on sessions list — captures tmux pane)
-	liveModal       bool
-	liveModalVP     viewport.Model
-	liveModalSess   session.Session
-	liveModalPane   tmuxPane
-	liveModalInput  textinput.Model
-	liveModalTyping bool // input mode active
-
 	// Inline live input (bottom prompt, no modal)
 	liveInputActive bool
 	liveInputModel  textinput.Model
 	liveInputPane   tmuxPane
+
+	// Live preview (tmux capture in split preview)
+	livePreviewPane   tmuxPane
+	livePreviewSessID string
 
 	// Conversation split view (viewConversation)
 	conv struct {
@@ -203,7 +199,8 @@ const (
 	sessPreviewStats
 	sessPreviewMemory
 	sessPreviewTasksPlan
-	numSessPreviewModes = 4
+	sessPreviewLive // tmux pane capture
+	numSessPreviewModes = 5
 )
 
 // Config holds application configuration from CLI flags.
@@ -255,8 +252,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmd, tickCmd())
 
 	case liveTickMsg:
-		if a.liveModal {
-			a.captureLivePane()
+		if a.sessPreviewMode == sessPreviewLive && a.livePreviewSessID != "" {
+			a.refreshLivePreview()
 			return a, liveTickCmd()
 		}
 		if a.liveTail {
@@ -290,11 +287,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.copiedMsg = ""
 		if msg.String() == "ctrl+c" {
 			return a, tea.Quit
-		}
-
-		// Live modal intercepts all keys when active
-		if a.liveModal {
-			return a.handleLiveModalKeys(msg)
 		}
 
 		// Inline live input intercepts all keys when active
@@ -450,24 +442,7 @@ func (a *App) View() string {
 
 	screen := title + "\n" + content + "\n" + help
 
-	// Overlay live modal if active
-	if a.liveModal {
-		screen = a.overlayModal(screen)
-	}
-
 	return screen
-}
-
-// overlayModal places the modal box centered over the base screen.
-func (a *App) overlayModal(base string) string {
-	modal := a.renderLiveModal()
-	if modal == "" {
-		return base
-	}
-	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center, modal,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
-	)
 }
 
 // --- Key handlers ---
@@ -581,7 +556,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		return a.openLiveModal(item.sess)
+		return a.openLivePreview(item.sess)
 	case "e":
 		item, ok := a.sessionList.SelectedItem().(sessionItem)
 		if !ok {
@@ -870,9 +845,9 @@ func (a *App) handleGlobalStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// --- Live Modal ---
+// --- Live Preview (tmux capture in split pane) ---
 
-func (a *App) openLiveModal(sess session.Session) (tea.Model, tea.Cmd) {
+func (a *App) openLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 	if !sess.IsLive {
 		a.copiedMsg = "not a live session"
 		return a, nil
@@ -882,174 +857,24 @@ func (a *App) openLiveModal(sess session.Session) (tea.Model, tea.Cmd) {
 		a.copiedMsg = "tmux pane not found"
 		return a, nil
 	}
-	a.liveModal = true
-	a.liveModalSess = sess
-	a.liveModalPane = pane
-	modalW := a.liveModalWidth()
-	modalH := a.liveModalHeight()
-	a.liveModalVP = viewport.New(modalW-2, modalH-2)
-	a.captureLivePane()
-	a.liveModalVP.GotoBottom()
+	a.livePreviewPane = pane
+	a.livePreviewSessID = sess.ID
+	a.toggleSessionPreviewMode(sessPreviewLive)
+	a.refreshLivePreview()
 	return a, liveTickCmd()
 }
 
-func (a *App) closeLiveModal() {
-	a.liveModal = false
-}
-
-func (a *App) captureLivePane() {
-	content, err := tmuxCapturePane(a.liveModalPane)
+func (a *App) refreshLivePreview() {
+	content, err := tmuxCapturePane(a.livePreviewPane)
 	if err != nil {
+		a.sessSplit.Preview.SetContent(dimStyle.Render("(capture failed)"))
 		return
 	}
-	wasAtBottom := vpAtBottom(&a.liveModalVP)
-	a.liveModalVP.SetContent(content)
+	wasAtBottom := vpAtBottom(&a.sessSplit.Preview)
+	a.sessSplit.Preview.SetContent(content)
 	if wasAtBottom {
-		a.liveModalVP.GotoBottom()
+		a.sessSplit.Preview.GotoBottom()
 	}
-	// Update responding state for modal title/border color
-	info, err := os.Stat(a.liveModalSess.FilePath)
-	if err == nil {
-		a.liveModalSess.IsResponding = a.liveModalSess.IsLive && time.Since(info.ModTime()) < 10*time.Second
-	}
-}
-
-func (a *App) handleLiveModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if a.liveModalTyping {
-		return a.handleLiveModalInput(msg)
-	}
-
-	key := msg.String()
-	switch key {
-	case "q", "esc":
-		a.closeLiveModal()
-		return a, nil
-	case "up":
-		scrollPreview(&a.liveModalVP, "up")
-		return a, nil
-	case "down":
-		scrollPreview(&a.liveModalVP, "down")
-		return a, nil
-	case "pgup":
-		scrollPreview(&a.liveModalVP, "pgup")
-		return a, nil
-	case "pgdown":
-		scrollPreview(&a.liveModalVP, "pgdown")
-		return a, nil
-	case "home":
-		scrollPreview(&a.liveModalVP, "home")
-		return a, nil
-	case "end":
-		scrollPreview(&a.liveModalVP, "end")
-		return a, nil
-	case "I":
-		a.liveModalTyping = true
-		ti := textinput.New()
-		ti.Prompt = "Send: "
-		ti.Width = a.liveModalWidth() - 6
-		ti.Focus()
-		a.liveModalInput = ti
-		return a, ti.Cursor.BlinkCmd()
-	case "J":
-		a.closeLiveModal()
-		return a.jumpToTmuxPane(a.liveModalSess.ProjectPath, a.liveModalSess.ID)
-	}
-	return a, nil
-}
-
-func (a *App) handleLiveModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		text := a.liveModalInput.Value()
-		a.liveModalTyping = false
-		if text == "" {
-			return a, nil
-		}
-		if err := tmuxSendKeys(a.liveModalPane, text); err != nil {
-			a.copiedMsg = "Send failed"
-			return a, nil
-		}
-		a.copiedMsg = "Sent"
-		return a, nil
-	case "esc":
-		a.liveModalTyping = false
-		return a, nil
-	}
-	var cmd tea.Cmd
-	a.liveModalInput, cmd = a.liveModalInput.Update(msg)
-	return a, cmd
-}
-
-func (a *App) liveModalWidth() int {
-	return max(min(a.width-8, a.width*85/100), 40)
-}
-
-func (a *App) liveModalHeight() int {
-	return max(a.height-6, 10)
-}
-
-func (a *App) renderLiveModal() string {
-	if !a.liveModal {
-		return ""
-	}
-	modalW := a.liveModalWidth()
-	modalH := a.liveModalHeight()
-
-	// Pick colors based on responding state
-	titleBg := lipgloss.Color("#4ADE80")
-	borderColor := lipgloss.Color("#4ADE80")
-	titleLabel := "LIVE"
-	if a.liveModalSess.IsResponding {
-		titleBg = lipgloss.Color("#F59E0B")
-		borderColor = lipgloss.Color("#F59E0B")
-		titleLabel = "BUSY"
-	}
-
-	// Title: LIVE/BUSY <project> <id> ... <scroll%>
-	sessionLabel := a.liveModalSess.ShortID
-	if a.liveModalSess.ProjectName != "" {
-		sessionLabel = a.liveModalSess.ProjectName + " " + sessionLabel
-	}
-	titleText := fmt.Sprintf(" %s %s ", titleLabel, sessionLabel)
-	pct := int(a.liveModalVP.ScrollPercent() * 100)
-	rightText := fmt.Sprintf(" %d%% ", pct)
-	titlePad := max(modalW-2-len(titleText)-len(rightText), 0)
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#000000")).
-		Background(titleBg).
-		Render(titleText) +
-		lipgloss.NewStyle().
-			Background(colorPrimary).
-			Foreground(lipgloss.Color("#A1A1AA")).
-			Render(strings.Repeat("─", titlePad)+rightText)
-
-	// Body
-	body := a.liveModalVP.View()
-
-	// Help line / input
-	var help string
-	if a.liveModalTyping {
-		inputView := a.liveModalInput.View()
-		inputPad := max(modalW-2-lipgloss.Width(inputView), 0)
-		help = inputView + strings.Repeat(" ", inputPad)
-	} else {
-		helpText := " ↑↓:scroll I:input J:jump esc:close "
-		helpPad := max(modalW-2-len(helpText), 0)
-		help = helpStyle.Render(helpText + strings.Repeat(" ", helpPad))
-	}
-
-	// Build modal box
-	borderStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Width(modalW - 2).
-		Height(modalH - 2)
-
-	inner := title + "\n" + body + "\n" + help
-	box := borderStyle.Render(inner)
-
-	return box
 }
 
 func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
@@ -1693,14 +1518,24 @@ func (a *App) toggleSessionPreviewMode(mode sessPreview) {
 }
 
 // cycleSessionPreviewMode advances to the next preview tab.
+// Skips sessPreviewLive — it's only entered via the L key.
 func (a *App) cycleSessionPreviewMode() {
 	a.sessPreviewMode = (a.sessPreviewMode + 1) % numSessPreviewModes
+	if a.sessPreviewMode == sessPreviewLive {
+		a.sessPreviewMode = (a.sessPreviewMode + 1) % numSessPreviewModes
+	}
+	a.livePreviewSessID = ""
 	a.sessSplit.CacheKey = ""
 }
 
 // cycleSessionPreviewModeReverse goes to the previous preview tab.
+// Skips sessPreviewLive — it's only entered via the L key.
 func (a *App) cycleSessionPreviewModeReverse() {
 	a.sessPreviewMode = (a.sessPreviewMode + numSessPreviewModes - 1) % numSessPreviewModes
+	if a.sessPreviewMode == sessPreviewLive {
+		a.sessPreviewMode = (a.sessPreviewMode + numSessPreviewModes - 1) % numSessPreviewModes
+	}
+	a.livePreviewSessID = ""
 	a.sessSplit.CacheKey = ""
 }
 
@@ -1736,6 +1571,20 @@ func (a *App) updateSessionPreview() {
 		a.updateSessionMemoryPreview(item.sess)
 	case sessPreviewTasksPlan:
 		a.updateSessionTasksPlanPreview(item.sess)
+	case sessPreviewLive:
+		if item.sess.IsLive {
+			if pane, found := findTmuxPane(item.sess.ProjectPath, item.sess.ID); found {
+				a.livePreviewPane = pane
+				a.livePreviewSessID = item.sess.ID
+				a.refreshLivePreview()
+			} else {
+				a.livePreviewSessID = ""
+				a.sessSplit.Preview.SetContent(dimStyle.Render("(tmux pane not found)"))
+			}
+		} else {
+			a.livePreviewSessID = ""
+			a.sessSplit.Preview.SetContent(dimStyle.Render("(not a live session)"))
+		}
 	default:
 		a.updateSessionConvPreview(item.sess)
 	}
@@ -2555,10 +2404,6 @@ func (a *App) resizeAll() tea.Cmd {
 	if a.globalStatsVP.Width > 0 {
 		a.globalStatsVP.Width = a.width
 		a.globalStatsVP.Height = contentH
-	}
-	if a.liveModal && a.liveModalVP.Width > 0 {
-		a.liveModalVP.Width = a.liveModalWidth() - 2
-		a.liveModalVP.Height = a.liveModalHeight() - 2
 	}
 	// Conversation split view
 	if a.convList.Width() > 0 {

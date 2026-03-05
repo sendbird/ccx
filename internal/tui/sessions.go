@@ -580,7 +580,7 @@ func renderHelpOverlay(width, height int) string {
 		{"S", "Global stats"},
 		{"R", "Refresh session list"},
 		{"tab", "Toggle/cycle preview mode"},
-		{"L", "Live session modal (tmux)"},
+		{"L", "Live popup (tmux)"},
 		{"?", "This help screen"},
 		{"q", "Quit"},
 	}

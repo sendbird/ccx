@@ -43,8 +43,16 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 
 	if dur > 0 {
 		rate := float64(stats.MessageCount) / dur.Minutes()
-		sb.WriteString(fmt.Sprintf("  Rate      %s\n",
-			labelStyle.Render(fmt.Sprintf("%.1f msg/min", rate))))
+		rateLine := fmt.Sprintf("%.1f msg/min", rate)
+		// Inline rate sparkline
+		if len(stats.MsgTimestamps) > 2 {
+			rateSparkW := min(width-24, 20)
+			if rateSparkW > 5 {
+				rateBuckets := timelineBuckets(stats.MsgTimestamps, stats.FirstTimestamp, stats.LastTimestamp, rateSparkW)
+				rateLine += "  " + sparkline(rateBuckets, rateSparkW)
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  Rate      %s\n", labelStyle.Render(rateLine)))
 	}
 	if stats.CompactionCount > 0 {
 		warnStyle := lipgloss.NewStyle().Foreground(colorError)
@@ -217,6 +225,11 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 		sb.WriteString(ruler + "\n")
 		renderToolBarWithErrors(&sb, stats.MCPToolCounts, mcpErrors, width, 10)
 		sb.WriteString("\n")
+	}
+
+	// ── TOOL TIMELINES ──
+	if len(stats.ToolCallTimestamps) > 0 && dur > 0 {
+		renderToolTimelines(&sb, stats.ToolCallTimestamps, stats.ToolErrorTimestamps, stats.ToolCounts, stats.FirstTimestamp, stats.LastTimestamp, width, 10)
 	}
 
 	// ── CODE ──
@@ -780,6 +793,11 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 		sb.WriteString("\n")
 	}
 
+	// ── TOOL TIMELINES (daily) ──
+	if len(stats.AllToolCallTimestamps) > 0 {
+		renderToolDailyTimelines(&sb, stats.AllToolCallTimestamps, stats.AllToolErrorTimestamps, stats.ToolCounts, width, 10)
+	}
+
 	// ── SKILLS ──
 	if len(stats.SkillCounts) > 0 {
 		totalSkills := 0
@@ -876,6 +894,18 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 				spark := sparkline(buckets, sparkW)
 				userStyle := lipgloss.NewStyle().Foreground(colorUser)
 				sb.WriteString(fmt.Sprintf("  Sessions  %s\n", userStyle.Render(spark)))
+				// Daily message timeline
+				if len(stats.AllMsgTimestamps) > 0 {
+					msgBuckets, _, _ := dailyBuckets(stats.AllMsgTimestamps, sparkW)
+					for len(msgBuckets) < len(buckets) {
+						msgBuckets = append(msgBuckets, 0)
+					}
+					if hasNonZero(msgBuckets) {
+						msgSpark := sparkline(msgBuckets, sparkW)
+						msgStyle := lipgloss.NewStyle().Foreground(colorAccent)
+						sb.WriteString(fmt.Sprintf("  Messages  %s\n", msgStyle.Render(msgSpark)))
+					}
+				}
 				// Daily error timeline (same date scale, red)
 				if len(stats.AllErrorTimestamps) > 0 {
 					errBuckets, _, _ := dailyBuckets(stats.AllErrorTimestamps, sparkW)
@@ -898,6 +928,169 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 	}
 
 	return sb.String()
+}
+
+// renderToolTimelines renders per-tool activity and error sparklines for a session.
+func renderToolTimelines(sb *strings.Builder, toolCallTS, toolErrTS map[string][]time.Time, toolCounts map[string]int, start, end time.Time, width, limit int) {
+	dur := end.Sub(start)
+	if dur <= 0 || len(toolCallTS) == 0 {
+		return
+	}
+
+	type entry struct {
+		name  string
+		count int
+	}
+	var entries []entry
+	for name, ts := range toolCallTS {
+		if len(ts) > 0 {
+			entries = append(entries, entry{name: name, count: toolCounts[name]})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].count > entries[j].count })
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	titleStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	labelStyle := dimStyle
+	accentStyle := lipgloss.NewStyle().Foreground(colorAccent)
+	errStyle := lipgloss.NewStyle().Foreground(colorError)
+	ruler := dimStyle.Render(strings.Repeat("─", min(width, 40)))
+
+	sb.WriteString(titleStyle.Render("TOOL TIMELINES") + "\n")
+	sb.WriteString(ruler + "\n")
+
+	maxNameW := 0
+	for _, e := range entries {
+		short := shortenToolName(e.name)
+		if len(short) > maxNameW {
+			maxNameW = len(short)
+		}
+	}
+	maxLabelW := max(width*2/5, 14)
+	if maxNameW > maxLabelW {
+		maxNameW = maxLabelW
+	}
+
+	sparkW := width - maxNameW - 20
+	if sparkW < 8 {
+		sparkW = 8
+	}
+
+	for _, e := range entries {
+		name := shortenToolName(e.name)
+		if len(name) > maxNameW {
+			name = name[:maxNameW-1] + "…"
+		}
+		buckets := timelineBuckets(toolCallTS[e.name], start, end, sparkW)
+		spark := sparkline(buckets, sparkW)
+		line := fmt.Sprintf("  %-*s %s %d", maxNameW, name, accentStyle.Render(spark), e.count)
+
+		if errTS, ok := toolErrTS[e.name]; ok && len(errTS) > 0 {
+			errBuckets := timelineBuckets(errTS, start, end, min(sparkW/3, 10))
+			if hasNonZero(errBuckets) {
+				errSpark := sparkline(errBuckets, min(sparkW/3, 10))
+				line += "  " + errStyle.Render(errSpark) + errStyle.Render(fmt.Sprintf(" %d err", len(errTS)))
+			}
+		}
+		sb.WriteString(line + "\n")
+	}
+
+	// Time axis
+	sb.WriteString(fmt.Sprintf("  %-*s%s%s\n",
+		maxNameW+1, "",
+		labelStyle.Render(start.Format("15:04")),
+		labelStyle.Render(fmt.Sprintf("%*s", max(sparkW-10, 0), end.Format("15:04")))))
+	sb.WriteString("\n")
+}
+
+// renderToolDailyTimelines renders per-tool daily activity and error sparklines for global stats.
+func renderToolDailyTimelines(sb *strings.Builder, toolCallTS, toolErrTS map[string][]time.Time, toolCounts map[string]int, width, limit int) {
+	if len(toolCallTS) == 0 {
+		return
+	}
+
+	type entry struct {
+		name  string
+		count int
+	}
+	var entries []entry
+	for name, ts := range toolCallTS {
+		if len(ts) > 0 {
+			entries = append(entries, entry{name: name, count: toolCounts[name]})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].count > entries[j].count })
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	titleStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	labelStyle := dimStyle
+	accentStyle := lipgloss.NewStyle().Foreground(colorAccent)
+	errStyle := lipgloss.NewStyle().Foreground(colorError)
+	ruler := dimStyle.Render(strings.Repeat("─", min(width, 40)))
+
+	sb.WriteString(titleStyle.Render("TOOL TIMELINES (daily)") + "\n")
+	sb.WriteString(ruler + "\n")
+
+	maxNameW := 0
+	for _, e := range entries {
+		short := shortenToolName(e.name)
+		if len(short) > maxNameW {
+			maxNameW = len(short)
+		}
+	}
+	maxLabelW := max(width*2/5, 14)
+	if maxNameW > maxLabelW {
+		maxNameW = maxLabelW
+	}
+
+	sparkW := width - maxNameW - 20
+	if sparkW < 8 {
+		sparkW = 8
+	}
+
+	var firstDay, lastDay string
+	for _, e := range entries {
+		name := shortenToolName(e.name)
+		if len(name) > maxNameW {
+			name = name[:maxNameW-1] + "…"
+		}
+		buckets, fd, ld := dailyBuckets(toolCallTS[e.name], sparkW)
+		if len(buckets) < 2 {
+			continue
+		}
+		if firstDay == "" {
+			firstDay, lastDay = fd, ld
+		}
+		spark := sparkline(buckets, sparkW)
+		line := fmt.Sprintf("  %-*s %s %d", maxNameW, name, accentStyle.Render(spark), e.count)
+
+		if errTS, ok := toolErrTS[e.name]; ok && len(errTS) > 0 {
+			errBuckets, _, _ := dailyBuckets(errTS, min(sparkW/3, 10))
+			if hasNonZero(errBuckets) {
+				errSpark := sparkline(errBuckets, min(sparkW/3, 10))
+				line += "  " + errStyle.Render(errSpark) + errStyle.Render(fmt.Sprintf(" %d err", len(errTS)))
+			}
+		}
+		sb.WriteString(line + "\n")
+	}
+
+	if firstDay != "" {
+		sb.WriteString(fmt.Sprintf("  %-*s%s%s\n",
+			maxNameW+1, "",
+			labelStyle.Render(firstDay),
+			labelStyle.Render(fmt.Sprintf("%*s", max(sparkW-len(firstDay)-len(lastDay), 0), lastDay))))
+	}
+	sb.WriteString("\n")
 }
 
 // renderToolBarN renders a sorted bar chart, limited to top N entries.

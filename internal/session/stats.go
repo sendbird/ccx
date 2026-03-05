@@ -37,6 +37,10 @@ type SessionStats struct {
 	CommandErrors   map[string]int // command name -> error count
 	ErrorTimestamps []time.Time    // when errors occurred (for timeline)
 
+	// Per-tool timestamps for timeline sparklines
+	ToolCallTimestamps  map[string][]time.Time // tool name -> call timestamps
+	ToolErrorTimestamps map[string][]time.Time // tool name -> error timestamps
+
 	// MCP tools: name -> count (subset of ToolCounts for mcp__ prefixed tools)
 	MCPToolCounts map[string]int
 
@@ -128,16 +132,18 @@ func ScanSessionStats(path string) (SessionStats, error) {
 	defer f.Close()
 
 	stats := SessionStats{
-		ToolCounts:    make(map[string]int),
-		MCPToolCounts: make(map[string]int),
-		CommandCounts: make(map[string]int),
-		SkillCounts:   make(map[string]int),
-		FilesTouched:  make(map[string]bool),
-		Models:        make(map[string]int),
-		ModelTokens:   make(map[string]*ModelUsage),
-		ToolErrors:    make(map[string]int),
-		SkillErrors:   make(map[string]int),
-		CommandErrors: make(map[string]int),
+		ToolCounts:          make(map[string]int),
+		MCPToolCounts:       make(map[string]int),
+		CommandCounts:       make(map[string]int),
+		SkillCounts:         make(map[string]int),
+		FilesTouched:        make(map[string]bool),
+		Models:              make(map[string]int),
+		ModelTokens:         make(map[string]*ModelUsage),
+		ToolErrors:          make(map[string]int),
+		SkillErrors:         make(map[string]int),
+		CommandErrors:       make(map[string]int),
+		ToolCallTimestamps:  make(map[string][]time.Time),
+		ToolErrorTimestamps: make(map[string][]time.Time),
 	}
 
 	// Context tracking for error attribution
@@ -283,7 +289,7 @@ func ScanSessionStats(path string) (SessionStats, error) {
 
 		// Tool use (assistant messages have tool_use blocks)
 		if isAsst && (bytes.Contains(line, bToolUse) || bytes.Contains(line, bToolUseS)) {
-			extractToolUses(line, &stats)
+			extractToolUses(line, &stats, ts)
 			toolIDMap = buildToolIDMap(line)
 			if skill := extractFirstSkill(line); skill != "" {
 				currentSkill = skill
@@ -307,6 +313,9 @@ func ScanSessionStats(path string) (SessionStats, error) {
 				// Attribute errors to specific tools via tool_use_id matching
 				for _, name := range extractErrorToolNames(line, toolIDMap) {
 					stats.ToolErrors[name]++
+					if !ts.IsZero() {
+						stats.ToolErrorTimestamps[name] = append(stats.ToolErrorTimestamps[name], ts)
+					}
 				}
 				// Attribute to active skill/command context
 				if currentSkill != "" {
@@ -365,7 +374,7 @@ func extractUsage(line []byte) *rawUsage {
 }
 
 // extractToolUses finds all tool_use blocks in a line and records tool names and file paths.
-func extractToolUses(line []byte, stats *SessionStats) {
+func extractToolUses(line []byte, stats *SessionStats, ts time.Time) {
 	markers := [][]byte{bToolUse, bToolUseS}
 	for _, marker := range markers {
 		offset := 0
@@ -380,6 +389,9 @@ func extractToolUses(line []byte, stats *SessionStats) {
 			name := extractStringField(line[pos:min(pos+200, len(line))], bNameQ, bNameQS)
 			if name != "" {
 				stats.ToolCounts[name]++
+				if !ts.IsZero() {
+					stats.ToolCallTimestamps[name] = append(stats.ToolCallTimestamps[name], ts)
+				}
 
 				// Categorize
 				if len(name) > 5 && name[:5] == "mcp__" {
@@ -627,20 +639,29 @@ type GlobalStats struct {
 	SessionTokens    []int64         // output tokens per session for sparkline
 	SessionStarts    []time.Time     // session start times for daily activity
 	AllErrorTimestamps []time.Time   // all error timestamps for daily error timeline
+
+	// Per-tool timestamps for daily timeline sparklines
+	AllToolCallTimestamps  map[string][]time.Time
+	AllToolErrorTimestamps map[string][]time.Time
+
+	// All message timestamps for daily message sparkline
+	AllMsgTimestamps []time.Time
 }
 
 // AggregateStats scans all session files and aggregates their statistics.
 func AggregateStats(sessions []Session) GlobalStats {
 	g := GlobalStats{
-		ToolCounts:    make(map[string]int),
-		MCPToolCounts: make(map[string]int),
-		SkillCounts:   make(map[string]int),
-		CommandCounts: make(map[string]int),
-		Models:        make(map[string]int),
-		ModelTokens:   make(map[string]*ModelUsage),
-		ToolErrors:    make(map[string]int),
-		SkillErrors:   make(map[string]int),
-		CommandErrors: make(map[string]int),
+		ToolCounts:             make(map[string]int),
+		MCPToolCounts:          make(map[string]int),
+		SkillCounts:            make(map[string]int),
+		CommandCounts:          make(map[string]int),
+		Models:                 make(map[string]int),
+		ModelTokens:            make(map[string]*ModelUsage),
+		ToolErrors:             make(map[string]int),
+		SkillErrors:            make(map[string]int),
+		CommandErrors:          make(map[string]int),
+		AllToolCallTimestamps:  make(map[string][]time.Time),
+		AllToolErrorTimestamps: make(map[string][]time.Time),
 	}
 
 	allFiles := make(map[string]bool)
@@ -730,6 +751,13 @@ func AggregateStats(sessions []Session) GlobalStats {
 		}
 		g.AllTurnsPerRequest = append(g.AllTurnsPerRequest, stats.TurnsPerRequest...)
 		g.AllErrorTimestamps = append(g.AllErrorTimestamps, stats.ErrorTimestamps...)
+		g.AllMsgTimestamps = append(g.AllMsgTimestamps, stats.MsgTimestamps...)
+		for name, ts := range stats.ToolCallTimestamps {
+			g.AllToolCallTimestamps[name] = append(g.AllToolCallTimestamps[name], ts...)
+		}
+		for name, ts := range stats.ToolErrorTimestamps {
+			g.AllToolErrorTimestamps[name] = append(g.AllToolErrorTimestamps[name], ts...)
+		}
 	}
 
 	g.TotalFiles = len(allFiles)
