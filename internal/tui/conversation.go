@@ -3,569 +3,25 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
-	"io"
+	"log"
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/session"
 )
 
-// convItemKind classifies conversation list items.
-type convItemKind int
+var debugLog *log.Logger
 
-const (
-	convMsg   convItemKind = iota // user/assistant message turn
-	convTask                      // task item (under assistant message)
-	convAgent                     // agent reference (under assistant message)
-)
-
-// convItem represents a single row in the conversation list.
-type convItem struct {
-	kind      convItemKind
-	merged    mergedMsg          // for convMsg
-	task      session.TaskItem   // for convTask
-	agent     session.Subagent   // for convAgent
-	indent    int                // 0=message, 1=sub-item
-	folded    bool               // for expandable group headers (tasks/agents)
-	parentIdx int                // index of parent message in items slice
-	groupTag  string             // "tasks" or "agents" — for group header rows
-	count     int                // number of items in group (for header display)
-}
-
-func (c convItem) FilterValue() string {
-	switch c.kind {
-	case convMsg:
-		return entryFullText(c.merged.entry) + " " + c.merged.entry.Role
-	case convTask:
-		return c.task.Subject + " " + c.task.Status
-	case convAgent:
-		return c.agent.FirstPrompt + " " + c.agent.ShortID + " " + c.agent.AgentType
+func init() {
+	f, err := os.OpenFile("/tmp/ccx-debug.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		debugLog = log.New(os.Stderr, "", 0)
+	} else {
+		debugLog = log.New(f, "", log.Ltime|log.Lmicroseconds)
 	}
-	return ""
-}
-
-// convDelegate renders conversation list items.
-type convDelegate struct{}
-
-func (d convDelegate) Height() int                             { return 1 }
-func (d convDelegate) Spacing() int                            { return 0 }
-func (d convDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
-
-func (d convDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	ci, ok := item.(convItem)
-	if !ok {
-		return
-	}
-	selected := index == m.Index()
-	width := m.Width()
-	clamp := lipgloss.NewStyle().MaxWidth(width)
-	filterTerm := listFilterTerm(m)
-
-	switch ci.kind {
-	case convMsg:
-		renderConvMsg(w, ci, selected, width, clamp, filterTerm)
-	case convTask:
-		renderConvTaskOrAgent(w, ci, selected, width, clamp, filterTerm)
-	case convAgent:
-		renderConvTaskOrAgent(w, ci, selected, width, clamp, filterTerm)
-	}
-}
-
-func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lipgloss.Style, filterTerm string) {
-	e := ci.merged.entry
-	cursor := "  "
-	if selected {
-		cursor = convCursorStyle.Render("> ")
-	}
-
-	isCompacted := isAutoCompacted(e)
-
-	role := userLabelStyle.Render("USER")
-	if isCompacted {
-		role = compactBadgeStyle.Render("CMPX")
-	} else if e.Role == "assistant" {
-		role = assistantLabelStyle.Render("ASST")
-	}
-
-	ts := "     "
-	if !e.Timestamp.IsZero() {
-		ts = dimStyle.Render(e.Timestamp.Format("15:04"))
-	}
-
-	// Index range
-	idxStr := dimStyle.Render(fmt.Sprintf("#%d", ci.merged.startIdx+1))
-	if ci.merged.endIdx > ci.merged.startIdx {
-		idxStr = dimStyle.Render(fmt.Sprintf("#%d-%d", ci.merged.startIdx+1, ci.merged.endIdx+1))
-	}
-
-	// Text preview
-	preview := convMsgPreview(e, width-20)
-	pStyle := dimStyle
-	if selected {
-		pStyle = selectedStyle
-	} else if isCompacted {
-		pStyle = acDimStyle
-	}
-	if preview != "" {
-		availW := width - 20
-		if filterTerm != "" && availW > 0 {
-			preview = "  " + highlightSnippet(preview, filterTerm, availW, pStyle)
-		} else {
-			preview = "  " + pStyle.Render(preview)
-		}
-	}
-
-	line := fmt.Sprintf("%s%s  %s  %s%s", cursor, role, ts, idxStr, preview)
-	fmt.Fprint(w, clamp.Render(line))
-}
-
-func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, clamp lipgloss.Style, filterTerm string) {
-	indent := strings.Repeat("  ", ci.indent+1)
-	cursor := " "
-	if selected {
-		cursor = convCursorStyle.Render(">")
-	}
-
-	var line string
-	switch ci.kind {
-	case convTask:
-		// Group header row
-		if ci.groupTag != "" {
-			// ci.task.Status carries "completed/total" as a formatted string
-			counter := ci.task.Status
-			counterStyle := dimStyle
-			// Parse completed/total to color green when all done
-			var comp, total int
-			if _, err := fmt.Sscanf(counter, "%d/%d", &comp, &total); err == nil && comp == total && total > 0 {
-				counterStyle = lipgloss.NewStyle().Foreground(colorAccent)
-			}
-
-			var label string
-			if ci.count > 0 {
-				// Expandable header (last task-touching message)
-				fold := "▸"
-				if !ci.folded {
-					fold = "▾"
-				}
-				if selected {
-					label = fmt.Sprintf("%s Tasks [%s]", fold, counter+" ✓")
-				} else {
-					label = fmt.Sprintf("%s Tasks [%s]", fold, counterStyle.Render(counter+" ✓"))
-				}
-			} else {
-				// Marker header — show per-message operation summary
-				opDesc := ci.task.Subject
-				style := dimStyle
-				if selected {
-					style = selectedStyle
-				}
-				maxW := width - len(indent) - 12
-				if opDesc != "" {
-					if maxW > 3 && len(opDesc) > maxW {
-						opDesc = opDesc[:maxW-3] + "..."
-					}
-					label = "· " + style.Render(opDesc)
-				} else {
-					if selected {
-						label = fmt.Sprintf("· Tasks [%s]", counter+" ✓")
-					} else {
-						label = fmt.Sprintf("· Tasks [%s]", counterStyle.Render(counter+" ✓"))
-					}
-				}
-			}
-			line = fmt.Sprintf("%s%s %s", indent, cursor, label)
-			fmt.Fprint(w, clamp.Render(line))
-			return
-		}
-
-		status := "○"
-		switch ci.task.Status {
-		case "completed":
-			status = lipgloss.NewStyle().Foreground(colorAccent).Render("✓")
-		case "in_progress":
-			status = lipgloss.NewStyle().Foreground(colorAssistant).Render("◉")
-		}
-		idLabel := ""
-		if ci.task.ID != "" {
-			idLabel = dimStyle.Render("#"+ci.task.ID) + " "
-		}
-		subj := ci.task.Subject
-		idW := lipgloss.Width(idLabel)
-		maxW := width - len(indent) - 6 - idW
-		style := dimStyle
-		if selected {
-			style = selectedStyle
-		}
-		if filterTerm != "" && maxW > 0 {
-			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, highlightSnippet(subj, filterTerm, maxW, style))
-		} else {
-			if maxW > 3 && len(subj) > maxW {
-				subj = subj[:maxW-3] + "..."
-			}
-			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, style.Render(subj))
-		}
-	case convAgent:
-		a := ci.agent
-		badge := agentBadgeStyle.Render("⊕")
-		typeStr := ""
-		if a.AgentType != "" {
-			typeStr = dimStyle.Render(":" + a.AgentType)
-		}
-		msgs := dimStyle.Render(fmt.Sprintf("(%dm)", a.MsgCount))
-		prompt := a.FirstPrompt
-		maxW := width - len(indent) - 20
-		style := dimStyle
-		if selected {
-			style = selectedStyle
-		}
-		if filterTerm != "" && maxW > 0 {
-			line = fmt.Sprintf("%s%s %s%s %s %s", indent, cursor, badge, typeStr, msgs, highlightSnippet(prompt, filterTerm, maxW, style))
-		} else {
-			if maxW > 3 && len(prompt) > maxW {
-				prompt = prompt[:maxW-3] + "..."
-			}
-			line = fmt.Sprintf("%s%s %s%s %s %s", indent, cursor, badge, typeStr, msgs, style.Render(prompt))
-		}
-	}
-	fmt.Fprint(w, clamp.Render(line))
-}
-
-// convMsgPreview returns a short text preview for a conversation message.
-func convMsgPreview(e session.Entry, maxW int) string {
-	if maxW <= 0 {
-		return ""
-	}
-	for _, block := range e.Content {
-		if block.Type == "text" {
-			text := strings.TrimSpace(session.StripXMLTags(stripANSI(block.Text)))
-			if text == "" || isSystemText(text) {
-				continue
-			}
-			// Single line, collapse whitespace
-			text = strings.ReplaceAll(text, "\n", " ")
-			for strings.Contains(text, "  ") {
-				text = strings.ReplaceAll(text, "  ", " ")
-			}
-			if len(text) > maxW {
-				text = text[:maxW-3] + "..."
-			}
-			return text
-		}
-	}
-	// No text — summarize tools
-	summary := mergedToolSummary(e)
-	if summary != "" {
-		if len(summary) > maxW {
-			summary = summary[:maxW-3] + "..."
-		}
-		return toolStyle.Render(summary)
-	}
-	return ""
-}
-
-// buildConvItems builds a flattened conversation item list from merged messages,
-// with inline task and agent sub-items under assistant messages.
-// A collapsible task group header appears at every task-touching message.
-// Individual task rows (expandable) are attached only under the LAST one.
-func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem) []convItem {
-	// First pass: find all task-touching message indices and the last one.
-	var taskMsgIndices []int
-	if len(tasks) > 0 {
-		for i, m := range merged {
-			if m.entry.Role != "assistant" {
-				continue
-			}
-			for _, block := range m.entry.Content {
-				if block.Type == "tool_use" && (block.ToolName == "TaskCreate" || block.ToolName == "TaskUpdate" || block.ToolName == "TodoWrite") {
-					taskMsgIndices = append(taskMsgIndices, i)
-					break
-				}
-			}
-		}
-	}
-	lastTaskMsgIdx := -1
-	if len(taskMsgIndices) > 0 {
-		lastTaskMsgIdx = taskMsgIndices[len(taskMsgIndices)-1]
-	}
-	taskMsgSet := make(map[int]bool, len(taskMsgIndices))
-	for _, idx := range taskMsgIndices {
-		taskMsgSet[idx] = true
-	}
-
-	// Pre-compute task completion stats and ID lookup
-	completed := 0
-	tasksByID := make(map[string]session.TaskItem, len(tasks))
-	for _, t := range tasks {
-		if t.Status == "completed" {
-			completed++
-		}
-		tasksByID[t.ID] = t
-	}
-
-	var items []convItem
-	assignedAgents := make(map[string]bool) // track agents already placed
-
-	for mi, m := range merged {
-		parentIdx := len(items)
-		items = append(items, convItem{
-			kind:   convMsg,
-			merged: m,
-		})
-
-		// Only add sub-items under assistant messages
-		if m.entry.Role != "assistant" {
-			continue
-		}
-
-		// Find agents spawned during this message range (skip already-assigned and system agents)
-		var msgAgents []session.Subagent
-		for _, a := range agents {
-			if a.Timestamp.IsZero() || assignedAgents[a.ID] || isSystemAgent(a) {
-				continue
-			}
-			// Agent timestamp should fall within the message time range
-			if !m.entry.Timestamp.IsZero() {
-				diff := a.Timestamp.Sub(m.entry.Timestamp).Seconds()
-				if diff >= -5 && diff < 120 {
-					msgAgents = append(msgAgents, a)
-				}
-			}
-		}
-
-		// Add agent sub-items
-		for _, a := range msgAgents {
-			assignedAgents[a.ID] = true
-			items = append(items, convItem{
-				kind:      convAgent,
-				agent:     a,
-				indent:    1,
-				parentIdx: parentIdx,
-			})
-		}
-
-		// Attach task group header at every task-touching message.
-		// The last one is expandable (count > 0, has children); earlier ones are markers (count = 0).
-		if taskMsgSet[mi] {
-			expandable := mi == lastTaskMsgIdx
-			headerCount := 0
-			if expandable {
-				headerCount = len(tasks)
-			}
-			// Build per-message operation summary
-			ops := taskOpSummaryResult(m.entry, tasksByID)
-			items = append(items, convItem{
-				kind:      convTask,
-				groupTag:  "tasks",
-				count:     headerCount,
-				folded:    true,
-				indent:    1,
-				parentIdx: parentIdx,
-				task:      session.TaskItem{Status: fmt.Sprintf("%d/%d", completed, len(tasks)), Subject: ops.compact, Description: ops.detailed},
-			})
-			if expandable {
-				for _, t := range tasks {
-					items = append(items, convItem{
-						kind:      convTask,
-						task:      t,
-						indent:    2,
-						parentIdx: parentIdx,
-					})
-				}
-			}
-		}
-	}
-
-	return items
-}
-
-// extractInlineTasks builds a task list from TaskCreate/TaskUpdate tool calls
-// in the conversation entries. Used as fallback when no file-based tasks exist.
-func extractInlineTasks(entries []session.Entry) []session.TaskItem {
-	tasks := make(map[string]*session.TaskItem) // keyed by task ID
-	var order []string                           // preserve creation order
-	nextID := 1
-
-	for _, e := range entries {
-		if e.Role != "assistant" {
-			continue
-		}
-		for _, b := range e.Content {
-			if b.Type != "tool_use" {
-				continue
-			}
-			switch b.ToolName {
-			case "TaskCreate":
-				var input struct {
-					Subject     string `json:"subject"`
-					Description string `json:"description"`
-				}
-				json.Unmarshal([]byte(b.ToolInput), &input)
-				if input.Subject == "" {
-					continue
-				}
-				id := fmt.Sprintf("%d", nextID)
-				nextID++
-				t := &session.TaskItem{
-					ID:          id,
-					Subject:     input.Subject,
-					Description: input.Description,
-					Status:      "pending",
-				}
-				tasks[id] = t
-				order = append(order, id)
-			case "TaskUpdate":
-				var input struct {
-					TaskID  string `json:"taskId"`
-					Status  string `json:"status"`
-					Subject string `json:"subject"`
-				}
-				json.Unmarshal([]byte(b.ToolInput), &input)
-				if input.TaskID == "" {
-					continue
-				}
-				t, ok := tasks[input.TaskID]
-				if !ok {
-					// Task created before our scan window; create a stub
-					t = &session.TaskItem{ID: input.TaskID, Status: "pending"}
-					tasks[input.TaskID] = t
-					order = append(order, input.TaskID)
-				}
-				if input.Status != "" {
-					t.Status = input.Status
-				}
-				if input.Subject != "" {
-					t.Subject = input.Subject
-				}
-			}
-		}
-	}
-
-	result := make([]session.TaskItem, 0, len(order))
-	for _, id := range order {
-		result = append(result, *tasks[id])
-	}
-	return result
-}
-
-// taskOpResult holds both compact (for list label) and detailed (for preview) summaries.
-type taskOpResult struct {
-	compact  string // one-line summary for conv list
-	detailed string // multi-line detail for preview
-}
-
-func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskItem) taskOpResult {
-	var compactParts []string
-	var detailLines []string
-	for _, b := range entry.Content {
-		if b.Type != "tool_use" {
-			continue
-		}
-		switch b.ToolName {
-		case "TaskCreate":
-			var input struct {
-				Subject     string `json:"subject"`
-				Description string `json:"description"`
-			}
-			json.Unmarshal([]byte(b.ToolInput), &input)
-			subj := input.Subject
-			compactSubj := subj
-			if len(compactSubj) > 30 {
-				compactSubj = compactSubj[:27] + "..."
-			}
-			if compactSubj != "" {
-				compactParts = append(compactParts, "+"+compactSubj)
-			}
-			detail := "+ Created: " + subj
-			if input.Description != "" {
-				desc := input.Description
-				if len(desc) > 120 {
-					desc = desc[:117] + "..."
-				}
-				detail += "\n    " + desc
-			}
-			detailLines = append(detailLines, detail)
-		case "TaskUpdate":
-			var input struct {
-				TaskID string `json:"taskId"`
-				Status string `json:"status"`
-			}
-			json.Unmarshal([]byte(b.ToolInput), &input)
-			if input.Status == "" {
-				continue
-			}
-			icon := "○"
-			switch input.Status {
-			case "completed":
-				icon = "✓"
-			case "in_progress":
-				icon = "◉"
-			}
-			compactLabel := icon + " #" + input.TaskID
-			detailLabel := icon + " #" + input.TaskID
-			if t, ok := tasksByID[input.TaskID]; ok {
-				compactSubj := t.Subject
-				if len(compactSubj) > 25 {
-					compactSubj = compactSubj[:22] + "..."
-				}
-				compactLabel = icon + " " + compactSubj
-				detailLabel += " " + t.Subject
-			}
-			compactParts = append(compactParts, compactLabel)
-			detailLines = append(detailLines, detailLabel)
-		case "TodoWrite":
-			compactParts = append(compactParts, "todo updated")
-			detailLines = append(detailLines, "Todo list updated")
-		}
-	}
-	return taskOpResult{
-		compact:  strings.Join(compactParts, ", "),
-		detailed: strings.Join(detailLines, "\n"),
-	}
-}
-
-// visibleConvItems returns only the items that should be displayed,
-// hiding children of folded group headers.
-func visibleConvItems(items []convItem) []convItem {
-	var visible []convItem
-	skipIndent := -1 // when >= 0, skip items with indent > skipIndent
-	for _, it := range items {
-		if skipIndent >= 0 {
-			if it.indent > skipIndent {
-				continue
-			}
-			skipIndent = -1
-		}
-		visible = append(visible, it)
-		if it.groupTag != "" && it.folded {
-			skipIndent = it.indent
-		}
-	}
-	return visible
-}
-
-func newConvList(items []convItem, width, height int) list.Model {
-	vis := visibleConvItems(items)
-	listItems := make([]list.Item, len(vis))
-	for i, ci := range vis {
-		listItems[i] = ci
-	}
-
-	l := list.New(listItems, convDelegate{}, width, height)
-	l.SetShowTitle(false)
-	l.SetShowStatusBar(false)
-	l.SetShowFilter(false)
-	l.SetShowPagination(false)
-	l.SetFilteringEnabled(true)
-	l.SetShowHelp(false)
-	l.Filter = substringFilter
-	l.DisableQuitKeybindings()
-	configureListSearch(&l)
-	l.SetSize(width, height)
-	return l
 }
 
 // openConversation loads a session's messages and builds the conversation view.
@@ -605,6 +61,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
 	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	a.conv.split.List = &a.convList
 
 	a.state = viewConversation
 
@@ -619,6 +76,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 			a.convList.Select(len(items) - 1)
 		}
 		a.updateConvPreview()
+		a.scrollConvPreviewToTail()
 		return liveTickCmd()
 	}
 
@@ -745,10 +203,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if sp.Focus && sp.Show {
 		if key == "up" || key == "down" {
 			if sp.Folds != nil {
-				debugLog("conv: %s pressed, cursor=%d nBlocks=%d vpH=%d vpOffset=%d",
-					key, sp.Folds.BlockCursor, len(sp.Folds.Entry.Content), sp.Preview.Height, sp.Preview.YOffset)
 				fr := sp.Folds.HandleKey(key)
-				debugLog("conv: HandleKey result=%d newCursor=%d", fr, sp.Folds.BlockCursor)
 				if fr == foldCursorMoved {
 					sp.RefreshFoldCursor(a.width, a.splitRatio)
 					sp.ScrollToBlock()
@@ -841,6 +296,7 @@ func (a *App) updateConvPreview() {
 		cacheKey = fmt.Sprintf("%d:%d", item.merged.startIdx, len(entry.Content))
 	}
 	if cacheKey == sp.CacheKey {
+		debugLog.Printf("updateConvPreview: CACHE HIT key=%q", cacheKey)
 		return
 	}
 
@@ -857,17 +313,28 @@ func (a *App) updateConvPreview() {
 	}
 
 	if isNewEntry {
+		debugLog.Printf("updateConvPreview: NEW ENTRY old=%q new=%q blocks=%d TypeFoldPrefs=%v TypeFmtPrefs=%v",
+			oldCacheKey, cacheKey, len(entry.Content), sp.TypeFoldPrefs, sp.TypeFmtPrefs)
 		sp.CacheKey = cacheKey
 		if sp.Folds != nil {
-			sp.Folds.Reset(entry)
+			sp.Folds.ResetWithPrefs(entry, sp.TypeFoldPrefs, sp.TypeFmtPrefs)
+			debugLog.Printf("  after ResetWithPrefs: collapsed=%v formatted=%v blockCursor=%d",
+				sp.Folds.Collapsed, sp.Folds.Formatted, sp.Folds.BlockCursor)
 		}
 		sp.RefreshFoldPreview(a.width, a.splitRatio)
 		sp.Preview.YOffset = 0
 	} else {
+		oldBC := 0
+		if sp.Folds != nil {
+			oldBC = len(sp.Folds.Entry.Content)
+		}
+		debugLog.Printf("updateConvPreview: GROW old=%q new=%q oldBlocks=%d newBlocks=%d TypeFmtPrefs=%v",
+			oldCacheKey, cacheKey, oldBC, len(entry.Content), sp.TypeFmtPrefs)
 		sp.CacheKey = cacheKey
 		if sp.Folds != nil {
-			oldBlockCount := len(sp.Folds.Entry.Content)
-			sp.Folds.GrowBlocks(entry, oldBlockCount)
+			sp.Folds.GrowBlocks(entry, oldBC, sp.TypeFoldPrefs, sp.TypeFmtPrefs)
+			debugLog.Printf("  after GrowBlocks: collapsed=%v formatted=%v blockCursor=%d",
+				sp.Folds.Collapsed, sp.Folds.Formatted, sp.Folds.BlockCursor)
 		}
 		sp.RefreshFoldPreview(a.width, a.splitRatio)
 	}
@@ -1025,9 +492,18 @@ func (a *App) toggleConvLiveTail() (tea.Model, tea.Cmd) {
 		a.conv.split.BottomAlign = true
 		items := a.convList.Items()
 		if len(items) > 0 {
-			a.convList.Select(len(items) - 1)
+			// Select the last convMsg item (skip trailing agent/task sub-items)
+			lastMsg := len(items) - 1
+			for i := len(items) - 1; i >= 0; i-- {
+				if ci, ok := items[i].(convItem); ok && ci.kind == convMsg {
+					lastMsg = i
+					break
+				}
+			}
+			a.convList.Select(lastMsg)
 		}
 		a.updateConvPreview()
+		a.scrollConvPreviewToTail()
 		return a, liveTickCmd()
 	}
 	a.conv.split.BottomAlign = false
@@ -1055,12 +531,20 @@ func (a *App) refreshConversation() tea.Cmd {
 	oldIdx := a.convList.Index()
 	contentH := ContentHeight(a.height)
 	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	a.conv.split.List = &a.convList
+
 	visCount := len(a.convList.Items())
 	if oldIdx < visCount {
 		a.convList.Select(oldIdx)
 	}
-	a.conv.split.CacheKey = ""
-	a.updateConvPreview()
+	// During live tail, skip preview update here — handleLiveTail owns the
+	// preview lifecycle (select last → update → scroll-to-tail). Updating here
+	// would "consume" the CacheKey change, making handleLiveTail's update a
+	// no-op cache hit while the scroll position is left at block 0 from
+	// RefreshFoldPreview→ScrollToBlock.
+	if !a.liveTail {
+		a.updateConvPreview()
+	}
 	return nil
 }
 
@@ -1124,6 +608,8 @@ func (a *App) toggleConvGroupFold(header convItem) {
 	vis := visibleConvItems(a.conv.items)
 	contentH := ContentHeight(a.height)
 	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	a.conv.split.List = &a.convList
+
 	for i, v := range vis {
 		if v.groupTag == header.groupTag && v.parentIdx == header.parentIdx {
 			a.convList.Select(i)
@@ -1132,6 +618,35 @@ func (a *App) toggleConvGroupFold(header convItem) {
 	}
 	a.conv.split.CacheKey = ""
 	a.updateConvPreview()
+}
+
+// scrollConvPreviewToTail scrolls the conversation preview to the bottom
+// so the latest content is visible during live tail.
+// Always scrolls regardless of focus state — during live tail the user
+// expects to see the newest content even when the preview pane is focused.
+func (a *App) scrollConvPreviewToTail() {
+	sp := &a.conv.split
+	if !sp.Show {
+		return
+	}
+	// Ensure preview height is initialized (Render may not have run yet)
+	contentH := ContentHeight(a.height)
+	if sp.Preview.Height < 1 && contentH > 0 {
+		sp.Preview.Height = contentH
+	}
+	// Move block cursor to the last block so the preview highlights newest content
+	if sp.Folds != nil && len(sp.Folds.Entry.Content) > 0 {
+		lastBlock := len(sp.Folds.Entry.Content) - 1
+		if sp.Folds.BlockCursor != lastBlock {
+			sp.Folds.BlockCursor = lastBlock
+			// Re-render so the ▸ cursor marker reflects the new position
+			sp.RefreshFoldCursor(a.width, a.splitRatio)
+		}
+	}
+	// Scroll viewport to show the very bottom of the preview
+	total := sp.Preview.TotalLineCount()
+	maxOffset := max(total-sp.Preview.Height, 0)
+	sp.Preview.YOffset = maxOffset
 }
 
 // renderConvSplit renders the conversation split view.
@@ -1230,6 +745,7 @@ func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
 	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	a.conv.split.List = &a.convList
 
 	a.state = viewConversation
 	a.updateConvPreview()
@@ -1260,6 +776,7 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
 	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	a.conv.split.List = &a.convList
 
 	a.state = viewConversation
 	a.updateConvPreview()

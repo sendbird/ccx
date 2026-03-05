@@ -272,6 +272,8 @@ func (a *App) popNavFrame() (tea.Model, tea.Cmd) {
 
 		contentH := ContentHeight(a.height)
 		a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+		a.conv.split.List = &a.convList
+
 		if frame.listIdx < len(a.conv.items) {
 			a.convList.Select(frame.listIdx)
 		}

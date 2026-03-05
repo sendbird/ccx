@@ -498,6 +498,9 @@ func renderFullMessageWithCursor(e session.Entry, width int, folds foldSet, form
 				wrapped := wrapText(block.Text, w)
 				buf.WriteString(dimStyle.Render(wrapped) + "\n\n")
 			}
+		case "image":
+			buf.WriteString(cursorPrefix)
+			buf.WriteString(dimStyle.Render(block.Text) + "\n\n")
 		}
 
 		// Apply background highlight to the selected block

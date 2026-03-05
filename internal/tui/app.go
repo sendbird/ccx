@@ -191,6 +191,15 @@ type App struct {
 	// Navigation stack for agent drill-down
 	navStack []navFrame
 }
+// selectedSession returns the currently selected session from the session list.
+func (a *App) selectedSession() (session.Session, bool) {
+	item, ok := a.sessionList.SelectedItem().(sessionItem)
+	if !ok {
+		return session.Session{}, false
+	}
+	return item.sess, true
+}
+
 
 type sessPreview int
 
@@ -252,7 +261,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmd, tickCmd())
 
 	case liveTickMsg:
-		if a.sessPreviewMode == sessPreviewLive && a.livePreviewSessID != "" {
+		if a.state == viewSessions && a.sessPreviewMode == sessPreviewLive && a.livePreviewSessID != "" {
 			a.refreshLivePreview()
 			return a, liveTickCmd()
 		}
@@ -353,7 +362,7 @@ func (a *App) View() string {
 			}
 			if a.config.TmuxEnabled && inTmux() {
 				h += " L:live"
-				if item, ok := a.sessionList.SelectedItem().(sessionItem); ok && item.sess.IsLive {
+				if sess, ok := a.selectedSession(); ok && sess.IsLive {
 					h += " I:input J:jump"
 				}
 			}
@@ -509,60 +518,60 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 			return a.jumpToConvMessage()
 		}
-		item, ok := a.sessionList.SelectedItem().(sessionItem)
+		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
-		a.currentSess = item.sess
-		return a, a.openConversation(item.sess)
+		a.currentSess = sess
+		return a, a.openConversation(sess)
 	case "g":
-		item, ok := a.sessionList.SelectedItem().(sessionItem)
+		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
-		return a.openProjectDir(item.sess.ProjectPath)
+		return a.openProjectDir(sess.ProjectPath)
 	case "x":
-		item, ok := a.sessionList.SelectedItem().(sessionItem)
+		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
 		a.actionsMenu = true
-		a.actionsSess = item.sess
+		a.actionsSess = sess
 		a.copiedMsg = "Actions: d:delete  m:move  w:worktree  r:resume"
 		return a, nil
 	case "I":
 		if !a.config.TmuxEnabled {
 			return a, nil
 		}
-		item, ok := a.sessionList.SelectedItem().(sessionItem)
+		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
-		return a.sendInputToLive(item.sess.ProjectPath, item.sess.ID)
+		return a.sendInputToLive(sess.ProjectPath, sess.ID)
 	case "J":
 		if !a.config.TmuxEnabled {
 			return a, nil
 		}
-		item, ok := a.sessionList.SelectedItem().(sessionItem)
+		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
-		return a.jumpToTmuxPane(item.sess.ProjectPath, item.sess.ID)
+		return a.jumpToTmuxPane(sess.ProjectPath, sess.ID)
 	case "L":
 		if !a.config.TmuxEnabled {
 			return a, nil
 		}
-		item, ok := a.sessionList.SelectedItem().(sessionItem)
+		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
-		return a.openLivePreview(item.sess)
+		return a.openLivePreview(sess)
 	case "e":
-		item, ok := a.sessionList.SelectedItem().(sessionItem)
+		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
-		return a.openEditMenu(item.sess)
+		return a.openEditMenu(sess)
 	case "G":
 		a.sessGroupMode = (a.sessGroupMode + 1) % 3
 		a.rebuildSessionList()
@@ -636,117 +645,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Focused preview: custom conversation nav or simple scroll
-	// up/down are NOT consumed here — they fall through to navigate the session list.
 	if sp.Focus && sp.Show {
-		if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
-			visible := a.convVisibleEntries()
-			switch key {
-			case "/":
-				a.startConvSearch()
-				return a, nil
-			case "esc":
-				if a.sessConvFilterTerm != "" {
-					a.clearConvFilter()
-					return a, nil
-				}
-			case "up":
-				if a.sessConvCursor > 0 {
-					previewW := max(a.width-sp.ListWidth(a.width, a.splitRatio)-1, 1)
-					curLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
-					vpTop := sp.Preview.YOffset
-					vpBottom := vpTop + sp.Preview.Height
-					if curLine < vpTop || curLine >= vpBottom {
-						// Cursor off-screen: snap to nearest visible edge
-						if curLine >= vpBottom {
-							a.sessConvCursor = convLastVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
-						} else {
-							a.sessConvCursor = convFirstVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
-						}
-					} else {
-						a.sessConvCursor--
-					}
-					a.sessPreviewPinned = true
-					a.refreshConvPreview()
-				}
-				return a, nil
-			case "down":
-				if a.sessConvCursor < len(visible)-1 {
-					previewW := max(a.width-sp.ListWidth(a.width, a.splitRatio)-1, 1)
-					curLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
-					vpTop := sp.Preview.YOffset
-					vpBottom := vpTop + sp.Preview.Height
-					if curLine < vpTop || curLine >= vpBottom {
-						// Cursor off-screen: snap to nearest visible edge
-						if curLine < vpTop {
-							a.sessConvCursor = convFirstVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
-						} else {
-							a.sessConvCursor = convLastVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
-						}
-					} else {
-						a.sessConvCursor++
-					}
-					a.refreshConvPreview()
-				}
-				// Pin unless at the very end
-				a.sessPreviewPinned = a.sessConvCursor < len(visible)-1
-				return a, nil
-			case "enter":
-				return a.jumpToConvMessage()
-			case "right":
-				if a.sessConvExpanded == nil {
-					a.sessConvExpanded = make(map[int]bool)
-				}
-				a.sessConvExpanded[a.sessConvCursor] = true
-				a.refreshConvPreview()
-				return a, nil
-			case "left":
-				if a.sessConvExpanded != nil && a.sessConvExpanded[a.sessConvCursor] {
-					delete(a.sessConvExpanded, a.sessConvCursor)
-					a.refreshConvPreview()
-				} else {
-					sp.Focus = false
-				}
-				return a, nil
-			case "f":
-				a.sessConvExpanded = nil
-				a.refreshConvPreview()
-				return a, nil
-			case "F":
-				a.sessConvExpanded = make(map[int]bool)
-				for i := range visible {
-					a.sessConvExpanded[i] = true
-				}
-				a.refreshConvPreview()
-				return a, nil
-			case "pgdown":
-				scrollPreview(&sp.Preview, "pgdown")
-				a.sessPreviewPinned = !a.sessPreviewAtBottom()
-				return a, nil
-			case "pgup":
-				scrollPreview(&sp.Preview, "pgup")
-				a.sessPreviewPinned = true
-				return a, nil
-			case "home":
-				a.sessConvCursor = 0
-				a.sessPreviewPinned = true
-				a.refreshConvPreview()
-				return a, nil
-			case "end":
-				a.sessConvCursor = len(visible) - 1
-				a.sessPreviewPinned = false
-				a.refreshConvPreview()
-				return a, nil
-			}
-		} else {
-			switch key {
-			case "/":
-				sp.Focus = false
-				return a, startListSearch(&a.sessionList)
-			case "up", "down", "pgdown", "pgup", "home", "end":
-				scrollPreview(&sp.Preview, key)
-				a.sessPreviewPinned = !a.sessPreviewAtBottom()
-				return a, nil
-			}
+		if m, cmd, handled := a.handleFocusedPreviewKeys(sp, key); handled {
+			return m, cmd
 		}
 	}
 
@@ -769,6 +670,125 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	a.updateSessionPreview()
 	return m, cmd
+}
+
+// handleFocusedPreviewKeys handles keys when the session preview pane is focused.
+// Returns (model, cmd, handled). If handled is false, the caller should continue processing.
+func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
+	if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
+		return a.handleConvPreviewKeys(sp, key)
+	}
+	switch key {
+	case "/":
+		sp.Focus = false
+		return a, startListSearch(&a.sessionList), true
+	case "up", "down", "pgdown", "pgup", "home", "end":
+		scrollPreview(&sp.Preview, key)
+		a.sessPreviewPinned = !a.sessPreviewAtBottom()
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// handleConvPreviewKeys handles keys for the conversation preview navigation.
+func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
+	visible := a.convVisibleEntries()
+	switch key {
+	case "/":
+		a.startConvSearch()
+		return a, nil, true
+	case "esc":
+		if a.sessConvFilterTerm != "" {
+			a.clearConvFilter()
+			return a, nil, true
+		}
+	case "up":
+		if a.sessConvCursor > 0 {
+			previewW := max(a.width-sp.ListWidth(a.width, a.splitRatio)-1, 1)
+			curLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
+			vpTop := sp.Preview.YOffset
+			vpBottom := vpTop + sp.Preview.Height
+			if curLine < vpTop || curLine >= vpBottom {
+				if curLine >= vpBottom {
+					a.sessConvCursor = convLastVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
+				} else {
+					a.sessConvCursor = convFirstVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
+				}
+			} else {
+				a.sessConvCursor--
+			}
+			a.sessPreviewPinned = true
+			a.refreshConvPreview()
+		}
+		return a, nil, true
+	case "down":
+		if a.sessConvCursor < len(visible)-1 {
+			previewW := max(a.width-sp.ListWidth(a.width, a.splitRatio)-1, 1)
+			curLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
+			vpTop := sp.Preview.YOffset
+			vpBottom := vpTop + sp.Preview.Height
+			if curLine < vpTop || curLine >= vpBottom {
+				if curLine < vpTop {
+					a.sessConvCursor = convFirstVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
+				} else {
+					a.sessConvCursor = convLastVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
+				}
+			} else {
+				a.sessConvCursor++
+			}
+			a.refreshConvPreview()
+		}
+		a.sessPreviewPinned = a.sessConvCursor < len(visible)-1
+		return a, nil, true
+	case "enter":
+		m, cmd := a.jumpToConvMessage()
+		return m, cmd, true
+	case "right":
+		if a.sessConvExpanded == nil {
+			a.sessConvExpanded = make(map[int]bool)
+		}
+		a.sessConvExpanded[a.sessConvCursor] = true
+		a.refreshConvPreview()
+		return a, nil, true
+	case "left":
+		if a.sessConvExpanded != nil && a.sessConvExpanded[a.sessConvCursor] {
+			delete(a.sessConvExpanded, a.sessConvCursor)
+			a.refreshConvPreview()
+		} else {
+			sp.Focus = false
+		}
+		return a, nil, true
+	case "f":
+		a.sessConvExpanded = nil
+		a.refreshConvPreview()
+		return a, nil, true
+	case "F":
+		a.sessConvExpanded = make(map[int]bool)
+		for i := range visible {
+			a.sessConvExpanded[i] = true
+		}
+		a.refreshConvPreview()
+		return a, nil, true
+	case "pgdown":
+		scrollPreview(&sp.Preview, "pgdown")
+		a.sessPreviewPinned = !a.sessPreviewAtBottom()
+		return a, nil, true
+	case "pgup":
+		scrollPreview(&sp.Preview, "pgup")
+		a.sessPreviewPinned = true
+		return a, nil, true
+	case "home":
+		a.sessConvCursor = 0
+		a.sessPreviewPinned = true
+		a.refreshConvPreview()
+		return a, nil, true
+	case "end":
+		a.sessConvCursor = len(visible) - 1
+		a.sessPreviewPinned = false
+		a.refreshConvPreview()
+		return a, nil, true
+	}
+	return a, nil, false
 }
 
 // --- Actions ---
@@ -870,11 +890,8 @@ func (a *App) refreshLivePreview() {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(capture failed)"))
 		return
 	}
-	wasAtBottom := vpAtBottom(&a.sessSplit.Preview)
 	a.sessSplit.Preview.SetContent(content)
-	if wasAtBottom {
-		a.sessSplit.Preview.GotoBottom()
-	}
+	a.sessSplit.Preview.GotoBottom()
 }
 
 func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
@@ -1308,6 +1325,13 @@ func (a *App) handleLiveInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // --- Live refresh ---
 
 func (a *App) handleTick() tea.Cmd {
+	// Always refresh conversation preview for live sessions (regardless of liveUpdate)
+	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
+		if sess, ok := a.selectedSession(); ok && sess.IsLive {
+			a.sessSplit.CacheKey = "" // invalidate to force re-fetch
+			a.updateSessionPreview()
+		}
+	}
 	if !a.liveUpdate {
 		return nil
 	}
@@ -1350,8 +1374,8 @@ func (a *App) doRefresh() tea.Cmd {
 		if needsSort && !a.isFiltering() && !a.hasFilterApplied() {
 			// Remember currently selected session so cursor follows it after re-sort
 			selectedID := ""
-			if sel, ok := a.sessionList.SelectedItem().(sessionItem); ok {
-				selectedID = sel.sess.ID
+			if sess, ok := a.selectedSession(); ok {
+				selectedID = sess.ID
 			}
 
 			sort.Slice(a.sessions, func(i, j int) bool {
@@ -1383,17 +1407,45 @@ func (a *App) doRefresh() tea.Cmd {
 }
 
 
-// handleLiveTail refreshes messages and snaps to the latest entry + updates preview.
+// handleLiveTail refreshes messages and snaps to the latest message + updates preview.
 func (a *App) handleLiveTail() {
 	switch a.state {
 	case viewConversation:
+		sp := &a.conv.split
+		oldCK := sp.CacheKey
+		oldIdx := a.convList.Index()
+
 		a.refreshConversation()
-		// Snap cursor to the last (newest) message
-		if n := len(a.conv.items); n > 0 {
-			a.convList.Select(n - 1)
-			a.conv.split.CacheKey = ""
-			a.updateConvPreview()
+		visItems := a.convList.Items()
+		if len(visItems) == 0 {
+			debugLog.Printf("handleLiveTail: no visItems")
+			return
 		}
+		// Select the last convMsg item (skip trailing agent/task sub-items)
+		lastMsg := len(visItems) - 1
+		for i := len(visItems) - 1; i >= 0; i-- {
+			if ci, ok := visItems[i].(convItem); ok && ci.kind == convMsg {
+				lastMsg = i
+				break
+			}
+		}
+		a.convList.Select(lastMsg)
+
+		debugLog.Printf("handleLiveTail: oldIdx=%d newIdx=%d visItems=%d show=%v oldCK=%q",
+			oldIdx, lastMsg, len(visItems), sp.Show, oldCK)
+
+		a.updateConvPreview()
+
+		debugLog.Printf("handleLiveTail: after updateConvPreview CK=%q YOffset=%d blockCursor=%d totalLines=%d height=%d",
+			sp.CacheKey, sp.Preview.YOffset,
+			func() int { if sp.Folds != nil { return sp.Folds.BlockCursor }; return -1 }(),
+			sp.Preview.TotalLineCount(), sp.Preview.Height)
+
+		a.scrollConvPreviewToTail()
+
+		debugLog.Printf("handleLiveTail: after scrollToTail YOffset=%d blockCursor=%d",
+			sp.Preview.YOffset,
+			func() int { if sp.Folds != nil { return sp.Folds.BlockCursor }; return -1 }())
 	}
 }
 
@@ -1468,16 +1520,25 @@ func (a *App) renderSessionSplit() string {
 		} else {
 			a.sessSplit.CacheKey = ""
 			a.updateSessionPreview()
-			// Restore scroll position proportionally after re-render
-			newTotal := a.sessSplit.Preview.TotalLineCount()
-			maxOff := max(newTotal-a.sessSplit.Preview.Height, 0)
-			if oldTotal > 0 {
-				prop := float64(oldOffset) / float64(oldTotal)
-				a.sessSplit.Preview.YOffset = min(int(prop*float64(newTotal)+0.5), maxOff)
+			if a.sessPreviewMode == sessPreviewLive {
+				a.sessSplit.Preview.GotoBottom()
 			} else {
-				a.sessSplit.Preview.YOffset = min(oldOffset, maxOff)
+				// Restore scroll position proportionally after re-render
+				newTotal := a.sessSplit.Preview.TotalLineCount()
+				maxOff := max(newTotal-a.sessSplit.Preview.Height, 0)
+				if oldTotal > 0 {
+					prop := float64(oldOffset) / float64(oldTotal)
+					a.sessSplit.Preview.YOffset = min(int(prop*float64(newTotal)+0.5), maxOff)
+				} else {
+					a.sessSplit.Preview.YOffset = min(oldOffset, maxOff)
+				}
 			}
 		}
+	}
+
+	// Live preview: always snap to bottom after all updates/resizes
+	if a.sessPreviewMode == sessPreviewLive && a.livePreviewSessID != "" {
+		a.sessSplit.Preview.GotoBottom()
 	}
 
 	borderColor := colorBorderDim
@@ -1543,19 +1604,19 @@ func (a *App) updateSessionPreview() {
 	if !a.sessSplit.Show {
 		return
 	}
-	item, ok := a.sessionList.SelectedItem().(sessionItem)
+	sess, ok := a.selectedSession()
 	if !ok {
 		return
 	}
 
-	cacheKey := fmt.Sprintf("%d:%s", a.sessPreviewMode, item.sess.ID)
+	cacheKey := fmt.Sprintf("%d:%s", a.sessPreviewMode, sess.ID)
 	if cacheKey == a.sessSplit.CacheKey {
 		return
 	}
 
 	// If conversation data is already loaded for this session, just re-render
 	// at the new size without reloading data or resetting the cursor.
-	if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 && a.sessConvCacheID == item.sess.ID {
+	if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 && a.sessConvCacheID == sess.ID {
 		a.sessSplit.CacheKey = cacheKey
 		a.refreshConvPreview()
 		return
@@ -1566,16 +1627,16 @@ func (a *App) updateSessionPreview() {
 
 	switch a.sessPreviewMode {
 	case sessPreviewStats:
-		a.updateSessionStatsPreview(item.sess)
+		a.updateSessionStatsPreview(sess)
 	case sessPreviewMemory:
-		a.updateSessionMemoryPreview(item.sess)
+		a.updateSessionMemoryPreview(sess)
 	case sessPreviewTasksPlan:
-		a.updateSessionTasksPlanPreview(item.sess)
+		a.updateSessionTasksPlanPreview(sess)
 	case sessPreviewLive:
-		if item.sess.IsLive {
-			if pane, found := findTmuxPane(item.sess.ProjectPath, item.sess.ID); found {
+		if sess.IsLive {
+			if pane, found := findTmuxPane(sess.ProjectPath, sess.ID); found {
 				a.livePreviewPane = pane
-				a.livePreviewSessID = item.sess.ID
+				a.livePreviewSessID = sess.ID
 				a.refreshLivePreview()
 			} else {
 				a.livePreviewSessID = ""
@@ -1586,7 +1647,7 @@ func (a *App) updateSessionPreview() {
 			a.sessSplit.Preview.SetContent(dimStyle.Render("(not a live session)"))
 		}
 	default:
-		a.updateSessionConvPreview(item.sess)
+		a.updateSessionConvPreview(sess)
 	}
 }
 
@@ -1679,8 +1740,8 @@ func (a *App) convVisibleEntries() []mergedMsg {
 func (a *App) refreshConvPreview() {
 	visible := a.convVisibleEntries()
 	isLive := false
-	if item, ok := a.sessionList.SelectedItem().(sessionItem); ok {
-		isLive = item.sess.IsLive
+	if sess, ok := a.selectedSession(); ok {
+		isLive = sess.IsLive
 	}
 	if len(visible) == 0 {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(no matches)"))
@@ -1883,7 +1944,7 @@ func (a *App) jumpToConvMessage() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	item, ok := a.sessionList.SelectedItem().(sessionItem)
+	sess, ok := a.selectedSession()
 	if !ok {
 		return a, nil
 	}
@@ -1896,7 +1957,7 @@ func (a *App) jumpToConvMessage() (tea.Model, tea.Cmd) {
 	a.sessConvSearching = false
 
 	// Open conversation (loads messages, builds items, creates list)
-	cmd := a.openConversation(item.sess)
+	cmd := a.openConversation(sess)
 
 	// Find the target message in the conversation list by UUID or timestamp
 	bestIdx := 0
@@ -2140,8 +2201,8 @@ func (a *App) refreshSessionPreviewLive() {
 	if !a.sessSplit.Show {
 		return
 	}
-	item, ok := a.sessionList.SelectedItem().(sessionItem)
-	if !ok || !item.sess.IsLive {
+	sess, ok := a.selectedSession()
+	if !ok || !sess.IsLive {
 		return
 	}
 
@@ -2151,20 +2212,20 @@ func (a *App) refreshSessionPreviewLive() {
 		if a.sessPreviewMode == sessPreviewStats {
 			a.sessStatsCache = nil
 			a.sessStatsCacheKey = ""
-			a.updateSessionStatsPreview(item.sess)
+			a.updateSessionStatsPreview(sess)
 		} else if a.sessPreviewMode == sessPreviewTasksPlan {
 			a.sessTasksCacheKey = ""
-			a.updateSessionTasksPlanPreview(item.sess)
+			a.updateSessionTasksPlanPreview(sess)
 		} else {
 			a.sessMemoryCacheKey = ""
-			a.updateSessionMemoryPreview(item.sess)
+			a.updateSessionMemoryPreview(sess)
 		}
 		return
 	}
 
 	// Reload entries (head+tail) and refresh conversation preview for live session
 	const liveHead, liveTail = 50, 50
-	head, tail, total, err := session.LoadMessagesSummary(item.sess.FilePath, liveHead, liveTail)
+	head, tail, total, err := session.LoadMessagesSummary(sess.FilePath, liveHead, liveTail)
 	if err != nil || total == 0 {
 		return
 	}
@@ -2410,6 +2471,13 @@ func (a *App) resizeAll() tea.Cmd {
 		idx := a.convList.Index()
 		a.convList.SetSize(a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
 		a.convList.Select(idx)
+		// Re-render preview content at new dimensions (preserves folds/scroll)
+		if a.conv.split.Show {
+			a.conv.split.cachedRP = nil
+			if a.conv.split.Folds != nil && len(a.conv.split.Folds.Entry.Content) > 0 {
+				a.conv.split.RefreshFoldPreview(a.width, a.splitRatio)
+			}
+		}
 	}
 	// Message full view
 	if a.msgFull.vp.Width > 0 {
@@ -2429,8 +2497,8 @@ func (a *App) resizeAll() tea.Cmd {
 
 func (a *App) rebuildSessionList() {
 	selectedID := ""
-	if sel, ok := a.sessionList.SelectedItem().(sessionItem); ok {
-		selectedID = sel.sess.ID
+	if sess, ok := a.selectedSession(); ok {
+		selectedID = sess.ID
 	}
 
 	contentH := max(a.height-3, 1)
@@ -2484,10 +2552,10 @@ func (a *App) renderBreadcrumb() string {
 	case viewSessions:
 		crumbs = []crumb{{" Sessions", viewSessions}}
 		// Show selected project name in breadcrumb
-		if item, ok := a.sessionList.SelectedItem().(sessionItem); ok && a.sessionList.Width() > 0 {
-			proj := item.sess.ProjectName
-			if item.sess.GitBranch != "" {
-				proj += " (" + item.sess.GitBranch + ")"
+		if sess, ok := a.selectedSession(); ok && a.sessionList.Width() > 0 {
+			proj := sess.ProjectName
+			if sess.GitBranch != "" {
+				proj += " (" + sess.GitBranch + ")"
 			}
 			crumbs = append(crumbs, crumb{proj, viewSessions})
 		}

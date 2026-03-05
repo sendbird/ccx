@@ -57,4 +57,16 @@ var (
 
 	// Help line: shortcut keys vs description text
 	helpKeyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+
+	// Stats rendering (shared across renderSessionStats, renderGlobalStats, timelines)
+	statTitleStyle  = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	statNumStyle    = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	statAccentStyle = lipgloss.NewStyle().Foreground(colorAccent)
+	statInputStyle  = lipgloss.NewStyle().Foreground(colorUser)
+	statOutputStyle = lipgloss.NewStyle().Foreground(colorAssistant)
+	statCostStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
+	// Task status icons in conversation
+	taskDoneStyle       = lipgloss.NewStyle().Foreground(colorAccent)
+	taskInProgressStyle = lipgloss.NewStyle().Foreground(colorAssistant)
 )

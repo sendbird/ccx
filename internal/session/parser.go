@@ -41,6 +41,12 @@ type rawContentBlock struct {
 	Content json.RawMessage `json:"content"`
 	Input   any             `json:"input"`
 	IsError bool            `json:"is_error"`
+	Source  *imageSource    `json:"source"`
+}
+
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
 }
 
 func ParseEntry(line string) (Entry, error) {
@@ -109,6 +115,12 @@ func parseContentBlocks(raw json.RawMessage) []ContentBlock {
 			cb.Text = parseToolResultContent(b.Content)
 		case "thinking":
 			cb.Text = b.Text
+		case "image":
+			media := "image"
+			if b.Source != nil && b.Source.MediaType != "" {
+				media = b.Source.MediaType
+			}
+			cb.Text = fmt.Sprintf("[Image: %s]", media)
 		default:
 			cb.Text = b.Text
 		}
@@ -171,13 +183,20 @@ func EntryPreview(e Entry) string {
 	}
 
 	var tools []string
+	var images int
 	for _, block := range e.Content {
-		if block.Type == "tool_use" {
+		switch block.Type {
+		case "tool_use":
 			tools = append(tools, block.ToolName)
+		case "image":
+			images++
 		}
 	}
 	if len(tools) > 0 {
 		return "[" + strings.Join(tools, ", ") + "]"
+	}
+	if images > 0 {
+		return fmt.Sprintf("[%d image(s)]", images)
 	}
 	return "(no content)"
 }
