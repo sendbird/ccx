@@ -265,9 +265,94 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 			sb.WriteString(fmt.Sprintf("  %-20s %s\n", short,
 				numStyle.Render(fmt.Sprintf("%d", count))))
 		}
+		sb.WriteString("\n")
+	}
+
+	// ── ERRORS ──
+	if stats.ToolErrorCount > 0 {
+		renderErrorBreakdown(&sb, stats.ToolErrors, stats.ToolCounts, stats.SkillErrors, stats.SkillCounts, stats.CommandErrors, stats.CommandCounts, stats.ToolErrorCount, width, ruler, titleStyle)
 	}
 
 	return sb.String()
+}
+
+// renderErrorBreakdown renders a dedicated error section showing tools/skills/commands sorted by error count.
+func renderErrorBreakdown(sb *strings.Builder, toolErrors, toolCounts map[string]int, skillErrors, skillCounts map[string]int, cmdErrors, cmdCounts map[string]int, totalErrors int, width int, ruler string, titleStyle lipgloss.Style) {
+	errStyle := lipgloss.NewStyle().Foreground(colorError)
+	rateStyle := dimStyle
+
+	type errEntry struct {
+		name   string
+		errors int
+		calls  int
+	}
+	var entries []errEntry
+
+	// Collect tool errors
+	for name, errs := range toolErrors {
+		if errs > 0 {
+			entries = append(entries, errEntry{name: shortenToolName(name), errors: errs, calls: toolCounts[name]})
+		}
+	}
+	// Collect skill errors
+	for name, errs := range skillErrors {
+		if errs > 0 {
+			entries = append(entries, errEntry{name: "skill:" + name, errors: errs, calls: skillCounts[name]})
+		}
+	}
+	// Collect command errors
+	for name, errs := range cmdErrors {
+		if errs > 0 {
+			entries = append(entries, errEntry{name: name, errors: errs, calls: cmdCounts[name]})
+		}
+	}
+
+	if len(entries) == 0 {
+		return
+	}
+
+	// Sort by error count descending
+	sort.Slice(entries, func(i, j int) bool { return entries[i].errors > entries[j].errors })
+
+	sb.WriteString(titleStyle.Render(fmt.Sprintf("ERRORS (%d total)", totalErrors)) + "\n")
+	sb.WriteString(ruler + "\n")
+
+	maxErrs := entries[0].errors
+	maxNameW := 0
+	for _, e := range entries {
+		if len(e.name) > maxNameW {
+			maxNameW = len(e.name)
+		}
+	}
+	maxLabelW := max(width*2/5, 14)
+	if maxNameW > maxLabelW {
+		maxNameW = maxLabelW
+	}
+	countW := len(fmt.Sprintf("%d", maxErrs))
+	barMaxW := width - maxNameW - countW - 20
+	if barMaxW < 3 {
+		barMaxW = 3
+	}
+
+	limit := min(len(entries), 15)
+	for _, e := range entries[:limit] {
+		name := e.name
+		if len(name) > maxNameW {
+			name = name[:maxNameW-1] + "…"
+		}
+		barLen := e.errors * barMaxW / maxErrs
+		if barLen < 1 {
+			barLen = 1
+		}
+		bar := errStyle.Render(strings.Repeat("█", barLen))
+		rate := float64(e.errors) * 100 / float64(max(e.calls, 1))
+		sb.WriteString(fmt.Sprintf("  %-*s %s %s %s\n",
+			maxNameW, name,
+			bar,
+			errStyle.Render(fmt.Sprintf("%*d", countW, e.errors)),
+			rateStyle.Render(fmt.Sprintf("(%.0f%% of %d)", rate, e.calls))))
+	}
+	sb.WriteString("\n")
 }
 
 // renderToolBar renders a sorted bar chart of tool name -> count.
@@ -741,6 +826,11 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 			numStyle.Render(fmt.Sprintf("%d", stats.TotalFiles)),
 		))
 		sb.WriteString("\n")
+	}
+
+	// ── ERRORS ──
+	if stats.TotalToolErrors > 0 {
+		renderErrorBreakdown(&sb, stats.ToolErrors, stats.ToolCounts, stats.SkillErrors, stats.SkillCounts, stats.CommandErrors, stats.CommandCounts, stats.TotalToolErrors, width, ruler, titleStyle)
 	}
 
 	// ── SESSION DURATIONS (sparkline) ──
