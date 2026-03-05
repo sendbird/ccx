@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/keyolk/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 // TestE2EResizePreservesSelection verifies that resizing the terminal

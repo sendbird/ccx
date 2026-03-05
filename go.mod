@@ -1,4 +1,4 @@
-module github.com/keyolk/ccx
+module github.com/sendbird/ccx
 
 go 1.25.1
 
