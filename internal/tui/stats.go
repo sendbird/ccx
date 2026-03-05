@@ -67,6 +67,21 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 			}
 		}
 	}
+	// Activity timeline sparkline (message density over session duration)
+	if len(stats.MsgTimestamps) > 2 && dur > 0 {
+		sparkW := min(width-12, 40)
+		if sparkW > 5 {
+			buckets := timelineBuckets(stats.MsgTimestamps, stats.FirstTimestamp, stats.LastTimestamp, sparkW)
+			spark := sparkline(buckets, sparkW)
+			userStyle := lipgloss.NewStyle().Foreground(colorUser)
+			sb.WriteString(fmt.Sprintf("  Activity  %s\n", userStyle.Render(spark)))
+			// Time axis labels
+			sb.WriteString(fmt.Sprintf("  %s%s%s\n",
+				labelStyle.Render(stats.FirstTimestamp.Format("15:04")),
+				labelStyle.Render(strings.Repeat(" ", max(sparkW-10, 0))),
+				labelStyle.Render(stats.LastTimestamp.Format("15:04"))))
+		}
+	}
 	sb.WriteString("\n")
 
 	// ── TOKENS ──
@@ -384,6 +399,63 @@ func turnsStats(turns []int) (avg float64, maxT int) {
 	return
 }
 
+// timelineBuckets distributes timestamps into N buckets over a time range.
+func timelineBuckets(timestamps []time.Time, start, end time.Time, n int) []int {
+	dur := end.Sub(start)
+	if dur <= 0 || n <= 0 {
+		return nil
+	}
+	buckets := make([]int, n)
+	bucketDur := dur / time.Duration(n)
+	for _, ts := range timestamps {
+		idx := int(ts.Sub(start) / bucketDur)
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= n {
+			idx = n - 1
+		}
+		buckets[idx]++
+	}
+	return buckets
+}
+
+// dailyBuckets distributes timestamps into per-day counts, returning buckets and day labels.
+func dailyBuckets(timestamps []time.Time, n int) ([]int, string, string) {
+	if len(timestamps) == 0 {
+		return nil, "", ""
+	}
+	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i].Before(timestamps[j]) })
+	first := timestamps[0].Truncate(24 * time.Hour)
+	last := timestamps[len(timestamps)-1].Truncate(24 * time.Hour)
+	days := int(last.Sub(first)/(24*time.Hour)) + 1
+	if days < 2 {
+		return nil, "", ""
+	}
+	buckets := make([]int, days)
+	for _, ts := range timestamps {
+		idx := int(ts.Sub(first) / (24 * time.Hour))
+		if idx >= days {
+			idx = days - 1
+		}
+		buckets[idx]++
+	}
+	// Downsample if too many days
+	if days > n && n > 0 {
+		bucketSize := (days + n - 1) / n
+		var ds []int
+		for i := 0; i < days; i += bucketSize {
+			sum := 0
+			for j := i; j < min(i+bucketSize, days); j++ {
+				sum += buckets[j]
+			}
+			ds = append(ds, sum)
+		}
+		buckets = ds
+	}
+	return buckets, first.Format("Jan 2"), last.Format("Jan 2")
+}
+
 func fmtCost(usd float64) string {
 	if usd < 0.01 {
 		return fmt.Sprintf("$%.4f", usd)
@@ -681,6 +753,26 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 		if sparkW > 5 {
 			spark := sparkline(tokVals, sparkW)
 			sb.WriteString(fmt.Sprintf("  %s\n", outputStyle.Render(spark)))
+		}
+		sb.WriteString("\n")
+	}
+
+	// ── DAILY ACTIVITY ──
+	if len(stats.SessionStarts) > 1 {
+		sparkW := min(width-4, 60)
+		if sparkW > 5 {
+			buckets, firstDay, lastDay := dailyBuckets(stats.SessionStarts, sparkW)
+			if len(buckets) > 1 {
+				sb.WriteString(titleStyle.Render("DAILY ACTIVITY") + "\n")
+				sb.WriteString(ruler + "\n")
+				spark := sparkline(buckets, sparkW)
+				userStyle := lipgloss.NewStyle().Foreground(colorUser)
+				sb.WriteString(fmt.Sprintf("  %s\n", userStyle.Render(spark)))
+				sb.WriteString(fmt.Sprintf("  %s%s%s\n",
+					labelStyle.Render(firstDay),
+					labelStyle.Render(strings.Repeat(" ", max(sparkW-len(firstDay)-len(lastDay), 0))),
+					labelStyle.Render(lastDay)))
+			}
 		}
 	}
 

@@ -68,6 +68,9 @@ type SessionStats struct {
 	AvgMsgGap time.Duration
 	MaxMsgGap time.Duration
 
+	// Per-message timestamps for timeline visualization
+	MsgTimestamps []time.Time
+
 	// Models used
 	Models map[string]int
 }
@@ -215,6 +218,7 @@ func ScanSessionStats(path string) (SessionStats, error) {
 				}
 			}
 			lastMsgTime = ts
+			stats.MsgTimestamps = append(stats.MsgTimestamps, ts)
 		}
 
 		// Model (assistant messages)
@@ -614,6 +618,7 @@ type GlobalStats struct {
 
 	SessionDurations []time.Duration // per-session durations for sparkline
 	SessionTokens    []int64         // output tokens per session for sparkline
+	SessionStarts    []time.Time     // session start times for daily activity
 }
 
 // AggregateStats scans all session files and aggregates their statistics.
@@ -712,6 +717,9 @@ func AggregateStats(sessions []Session) GlobalStats {
 			g.SessionDurations = append(g.SessionDurations, dur)
 		}
 		g.SessionTokens = append(g.SessionTokens, stats.TotalOutputTokens)
+		if !stats.FirstTimestamp.IsZero() {
+			g.SessionStarts = append(g.SessionStarts, stats.FirstTimestamp)
+		}
 		g.AllTurnsPerRequest = append(g.AllTurnsPerRequest, stats.TurnsPerRequest...)
 	}
 
