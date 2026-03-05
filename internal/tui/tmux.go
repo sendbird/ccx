@@ -379,6 +379,8 @@ func tmuxCapturePane(p tmuxPane) (string, error) {
 	return strings.TrimRight(string(out), "\n"), nil
 }
 
+
+
 // shellQuote wraps a string in single quotes for safe shell embedding.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"

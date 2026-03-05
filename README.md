@@ -4,8 +4,6 @@ A terminal UI for browsing, inspecting, and managing [Claude Code](https://docs.
 
 ccx gives you a full-cycle view of what Claude Code has been doing across all your projects — browse sessions, read conversations, inspect tool calls, view agent hierarchies, and get aggregated stats.
 
-![demo](demo.gif)
-
 ## Install
 
 ```bash

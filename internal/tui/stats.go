@@ -43,8 +43,16 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 
 	if dur > 0 {
 		rate := float64(stats.MessageCount) / dur.Minutes()
-		sb.WriteString(fmt.Sprintf("  Rate      %s\n",
-			labelStyle.Render(fmt.Sprintf("%.1f msg/min", rate))))
+		rateLine := fmt.Sprintf("%.1f msg/min", rate)
+		// Inline rate sparkline
+		if len(stats.MsgTimestamps) > 2 {
+			rateSparkW := min(width-24, 20)
+			if rateSparkW > 5 {
+				rateBuckets := timelineBuckets(stats.MsgTimestamps, stats.FirstTimestamp, stats.LastTimestamp, rateSparkW)
+				rateLine += "  " + sparkline(rateBuckets, rateSparkW)
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  Rate      %s\n", labelStyle.Render(rateLine)))
 	}
 	if stats.CompactionCount > 0 {
 		warnStyle := lipgloss.NewStyle().Foreground(colorError)
@@ -65,6 +73,30 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 				sb.WriteString(fmt.Sprintf("  Per Req   %s\n",
 					labelStyle.Render(spark)))
 			}
+		}
+	}
+	// Activity timeline sparkline (message density over session duration)
+	if len(stats.MsgTimestamps) > 2 && dur > 0 {
+		sparkW := min(width-12, 40)
+		if sparkW > 5 {
+			buckets := timelineBuckets(stats.MsgTimestamps, stats.FirstTimestamp, stats.LastTimestamp, sparkW)
+			spark := sparkline(buckets, sparkW)
+			userStyle := lipgloss.NewStyle().Foreground(colorUser)
+			sb.WriteString(fmt.Sprintf("  Activity  %s\n", userStyle.Render(spark)))
+			// Error timeline (same time scale, red)
+			if len(stats.ErrorTimestamps) > 0 {
+				errBuckets := timelineBuckets(stats.ErrorTimestamps, stats.FirstTimestamp, stats.LastTimestamp, sparkW)
+				if hasNonZero(errBuckets) {
+					errSpark := sparkline(errBuckets, sparkW)
+					errStyle := lipgloss.NewStyle().Foreground(colorError)
+					sb.WriteString(fmt.Sprintf("  Errors    %s\n", errStyle.Render(errSpark)))
+				}
+			}
+			// Time axis labels
+			sb.WriteString(fmt.Sprintf("  %s%s%s\n",
+				labelStyle.Render(stats.FirstTimestamp.Format("15:04")),
+				labelStyle.Render(strings.Repeat(" ", max(sparkW-10, 0))),
+				labelStyle.Render(stats.LastTimestamp.Format("15:04"))))
 		}
 	}
 	sb.WriteString("\n")
@@ -195,6 +227,11 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 		sb.WriteString("\n")
 	}
 
+	// ── TOOL TIMELINES ──
+	if len(stats.ToolCallTimestamps) > 0 && dur > 0 {
+		renderToolTimelines(&sb, stats.ToolCallTimestamps, stats.ToolErrorTimestamps, stats.ToolCounts, stats.FirstTimestamp, stats.LastTimestamp, width, 10)
+	}
+
 	// ── CODE ──
 	if stats.WriteCount > 0 || stats.EditCount > 0 {
 		sb.WriteString(titleStyle.Render("CODE") + "\n")
@@ -241,9 +278,94 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 			sb.WriteString(fmt.Sprintf("  %-20s %s\n", short,
 				numStyle.Render(fmt.Sprintf("%d", count))))
 		}
+		sb.WriteString("\n")
+	}
+
+	// ── ERRORS ──
+	if stats.ToolErrorCount > 0 {
+		renderErrorBreakdown(&sb, stats.ToolErrors, stats.ToolCounts, stats.SkillErrors, stats.SkillCounts, stats.CommandErrors, stats.CommandCounts, stats.ToolErrorCount, width, ruler, titleStyle)
 	}
 
 	return sb.String()
+}
+
+// renderErrorBreakdown renders a dedicated error section showing tools/skills/commands sorted by error count.
+func renderErrorBreakdown(sb *strings.Builder, toolErrors, toolCounts map[string]int, skillErrors, skillCounts map[string]int, cmdErrors, cmdCounts map[string]int, totalErrors int, width int, ruler string, titleStyle lipgloss.Style) {
+	errStyle := lipgloss.NewStyle().Foreground(colorError)
+	rateStyle := dimStyle
+
+	type errEntry struct {
+		name   string
+		errors int
+		calls  int
+	}
+	var entries []errEntry
+
+	// Collect tool errors
+	for name, errs := range toolErrors {
+		if errs > 0 {
+			entries = append(entries, errEntry{name: shortenToolName(name), errors: errs, calls: toolCounts[name]})
+		}
+	}
+	// Collect skill errors
+	for name, errs := range skillErrors {
+		if errs > 0 {
+			entries = append(entries, errEntry{name: "skill:" + name, errors: errs, calls: skillCounts[name]})
+		}
+	}
+	// Collect command errors
+	for name, errs := range cmdErrors {
+		if errs > 0 {
+			entries = append(entries, errEntry{name: name, errors: errs, calls: cmdCounts[name]})
+		}
+	}
+
+	if len(entries) == 0 {
+		return
+	}
+
+	// Sort by error count descending
+	sort.Slice(entries, func(i, j int) bool { return entries[i].errors > entries[j].errors })
+
+	sb.WriteString(titleStyle.Render(fmt.Sprintf("ERRORS (%d total)", totalErrors)) + "\n")
+	sb.WriteString(ruler + "\n")
+
+	maxErrs := entries[0].errors
+	maxNameW := 0
+	for _, e := range entries {
+		if len(e.name) > maxNameW {
+			maxNameW = len(e.name)
+		}
+	}
+	maxLabelW := max(width*2/5, 14)
+	if maxNameW > maxLabelW {
+		maxNameW = maxLabelW
+	}
+	countW := len(fmt.Sprintf("%d", maxErrs))
+	barMaxW := width - maxNameW - countW - 20
+	if barMaxW < 3 {
+		barMaxW = 3
+	}
+
+	limit := min(len(entries), 15)
+	for _, e := range entries[:limit] {
+		name := e.name
+		if len(name) > maxNameW {
+			name = name[:maxNameW-1] + "…"
+		}
+		barLen := e.errors * barMaxW / maxErrs
+		if barLen < 1 {
+			barLen = 1
+		}
+		bar := errStyle.Render(strings.Repeat("█", barLen))
+		rate := float64(e.errors) * 100 / float64(max(e.calls, 1))
+		sb.WriteString(fmt.Sprintf("  %-*s %s %s %s\n",
+			maxNameW, name,
+			bar,
+			errStyle.Render(fmt.Sprintf("%*d", countW, e.errors)),
+			rateStyle.Render(fmt.Sprintf("(%.0f%% of %d)", rate, e.calls))))
+	}
+	sb.WriteString("\n")
 }
 
 // renderToolBar renders a sorted bar chart of tool name -> count.
@@ -382,6 +504,72 @@ func turnsStats(turns []int) (avg float64, maxT int) {
 	}
 	avg = float64(sum) / float64(len(turns))
 	return
+}
+
+func hasNonZero(vals []int) bool {
+	for _, v := range vals {
+		if v > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// timelineBuckets distributes timestamps into N buckets over a time range.
+func timelineBuckets(timestamps []time.Time, start, end time.Time, n int) []int {
+	dur := end.Sub(start)
+	if dur <= 0 || n <= 0 {
+		return nil
+	}
+	buckets := make([]int, n)
+	bucketDur := dur / time.Duration(n)
+	for _, ts := range timestamps {
+		idx := int(ts.Sub(start) / bucketDur)
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= n {
+			idx = n - 1
+		}
+		buckets[idx]++
+	}
+	return buckets
+}
+
+// dailyBuckets distributes timestamps into per-day counts, returning buckets and day labels.
+func dailyBuckets(timestamps []time.Time, n int) ([]int, string, string) {
+	if len(timestamps) == 0 {
+		return nil, "", ""
+	}
+	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i].Before(timestamps[j]) })
+	first := timestamps[0].Truncate(24 * time.Hour)
+	last := timestamps[len(timestamps)-1].Truncate(24 * time.Hour)
+	days := int(last.Sub(first)/(24*time.Hour)) + 1
+	if days < 2 {
+		return nil, "", ""
+	}
+	buckets := make([]int, days)
+	for _, ts := range timestamps {
+		idx := int(ts.Sub(first) / (24 * time.Hour))
+		if idx >= days {
+			idx = days - 1
+		}
+		buckets[idx]++
+	}
+	// Downsample if too many days
+	if days > n && n > 0 {
+		bucketSize := (days + n - 1) / n
+		var ds []int
+		for i := 0; i < days; i += bucketSize {
+			sum := 0
+			for j := i; j < min(i+bucketSize, days); j++ {
+				sum += buckets[j]
+			}
+			ds = append(ds, sum)
+		}
+		buckets = ds
+	}
+	return buckets, first.Format("Jan 2"), last.Format("Jan 2")
 }
 
 func fmtCost(usd float64) string {
@@ -605,6 +793,11 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 		sb.WriteString("\n")
 	}
 
+	// ── TOOL TIMELINES (daily) ──
+	if len(stats.AllToolCallTimestamps) > 0 {
+		renderToolDailyTimelines(&sb, stats.AllToolCallTimestamps, stats.AllToolErrorTimestamps, stats.ToolCounts, width, 10)
+	}
+
 	// ── SKILLS ──
 	if len(stats.SkillCounts) > 0 {
 		totalSkills := 0
@@ -653,6 +846,11 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 		sb.WriteString("\n")
 	}
 
+	// ── ERRORS ──
+	if stats.TotalToolErrors > 0 {
+		renderErrorBreakdown(&sb, stats.ToolErrors, stats.ToolCounts, stats.SkillErrors, stats.SkillCounts, stats.CommandErrors, stats.CommandCounts, stats.TotalToolErrors, width, ruler, titleStyle)
+	}
+
 	// ── SESSION DURATIONS (sparkline) ──
 	if len(stats.SessionDurations) > 1 {
 		sb.WriteString(titleStyle.Render("SESSION DURATIONS") + "\n")
@@ -682,9 +880,217 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 			spark := sparkline(tokVals, sparkW)
 			sb.WriteString(fmt.Sprintf("  %s\n", outputStyle.Render(spark)))
 		}
+		sb.WriteString("\n")
+	}
+
+	// ── DAILY ACTIVITY ──
+	if len(stats.SessionStarts) > 1 {
+		sparkW := min(width-4, 60)
+		if sparkW > 5 {
+			buckets, firstDay, lastDay := dailyBuckets(stats.SessionStarts, sparkW)
+			if len(buckets) > 1 {
+				sb.WriteString(titleStyle.Render("DAILY ACTIVITY") + "\n")
+				sb.WriteString(ruler + "\n")
+				spark := sparkline(buckets, sparkW)
+				userStyle := lipgloss.NewStyle().Foreground(colorUser)
+				sb.WriteString(fmt.Sprintf("  Sessions  %s\n", userStyle.Render(spark)))
+				// Daily message timeline
+				if len(stats.AllMsgTimestamps) > 0 {
+					msgBuckets, _, _ := dailyBuckets(stats.AllMsgTimestamps, sparkW)
+					for len(msgBuckets) < len(buckets) {
+						msgBuckets = append(msgBuckets, 0)
+					}
+					if hasNonZero(msgBuckets) {
+						msgSpark := sparkline(msgBuckets, sparkW)
+						msgStyle := lipgloss.NewStyle().Foreground(colorAccent)
+						sb.WriteString(fmt.Sprintf("  Messages  %s\n", msgStyle.Render(msgSpark)))
+					}
+				}
+				// Daily error timeline (same date scale, red)
+				if len(stats.AllErrorTimestamps) > 0 {
+					errBuckets, _, _ := dailyBuckets(stats.AllErrorTimestamps, sparkW)
+					// Pad to same length as session buckets
+					for len(errBuckets) < len(buckets) {
+						errBuckets = append(errBuckets, 0)
+					}
+					if hasNonZero(errBuckets) {
+						errSpark := sparkline(errBuckets, sparkW)
+						errStyle := lipgloss.NewStyle().Foreground(colorError)
+						sb.WriteString(fmt.Sprintf("  Errors    %s\n", errStyle.Render(errSpark)))
+					}
+				}
+				sb.WriteString(fmt.Sprintf("  %s%s%s\n",
+					labelStyle.Render(firstDay),
+					labelStyle.Render(strings.Repeat(" ", max(sparkW-len(firstDay)-len(lastDay), 0))),
+					labelStyle.Render(lastDay)))
+			}
+		}
 	}
 
 	return sb.String()
+}
+
+// renderToolTimelines renders per-tool activity and error sparklines for a session.
+func renderToolTimelines(sb *strings.Builder, toolCallTS, toolErrTS map[string][]time.Time, toolCounts map[string]int, start, end time.Time, width, limit int) {
+	dur := end.Sub(start)
+	if dur <= 0 || len(toolCallTS) == 0 {
+		return
+	}
+
+	type entry struct {
+		name  string
+		count int
+	}
+	var entries []entry
+	for name, ts := range toolCallTS {
+		if len(ts) > 0 {
+			entries = append(entries, entry{name: name, count: toolCounts[name]})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].count > entries[j].count })
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	titleStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	labelStyle := dimStyle
+	accentStyle := lipgloss.NewStyle().Foreground(colorAccent)
+	errStyle := lipgloss.NewStyle().Foreground(colorError)
+	ruler := dimStyle.Render(strings.Repeat("─", min(width, 40)))
+
+	sb.WriteString(titleStyle.Render("TOOL TIMELINES") + "\n")
+	sb.WriteString(ruler + "\n")
+
+	maxNameW := 0
+	for _, e := range entries {
+		short := shortenToolName(e.name)
+		if len(short) > maxNameW {
+			maxNameW = len(short)
+		}
+	}
+	maxLabelW := max(width*2/5, 14)
+	if maxNameW > maxLabelW {
+		maxNameW = maxLabelW
+	}
+
+	sparkW := width - maxNameW - 20
+	if sparkW < 8 {
+		sparkW = 8
+	}
+
+	for _, e := range entries {
+		name := shortenToolName(e.name)
+		if len(name) > maxNameW {
+			name = name[:maxNameW-1] + "…"
+		}
+		buckets := timelineBuckets(toolCallTS[e.name], start, end, sparkW)
+		spark := sparkline(buckets, sparkW)
+		line := fmt.Sprintf("  %-*s %s %d", maxNameW, name, accentStyle.Render(spark), e.count)
+
+		if errTS, ok := toolErrTS[e.name]; ok && len(errTS) > 0 {
+			errBuckets := timelineBuckets(errTS, start, end, min(sparkW/3, 10))
+			if hasNonZero(errBuckets) {
+				errSpark := sparkline(errBuckets, min(sparkW/3, 10))
+				line += "  " + errStyle.Render(errSpark) + errStyle.Render(fmt.Sprintf(" %d err", len(errTS)))
+			}
+		}
+		sb.WriteString(line + "\n")
+	}
+
+	// Time axis
+	sb.WriteString(fmt.Sprintf("  %-*s%s%s\n",
+		maxNameW+1, "",
+		labelStyle.Render(start.Format("15:04")),
+		labelStyle.Render(fmt.Sprintf("%*s", max(sparkW-10, 0), end.Format("15:04")))))
+	sb.WriteString("\n")
+}
+
+// renderToolDailyTimelines renders per-tool daily activity and error sparklines for global stats.
+func renderToolDailyTimelines(sb *strings.Builder, toolCallTS, toolErrTS map[string][]time.Time, toolCounts map[string]int, width, limit int) {
+	if len(toolCallTS) == 0 {
+		return
+	}
+
+	type entry struct {
+		name  string
+		count int
+	}
+	var entries []entry
+	for name, ts := range toolCallTS {
+		if len(ts) > 0 {
+			entries = append(entries, entry{name: name, count: toolCounts[name]})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].count > entries[j].count })
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	titleStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	labelStyle := dimStyle
+	accentStyle := lipgloss.NewStyle().Foreground(colorAccent)
+	errStyle := lipgloss.NewStyle().Foreground(colorError)
+	ruler := dimStyle.Render(strings.Repeat("─", min(width, 40)))
+
+	sb.WriteString(titleStyle.Render("TOOL TIMELINES (daily)") + "\n")
+	sb.WriteString(ruler + "\n")
+
+	maxNameW := 0
+	for _, e := range entries {
+		short := shortenToolName(e.name)
+		if len(short) > maxNameW {
+			maxNameW = len(short)
+		}
+	}
+	maxLabelW := max(width*2/5, 14)
+	if maxNameW > maxLabelW {
+		maxNameW = maxLabelW
+	}
+
+	sparkW := width - maxNameW - 20
+	if sparkW < 8 {
+		sparkW = 8
+	}
+
+	var firstDay, lastDay string
+	for _, e := range entries {
+		name := shortenToolName(e.name)
+		if len(name) > maxNameW {
+			name = name[:maxNameW-1] + "…"
+		}
+		buckets, fd, ld := dailyBuckets(toolCallTS[e.name], sparkW)
+		if len(buckets) < 2 {
+			continue
+		}
+		if firstDay == "" {
+			firstDay, lastDay = fd, ld
+		}
+		spark := sparkline(buckets, sparkW)
+		line := fmt.Sprintf("  %-*s %s %d", maxNameW, name, accentStyle.Render(spark), e.count)
+
+		if errTS, ok := toolErrTS[e.name]; ok && len(errTS) > 0 {
+			errBuckets, _, _ := dailyBuckets(errTS, min(sparkW/3, 10))
+			if hasNonZero(errBuckets) {
+				errSpark := sparkline(errBuckets, min(sparkW/3, 10))
+				line += "  " + errStyle.Render(errSpark) + errStyle.Render(fmt.Sprintf(" %d err", len(errTS)))
+			}
+		}
+		sb.WriteString(line + "\n")
+	}
+
+	if firstDay != "" {
+		sb.WriteString(fmt.Sprintf("  %-*s%s%s\n",
+			maxNameW+1, "",
+			labelStyle.Render(firstDay),
+			labelStyle.Render(fmt.Sprintf("%*s", max(sparkW-len(firstDay)-len(lastDay), 0), lastDay))))
+	}
+	sb.WriteString("\n")
 }
 
 // renderToolBarN renders a sorted bar chart, limited to top N entries.
