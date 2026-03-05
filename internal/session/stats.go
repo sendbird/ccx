@@ -35,6 +35,7 @@ type SessionStats struct {
 	ToolErrors      map[string]int // tool name -> error count
 	SkillErrors     map[string]int // skill name -> error count
 	CommandErrors   map[string]int // command name -> error count
+	ErrorTimestamps []time.Time    // when errors occurred (for timeline)
 
 	// MCP tools: name -> count (subset of ToolCounts for mcp__ prefixed tools)
 	MCPToolCounts map[string]int
@@ -297,6 +298,12 @@ func ScanSessionStats(path string) (SessionStats, error) {
 			if bytes.Contains(line, bIsErrorT) || bytes.Contains(line, bIsErrorTS) {
 				errCount := countOccurrences(line, bIsErrorT) + countOccurrences(line, bIsErrorTS)
 				stats.ToolErrorCount += errCount
+				// Error timeline: record timestamp for each error
+				if !ts.IsZero() {
+					for range errCount {
+						stats.ErrorTimestamps = append(stats.ErrorTimestamps, ts)
+					}
+				}
 				// Attribute errors to specific tools via tool_use_id matching
 				for _, name := range extractErrorToolNames(line, toolIDMap) {
 					stats.ToolErrors[name]++
@@ -619,6 +626,7 @@ type GlobalStats struct {
 	SessionDurations []time.Duration // per-session durations for sparkline
 	SessionTokens    []int64         // output tokens per session for sparkline
 	SessionStarts    []time.Time     // session start times for daily activity
+	AllErrorTimestamps []time.Time   // all error timestamps for daily error timeline
 }
 
 // AggregateStats scans all session files and aggregates their statistics.
@@ -721,6 +729,7 @@ func AggregateStats(sessions []Session) GlobalStats {
 			g.SessionStarts = append(g.SessionStarts, stats.FirstTimestamp)
 		}
 		g.AllTurnsPerRequest = append(g.AllTurnsPerRequest, stats.TurnsPerRequest...)
+		g.AllErrorTimestamps = append(g.AllErrorTimestamps, stats.ErrorTimestamps...)
 	}
 
 	g.TotalFiles = len(allFiles)

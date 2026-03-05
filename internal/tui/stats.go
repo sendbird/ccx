@@ -75,6 +75,15 @@ func renderSessionStats(stats session.SessionStats, width int) string {
 			spark := sparkline(buckets, sparkW)
 			userStyle := lipgloss.NewStyle().Foreground(colorUser)
 			sb.WriteString(fmt.Sprintf("  Activity  %s\n", userStyle.Render(spark)))
+			// Error timeline (same time scale, red)
+			if len(stats.ErrorTimestamps) > 0 {
+				errBuckets := timelineBuckets(stats.ErrorTimestamps, stats.FirstTimestamp, stats.LastTimestamp, sparkW)
+				if hasNonZero(errBuckets) {
+					errSpark := sparkline(errBuckets, sparkW)
+					errStyle := lipgloss.NewStyle().Foreground(colorError)
+					sb.WriteString(fmt.Sprintf("  Errors    %s\n", errStyle.Render(errSpark)))
+				}
+			}
 			// Time axis labels
 			sb.WriteString(fmt.Sprintf("  %s%s%s\n",
 				labelStyle.Render(stats.FirstTimestamp.Format("15:04")),
@@ -397,6 +406,15 @@ func turnsStats(turns []int) (avg float64, maxT int) {
 	}
 	avg = float64(sum) / float64(len(turns))
 	return
+}
+
+func hasNonZero(vals []int) bool {
+	for _, v := range vals {
+		if v > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // timelineBuckets distributes timestamps into N buckets over a time range.
@@ -767,7 +785,20 @@ func renderGlobalStats(stats session.GlobalStats, width int) string {
 				sb.WriteString(ruler + "\n")
 				spark := sparkline(buckets, sparkW)
 				userStyle := lipgloss.NewStyle().Foreground(colorUser)
-				sb.WriteString(fmt.Sprintf("  %s\n", userStyle.Render(spark)))
+				sb.WriteString(fmt.Sprintf("  Sessions  %s\n", userStyle.Render(spark)))
+				// Daily error timeline (same date scale, red)
+				if len(stats.AllErrorTimestamps) > 0 {
+					errBuckets, _, _ := dailyBuckets(stats.AllErrorTimestamps, sparkW)
+					// Pad to same length as session buckets
+					for len(errBuckets) < len(buckets) {
+						errBuckets = append(errBuckets, 0)
+					}
+					if hasNonZero(errBuckets) {
+						errSpark := sparkline(errBuckets, sparkW)
+						errStyle := lipgloss.NewStyle().Foreground(colorError)
+						sb.WriteString(fmt.Sprintf("  Errors    %s\n", errStyle.Render(errSpark)))
+					}
+				}
 				sb.WriteString(fmt.Sprintf("  %s%s%s\n",
 					labelStyle.Render(firstDay),
 					labelStyle.Render(strings.Repeat(" ", max(sparkW-len(firstDay)-len(lastDay), 0))),
