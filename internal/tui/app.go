@@ -674,7 +674,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					a.clearConvFilter()
 					return a, nil
 				}
-			case "up":
+			case "up", "ctrl+p":
 				if a.sessConvCursor > 0 {
 					previewW := max(a.width-sp.ListWidth(a.width, a.splitRatio)-1, 1)
 					curLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
@@ -694,7 +694,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					a.refreshConvPreview()
 				}
 				return a, nil
-			case "down":
+			case "down", "ctrl+n":
 				if a.sessConvCursor < len(visible)-1 {
 					previewW := max(a.width-sp.ListWidth(a.width, a.splitRatio)-1, 1)
 					curLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
@@ -767,7 +767,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case "/":
 				sp.Focus = false
 				return a, startListSearch(&a.sessionList)
-			case "up", "down", "pgdown", "pgup", "home", "end":
+			case "up", "down", "ctrl+p", "ctrl+n", "pgdown", "pgup", "home", "end":
 				scrollPreview(&sp.Preview, key)
 				a.sessPreviewPinned = !a.sessPreviewAtBottom()
 				return a, nil
@@ -787,7 +787,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	newIdx := a.sessionList.Index()
 	if sp.Show && oldIdx == newIdx {
 		switch key {
-		case "down", "up", "pgdown", "pgup":
+		case "down", "up", "ctrl+n", "ctrl+p", "pgdown", "pgup":
 			scrollPreview(&sp.Preview, key)
 			return a, nil
 		}
@@ -924,10 +924,10 @@ func (a *App) handleLiveModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc":
 		a.closeLiveModal()
 		return a, nil
-	case "up":
+	case "up", "ctrl+p":
 		scrollPreview(&a.liveModalVP, "up")
 		return a, nil
-	case "down":
+	case "down", "ctrl+n":
 		scrollPreview(&a.liveModalVP, "down")
 		return a, nil
 	case "pgup":
@@ -2915,9 +2915,9 @@ func clampPaginator(l *list.Model) {
 
 func scrollPreview(vp *viewport.Model, key string) {
 	switch key {
-	case "down":
+	case "down", "ctrl+n":
 		vp.ScrollDown(1)
-	case "up":
+	case "up", "ctrl+p":
 		vp.ScrollUp(1)
 	case "pgdown":
 		vp.ScrollDown(vp.Height)

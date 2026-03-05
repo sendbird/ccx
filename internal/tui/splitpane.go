@@ -240,7 +240,7 @@ func (sp *SplitPane) HandlePreviewScroll(key string) bool {
 		return false
 	}
 	switch key {
-	case "up", "down", "pgup", "pgdown", "home", "end":
+	case "up", "down", "ctrl+p", "ctrl+n", "pgup", "pgdown", "home", "end":
 		scrollPreview(&sp.Preview, key)
 		return true
 	}
@@ -293,12 +293,12 @@ func (sp *SplitPane) HandleListBoundary(key string) bool {
 	// Overflow: at last/first item → scroll preview (only when preview is visible)
 	if sp.Show && sp.Preview.Height > 0 {
 		switch key {
-		case "down", "pgdown":
+		case "down", "ctrl+n", "pgdown":
 			if idx >= len(items)-1 {
 				scrollPreview(&sp.Preview, key)
 				return true
 			}
-		case "up", "pgup":
+		case "up", "ctrl+p", "pgup":
 			if idx <= 0 {
 				scrollPreview(&sp.Preview, key)
 				return true
@@ -555,13 +555,13 @@ func (fs *FoldState) HandleKey(key string) foldResult {
 	}
 
 	switch key {
-	case "up":
+	case "up", "ctrl+p":
 		if fs.BlockCursor > 0 {
 			fs.BlockCursor--
 			return foldCursorMoved
 		}
 		return foldUnhandled
-	case "down":
+	case "down", "ctrl+n":
 		if fs.BlockCursor < nBlocks-1 {
 			fs.BlockCursor++
 			return foldCursorMoved

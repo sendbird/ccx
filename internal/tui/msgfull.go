@@ -122,7 +122,7 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// allMessages mode: only scroll, no blocks/folds/navigation
 	if a.msgFull.allMessages {
 		switch key {
-		case "up", "down", "pgup", "pgdown", "home", "end":
+		case "up", "down", "ctrl+p", "ctrl+n", "pgup", "pgdown", "home", "end":
 			scrollPreview(&a.msgFull.vp, key)
 		}
 		return a, nil
@@ -166,7 +166,7 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Scroll viewport
 	switch key {
-	case "up", "down", "pgup", "pgdown", "home", "end":
+	case "up", "down", "ctrl+p", "ctrl+n", "pgup", "pgdown", "home", "end":
 		scrollPreview(&a.msgFull.vp, key)
 		return a, nil
 	}

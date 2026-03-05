@@ -21,13 +21,13 @@ func configureListSearch(l *list.Model) {
 		key.WithKeys("enter"),
 		key.WithHelp("enter", "apply"),
 	)
-	// Arrow-only navigation (remove j/k)
+	// Arrow + ctrl+p/ctrl+n navigation (remove j/k to avoid conflict with search input)
 	l.KeyMap.CursorUp = key.NewBinding(
-		key.WithKeys("up"),
+		key.WithKeys("up", "ctrl+p"),
 		key.WithHelp("↑", "up"),
 	)
 	l.KeyMap.CursorDown = key.NewBinding(
-		key.WithKeys("down"),
+		key.WithKeys("down", "ctrl+n"),
 		key.WithHelp("↓", "down"),
 	)
 }

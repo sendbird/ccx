@@ -743,7 +743,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Focused preview keys
 	if sp.Focus && sp.Show {
-		if key == "up" || key == "down" {
+		if key == "up" || key == "down" || key == "ctrl+p" || key == "ctrl+n" {
 			if sp.Folds != nil {
 				debugLog("conv: %s pressed, cursor=%d nBlocks=%d vpH=%d vpOffset=%d",
 					key, sp.Folds.BlockCursor, len(sp.Folds.Entry.Content), sp.Preview.Height, sp.Preview.YOffset)
@@ -791,7 +791,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if sp.Show {
 		if oldIdx == newIdx {
 			switch key {
-			case "down", "up", "pgdown", "pgup":
+			case "down", "up", "ctrl+n", "ctrl+p", "pgdown", "pgup":
 				scrollPreview(&sp.Preview, key)
 				return a, nil
 			}

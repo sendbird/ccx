@@ -74,14 +74,14 @@ func (a *App) handleCopyModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.renderCopyMode()
 		return a, nil
-	case "down":
+	case "down", "ctrl+n":
 		if a.copyCursor < len(a.copyLines)-1 {
 			a.copyCursor++
 			a.ensureCursorVisible(vp)
 			a.renderCopyMode()
 		}
 		return a, nil
-	case "up":
+	case "up", "ctrl+p":
 		if a.copyCursor > 0 {
 			a.copyCursor--
 			a.ensureCursorVisible(vp)
