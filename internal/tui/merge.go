@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/keyolk/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 // mergedMsg represents a logical conversation turn, potentially combining

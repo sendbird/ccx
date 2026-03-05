@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/keyolk/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 var sparkChars = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}

@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/keyolk/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 func debugLog(format string, args ...interface{}) {
