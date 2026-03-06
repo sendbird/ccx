@@ -191,8 +191,21 @@ func (a *App) handleCmdMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "enter":
-		input := a.cmdInput.Value()
 		a.cmdMode = false
+		// If a suggestion is highlighted, execute it directly
+		if a.cmdSuggIdx >= 0 && a.cmdSuggIdx < len(a.cmdSuggestions) {
+			entry := a.cmdSuggestions[a.cmdSuggIdx]
+			if entry.action != nil {
+				return entry.action(a)
+			}
+			// Category hint (no action) — fill as prefix and reopen
+			a.cmdMode = true
+			a.cmdInput.SetValue(entry.name)
+			a.cmdInput.SetCursor(len(entry.name))
+			a.updateCmdSuggestions()
+			return a, nil
+		}
+		input := a.cmdInput.Value()
 		if input == "" {
 			return a, nil
 		}
