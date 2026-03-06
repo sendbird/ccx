@@ -40,11 +40,20 @@ func scanSessionStream(path string, modTime time.Time, home string) Session {
 
 	userMsgCount := 0
 	gotPrompt := false
+	checkedFork := false
 
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
+		}
+
+		// Fork detection: look for "forkedFrom":{"sessionId":"<uuid>",...}
+		if !checkedFork {
+			if bytes.Contains(line, bForkedFrom) {
+				sess.ParentSessionID = extractForkedFromSessionID(line)
+				checkedFork = true
+			}
 		}
 
 		isMeta := bytes.Contains(line, bIsMeta) || bytes.Contains(line, bIsMetaSpaced)

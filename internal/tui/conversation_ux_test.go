@@ -729,7 +729,7 @@ func TestLiveTickMsgReachesHandleLiveTailInConvView(t *testing.T) {
 
 	// Simulate stale session-level live preview state (as if user came from session view)
 	app.sessPreviewMode = sessPreviewLive
-	app.livePreviewSessID = "some-old-session-id"
+	app.paneProxy = &paneProxyState{sessID: "some-old-session-id"}
 
 	// Enable live tail for conversation
 	app.liveTail = true

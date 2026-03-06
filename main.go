@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/session"
@@ -20,6 +21,8 @@ func main() {
 		tmuxAutoLive bool
 		worktreeDir  string
 		searchQuery  string
+		groupMode    string
+		previewMode  string
 	)
 
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
@@ -29,6 +32,8 @@ func main() {
 	flag.BoolVar(&tmuxAutoLive, "tmux-auto-live", false, "auto-enter live session in same tmux window on startup")
 	flag.StringVar(&worktreeDir, "worktree-dir", ".worktree", "subdirectory name for git worktrees")
 	flag.StringVar(&searchQuery, "search", "", "start with session list filtered by search query")
+	flag.StringVar(&groupMode, "group", "", "initial group mode (flat|proj|tree|chain|fork)")
+	flag.StringVar(&previewMode, "preview", "", "initial preview mode (conv|stats|mem|tasks)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "ccx — Claude Code Explorer\n\n")
 		fmt.Fprintf(os.Stderr, "Usage: ccx [flags]\n\n")
@@ -62,11 +67,23 @@ func main() {
 		os.Exit(0)
 	}
 
+	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
+	km, err := tui.LoadKeymap(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: keymap config: %v\n", err)
+		def := tui.DefaultKeymap()
+		km = &def
+	}
+
 	app := tui.NewApp(sessions, tui.Config{
+		ClaudeDir:    claudeDir,
 		TmuxEnabled:  tmuxEnabled,
 		TmuxAutoLive: tmuxAutoLive,
 		WorktreeDir:  worktreeDir,
 		SearchQuery:  searchQuery,
+		Keymap:       km,
+		GroupMode:    groupMode,
+		PreviewMode:  previewMode,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

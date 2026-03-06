@@ -127,6 +127,29 @@ func extractQuotedAfter(line []byte, markers ...[]byte) string {
 	return ""
 }
 
+// extractForkedFromSessionID extracts the sessionId from a "forkedFrom":{"sessionId":"..."} object.
+func extractForkedFromSessionID(line []byte) string {
+	idx := bytes.Index(line, bForkedFrom)
+	if idx < 0 {
+		return ""
+	}
+	// Find "sessionId" after forkedFrom
+	rest := line[idx:]
+	markers := [][]byte{[]byte(`"sessionId":"`), []byte(`"sessionId": "`)}
+	for _, m := range markers {
+		si := bytes.Index(rest, m)
+		if si < 0 {
+			continue
+		}
+		start := si + len(m)
+		end := bytes.IndexByte(rest[start:], '"')
+		if end > 0 {
+			return string(rest[start : start+end])
+		}
+	}
+	return ""
+}
+
 // lastStringField finds the LAST occurrence of a marker and extracts the JSON string value.
 func lastStringField(line []byte, marker1, marker2 []byte) string {
 	idx := bytes.LastIndex(line, marker1)

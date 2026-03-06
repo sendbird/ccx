@@ -37,6 +37,7 @@ var (
 	planBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 	liveBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
 	busyBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
+	forkBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
 	blockCursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 	blockSelectedBg     = lipgloss.NewStyle().Background(lipgloss.Color("#1E293B"))
 	previewBorder       = lipgloss.NewStyle().
@@ -65,6 +66,9 @@ var (
 	statInputStyle  = lipgloss.NewStyle().Foreground(colorUser)
 	statOutputStyle = lipgloss.NewStyle().Foreground(colorAssistant)
 	statCostStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
+	// Multi-select checkmark
+	selectMarkStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 
 	// Task status icons in conversation
 	taskDoneStyle       = lipgloss.NewStyle().Foreground(colorAccent)

@@ -99,9 +99,6 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		copyToClipboard(stripANSI(a.msgFull.content))
 		a.copiedMsg = "Copied!"
 		return a, nil
-	case "o":
-		openInPager(stripANSI(a.msgFull.content))
-		return a, nil
 	case "/":
 		a.startMsgFullSearch()
 		return a, nil
@@ -181,7 +178,11 @@ func (a *App) refreshMsgFullPreview() {
 	fs.BlockStarts = rp.blockStarts
 
 	oldOffset := a.msgFull.vp.YOffset
-	a.msgFull.vp.SetContent(rp.content)
+	content := rp.content
+	if a.msgFull.searchTerm != "" {
+		content = highlightSearchMatches(content, a.msgFull.searchTerm)
+	}
+	a.msgFull.vp.SetContent(content)
 
 	maxOffset := max(a.msgFull.vp.TotalLineCount()-a.msgFull.vp.Height, 0)
 	if oldOffset > maxOffset {
@@ -332,7 +333,15 @@ func (a *App) findAgentInMsgFull(entry session.Entry) (session.Subagent, bool) {
 func (a *App) enterMsgFullCopyMode() {
 	a.copyLines = strings.Split(stripANSI(a.msgFull.content), "\n")
 	a.copyModeActive = true
-	a.copyCursor = a.msgFull.vp.YOffset
+
+	// Start cursor at current block position (if available), fall back to viewport offset
+	cursor := a.msgFull.vp.YOffset
+	fs := &a.msgFull.folds
+	if fs.BlockCursor >= 0 && fs.BlockCursor < len(fs.BlockStarts) {
+		cursor = fs.BlockStarts[fs.BlockCursor]
+	}
+	a.copyCursor = cursor
+
 	a.copyAnchor = -1
 	a.renderMsgFullCopyMode()
 }
@@ -412,6 +421,15 @@ func (a *App) commitMsgFullSearch() {
 	}
 	a.msgFull.searchTerm = term
 	a.buildMsgFullSearchMatches()
+
+	// Apply search highlighting
+	if a.msgFull.allMessages {
+		content := highlightSearchMatches(a.msgFull.content, term)
+		a.msgFull.vp.SetContent(content)
+	} else {
+		a.refreshMsgFullPreview()
+	}
+
 	// Jump to first match at or after current viewport
 	a.jumpMsgFullSearchForward()
 }
@@ -427,6 +445,13 @@ func (a *App) clearMsgFullSearch() {
 	a.msgFull.searchTerm = ""
 	a.msgFull.searchLines = nil
 	a.msgFull.searchIdx = 0
+
+	// Re-render without highlights
+	if a.msgFull.allMessages {
+		a.msgFull.vp.SetContent(a.msgFull.content)
+	} else {
+		a.refreshMsgFullPreview()
+	}
 }
 
 // buildMsgFullSearchMatches finds all lines matching the search term.
@@ -511,4 +536,131 @@ func (a *App) scrollToSearchMatch() {
 	maxOffset := max(a.msgFull.vp.TotalLineCount()-a.msgFull.vp.Height, 0)
 	target := min(max(line-a.msgFull.vp.Height/3, 0), maxOffset)
 	a.msgFull.vp.YOffset = target
+}
+
+// highlightSearchMatches wraps occurrences of the search term with a
+// highlight background in the rendered viewport content.
+func highlightSearchMatches(content, term string) string {
+	if term == "" {
+		return content
+	}
+	lowerTerm := strings.ToLower(term)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		plain := stripANSI(line)
+		if !strings.Contains(strings.ToLower(plain), lowerTerm) {
+			continue
+		}
+		lines[i] = highlightLine(line, term)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// highlightLine inserts ANSI highlight escapes around case-insensitive matches
+// in a line that may contain existing ANSI sequences.
+func highlightLine(line, term string) string {
+	const hlStart = "\x1b[43;30m" // yellow bg, black fg
+	const hlEnd = "\x1b[0m"
+
+	lowerTerm := strings.ToLower(term)
+	termLen := len(lowerTerm)
+
+	// Walk the line tracking visible character position vs ANSI escapes.
+	// Build a map from visible-char index to byte positions in the original line.
+	type charPos struct {
+		byteStart int
+		byteEnd   int
+	}
+	var visChars []charPos
+	i := 0
+	for i < len(line) {
+		if line[i] == '\x1b' && i+1 < len(line) && line[i+1] == '[' {
+			// Skip ANSI escape sequence
+			j := i + 2
+			for j < len(line) && line[j] != 'm' {
+				j++
+			}
+			if j < len(line) {
+				j++ // skip 'm'
+			}
+			i = j
+			continue
+		}
+		visChars = append(visChars, charPos{i, i + 1})
+		i++
+	}
+
+	if len(visChars) == 0 {
+		return line
+	}
+
+	// Find matches in visible text
+	visText := make([]byte, len(visChars))
+	for idx, cp := range visChars {
+		visText[idx] = line[cp.byteStart]
+	}
+	lowerVis := strings.ToLower(string(visText))
+
+	type matchRange struct{ start, end int } // visible char indices
+	var matches []matchRange
+	pos := 0
+	for {
+		idx := strings.Index(lowerVis[pos:], lowerTerm)
+		if idx < 0 {
+			break
+		}
+		mStart := pos + idx
+		matches = append(matches, matchRange{mStart, mStart + termLen})
+		pos = mStart + termLen
+	}
+
+	if len(matches) == 0 {
+		return line
+	}
+
+	// Rebuild the line, inserting highlight codes around matched visible chars.
+	// Track which visible chars are highlighted.
+	hlSet := make([]bool, len(visChars))
+	for _, m := range matches {
+		for j := m.start; j < m.end && j < len(visChars); j++ {
+			hlSet[j] = true
+		}
+	}
+
+	var sb strings.Builder
+	visIdx := 0
+	inHL := false
+	i = 0
+	for i < len(line) {
+		if line[i] == '\x1b' && i+1 < len(line) && line[i+1] == '[' {
+			// Copy ANSI escape through
+			j := i + 2
+			for j < len(line) && line[j] != 'm' {
+				j++
+			}
+			if j < len(line) {
+				j++
+			}
+			sb.WriteString(line[i:j])
+			i = j
+			continue
+		}
+		// Visible character
+		if visIdx < len(hlSet) {
+			if hlSet[visIdx] && !inHL {
+				sb.WriteString(hlStart)
+				inHL = true
+			} else if !hlSet[visIdx] && inHL {
+				sb.WriteString(hlEnd)
+				inHL = false
+			}
+		}
+		sb.WriteByte(line[i])
+		visIdx++
+		i++
+	}
+	if inHL {
+		sb.WriteString(hlEnd)
+	}
+	return sb.String()
 }

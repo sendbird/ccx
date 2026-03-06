@@ -56,10 +56,12 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 		a.lastMsgLoadTime = info.ModTime()
 	}
 
-	// Create list
+	// Create list with preview auto-open (text-only mode by default)
 	contentH := ContentHeight(a.height)
+	a.conv.split.Show = true
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
+	a.conv.textPreview = true
 	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
 	a.conv.split.List = &a.convList
 
@@ -108,9 +110,6 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.state = viewSessions
 			return a, nil
 		}
-	case "c":
-		a.pushNavFrame()
-		return a.openFullConversation()
 	case "enter":
 		item, ok := a.convList.SelectedItem().(convItem)
 		if !ok {
@@ -164,12 +163,20 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !a.config.TmuxEnabled {
 			return a, nil
 		}
-		return a.sendInputToLive(a.currentSess.ProjectPath, a.currentSess.ID)
+		return a.openLiveInput(a.currentSess.ProjectPath, a.currentSess.ID)
 	case "J":
 		if !a.config.TmuxEnabled {
 			return a, nil
 		}
 		return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
+	}
+
+	// Tab cycles preview mode when preview is open
+	if key == "tab" && sp.Show {
+		a.conv.textPreview = !a.conv.textPreview
+		sp.CacheKey = "" // force re-render
+		a.updateConvPreview()
+		return a, nil
 	}
 
 	// Common split pane keys
@@ -202,6 +209,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Focused preview keys
 	if sp.Focus && sp.Show {
 		if key == "up" || key == "down" {
+			if a.conv.textPreview {
+				// Text mode: scroll viewport directly
+				scrollPreview(&sp.Preview, key)
+				return a, nil
+			}
 			if sp.Folds != nil {
 				fr := sp.Folds.HandleKey(key)
 				if fr == foldCursorMoved {
@@ -232,6 +244,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// List boundary
 	if !sp.Focus && sp.HandleListBoundary(key) {
+		if a.liveTail {
+			a.liveTail = false
+			a.conv.split.BottomAlign = false
+		}
 		if sp.Show {
 			a.updateConvPreview()
 		}
@@ -243,6 +259,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m, cmd := a.convList.Update(msg)
 	a.convList = m
 	newIdx := a.convList.Index()
+	if oldIdx != newIdx && a.liveTail {
+		a.liveTail = false
+		a.conv.split.BottomAlign = false
+	}
 	if sp.Show {
 		if oldIdx == newIdx {
 			switch key {
@@ -286,6 +306,12 @@ func (a *App) updateConvPreview() {
 			// Individual task: show task details
 			a.setConvPreviewText(renderTaskSummary(item.task, pw))
 		}
+		return
+	}
+
+	// Text-only preview mode: show clean conversation text (no tool calls)
+	if a.conv.textPreview {
+		a.renderTextOnlyPreview(item, entry)
 		return
 	}
 
@@ -339,6 +365,60 @@ func (a *App) updateConvPreview() {
 		sp.RefreshFoldPreview(a.width, a.splitRatio)
 	}
 }
+
+// renderTextOnlyPreview renders a clean text-only view of the entry (no tool calls).
+func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
+	sp := &a.conv.split
+	pw := sp.PreviewWidth(a.width, a.splitRatio)
+	textW := max(pw-2, 10)
+
+	var cacheKey string
+	if item.kind == convAgent {
+		cacheKey = fmt.Sprintf("text:agent:%s:%d", item.agent.ShortID, len(entry.Content))
+	} else {
+		cacheKey = fmt.Sprintf("text:%d:%d", item.merged.startIdx, len(entry.Content))
+	}
+	if cacheKey == sp.CacheKey {
+		return
+	}
+
+	// Header
+	roleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
+	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
+
+	var sb strings.Builder
+	role := strings.ToUpper(entry.Role)
+	if role == "" {
+		role = "UNKNOWN"
+	}
+	sb.WriteString(roleStyle.Render(role))
+	if !entry.Timestamp.IsZero() {
+		sb.WriteString(dimStyle.Render("  " + entry.Timestamp.Format("15:04:05")))
+	}
+	if entry.Model != "" {
+		sb.WriteString(dimStyle.Render("  " + entry.Model))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(dimStyle.Render(strings.Repeat("─", min(textW, 60))) + "\n\n")
+
+	// Extract text blocks only
+	text := entryFullText(entry)
+	if text == "" {
+		sb.WriteString(dimStyle.Render("(no text content)"))
+	} else {
+		sb.WriteString(wrapText(text, textW))
+	}
+
+	sp.CacheKey = cacheKey
+	sp.Preview.SetContent(sb.String())
+	sp.Preview.YOffset = 0
+	// Clear fold state to prevent fold keys from acting on stale data
+	if sp.Folds != nil {
+		sp.Folds.Entry = session.Entry{}
+		sp.Folds.BlockStarts = nil
+	}
+}
+
 
 func (a *App) setConvPreviewText(content string) {
 	sp := &a.conv.split
@@ -781,6 +861,23 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	a.state = viewConversation
 	a.updateConvPreview()
 	return a, nil
+}
+
+// openConvAsText exports the conversation as plain text and opens it in $EDITOR.
+func (a *App) openConvAsText() (tea.Model, tea.Cmd) {
+	if len(a.conv.merged) == 0 {
+		a.copiedMsg = "No messages"
+		return a, nil
+	}
+	content := stripANSI(renderAllMessages(a.conv.merged, 80))
+	tmpFile, err := os.CreateTemp("", "ccx-conv-*.txt")
+	if err != nil {
+		a.copiedMsg = "Error: " + err.Error()
+		return a, nil
+	}
+	tmpFile.WriteString(content)
+	tmpFile.Close()
+	return a.openInEditor(tmpFile.Name())
 }
 
 // openFullConversation renders all merged messages into a single scrollable view.

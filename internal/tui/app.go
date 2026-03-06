@@ -19,9 +19,15 @@ import (
 )
 
 type tickMsg time.Time
-type liveTickMsg time.Time
+type liveTickMsg time.Time     // slow live capture (2s, unfocused)
 type spinnerTickMsg time.Time
 type globalStatsMsg session.GlobalStats
+
+// liveCaptureMsg carries async tmux capture-pane result.
+type liveCaptureMsg struct {
+	content string
+	failed  bool
+}
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -38,9 +44,42 @@ func tickCmd() tea.Cmd {
 }
 
 func liveTickCmd() tea.Cmd {
-	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return liveTickMsg(t)
 	})
+}
+
+// captureAfterKeyCmd sends a key to the tmux pane, waits briefly for tmux to
+// process it, then captures the pane content. This gives responsive feedback
+// on keypress without constant polling.
+func captureAfterKeyCmd(p tmuxPane, key string) tea.Cmd {
+	return func() tea.Msg {
+		tmuxSendSingleKey(p, key)
+		time.Sleep(30 * time.Millisecond)
+		content, err := tmuxCapturePane(p)
+		if err != nil || !hasClaude(p.PID) {
+			return liveCaptureMsg{failed: true}
+		}
+		return liveCaptureMsg{content: content}
+	}
+}
+
+// capturePaneCmd returns a Cmd that captures tmux pane content asynchronously.
+func capturePaneCmd(p tmuxPane) tea.Cmd {
+	return func() tea.Msg {
+		content, err := tmuxCapturePane(p)
+		if err != nil || !hasClaude(p.PID) {
+			return liveCaptureMsg{failed: true}
+		}
+		return liveCaptureMsg{content: content}
+	}
+}
+
+// paneProxyState holds state for both live preview and shell-in-preview.
+type paneProxyState struct {
+	pane    tmuxPane
+	sessID  string // non-empty for live Claude preview, empty for shell
+	isShell bool   // true = we spawned this pane, must kill on close
 }
 
 type viewState int
@@ -50,7 +89,8 @@ const (
 	viewConversation
 	viewMessageFull
 	viewGlobalStats
-
+	viewConfig
+	viewHooks
 )
 
 type App struct {
@@ -58,10 +98,13 @@ type App struct {
 	width  int
 	height int
 	config Config
+	keymap Keymap
 
 	// Data
-	sessions    []session.Session
-	currentSess session.Session
+	sessions       []session.Session
+	currentSess    session.Session
+	selectedSet    map[string]bool // multi-select: session ID → selected
+	liveInputPanes []tmuxPane      // bulk input: multiple target panes
 
 	// List models
 	sessionList list.Model
@@ -132,8 +175,15 @@ type App struct {
 	actionsSess session.Session
 	editChoices []editChoice // available files to edit
 
+	// Views menu (V key)
+	viewsMenu bool
+
 	// Help overlay (? key)
 	showHelp bool
+
+	// Full text modal (c key in session conv preview)
+	sessConvFullText   string // non-empty = show modal
+	sessConvFullScroll int    // scroll offset in full text modal
 
 	// Move project
 	moveMode      bool
@@ -145,14 +195,14 @@ type App struct {
 	worktreeInput textinput.Model
 	worktreeSess  session.Session
 
-	// Inline live input (bottom prompt, no modal)
-	liveInputActive bool
-	liveInputModel  textinput.Model
-	liveInputPane   tmuxPane
+	// Live input modal (I key)
+	liveInputActive  bool
+	liveInputPane    tmuxPane
+	liveInputModal   inputModal
+	liveInputProjDir string // project path for $EDITOR cwd
 
-	// Live preview (tmux capture in split preview)
-	livePreviewPane   tmuxPane
-	livePreviewSessID string
+	// Pane proxy: unified live preview + shell-in-preview
+	paneProxy *paneProxyState
 
 	// Conversation split view (viewConversation)
 	conv struct {
@@ -162,8 +212,9 @@ type App struct {
 		agents   []session.Subagent
 		items    []convItem
 		split    SplitPane
-		agent session.Subagent  // non-zero when viewing agent conversation
-		task  session.TaskItem  // non-zero when viewing task conversation
+		agent       session.Subagent  // non-zero when viewing agent conversation
+		task        session.TaskItem  // non-zero when viewing task conversation
+		textPreview bool              // true = text-only preview, false = detailed/fold preview
 	}
 	convList list.Model
 
@@ -190,6 +241,26 @@ type App struct {
 
 	// Navigation stack for agent drill-down
 	navStack []navFrame
+
+	// Config explorer (viewConfig)
+	cfgTree        *session.ConfigTree
+	cfgList        list.Model
+	cfgSplit       SplitPane
+	cfgSearching   bool
+	cfgSearchInput textinput.Model
+	cfgSearchTerm  string
+	cfgSearchMatch []int // indices of matching items
+	cfgSearchIdx   int   // current match index
+
+	// Hooks view (viewHooks)
+	hooksVP viewport.Model
+
+	// Command mode (: key)
+	cmdMode        bool
+	cmdInput       textinput.Model
+	cmdRegistry    []cmdEntry
+	cmdSuggestions []cmdEntry
+	cmdSuggIdx     int // -1 = none selected
 }
 // selectedSession returns the currently selected session from the session list.
 func (a *App) selectedSession() (session.Session, bool) {
@@ -200,6 +271,23 @@ func (a *App) selectedSession() (session.Session, bool) {
 	return item.sess, true
 }
 
+func (a *App) hasMultiSelection() bool {
+	return len(a.selectedSet) > 0
+}
+
+func (a *App) clearMultiSelection() {
+	clear(a.selectedSet)
+}
+
+func (a *App) selectedSessions() []session.Session {
+	var out []session.Session
+	for _, s := range a.sessions {
+		if a.selectedSet[s.ID] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 type sessPreview int
 
@@ -214,10 +302,14 @@ const (
 
 // Config holds application configuration from CLI flags.
 type Config struct {
-	TmuxEnabled  bool   // enable tmux integration (I, J, live modal)
-	TmuxAutoLive bool   // auto-enter live session in same tmux window on startup
-	WorktreeDir  string // subdirectory name for worktrees (default ".worktree")
-	SearchQuery  string // initial search filter for session list
+	ClaudeDir    string  // path to Claude data directory (empty = ~/.claude)
+	TmuxEnabled  bool    // enable tmux integration (I, J, live modal)
+	TmuxAutoLive bool    // auto-enter live session in same tmux window on startup
+	WorktreeDir  string  // subdirectory name for worktrees (default ".worktree")
+	SearchQuery  string  // initial search filter for session list
+	Keymap       *Keymap // nil = use defaults
+	GroupMode    string  // initial group mode (flat|proj|tree|chain|fork)
+	PreviewMode  string  // initial preview mode (conv|stats|mem|tasks)
 }
 
 func NewApp(sessions []session.Session, cfg Config) *App {
@@ -230,14 +322,39 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		cfg.WorktreeDir = ".worktree"
 	}
 
+	km := DefaultKeymap()
+	if cfg.Keymap != nil {
+		km = *cfg.Keymap
+	}
+
 	a := &App{
-		state:      viewSessions,
-		sessions:   sessions,
-		config:     cfg,
-		splitRatio: 35,
+		state:       viewSessions,
+		sessions:    sessions,
+		config:      cfg,
+		keymap:      km,
+		splitRatio:  35,
+		selectedSet: make(map[string]bool),
 	}
 	a.sessSplit = SplitPane{List: &a.sessionList, ItemHeight: 2}
 	a.conv.split = SplitPane{List: &a.convList, Show: true, Folds: &FoldState{}, ItemHeight: 1}
+	a.cfgSplit = SplitPane{List: &a.cfgList, ItemHeight: 1}
+	a.cmdRegistry = buildCmdRegistry()
+
+	// Apply CLI flags for initial group/preview mode
+	if cfg.GroupMode != "" {
+		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork}
+		if m, ok := modeMap[cfg.GroupMode]; ok {
+			a.sessGroupMode = m
+		}
+	}
+	if cfg.PreviewMode != "" {
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan}
+		if m, ok := modeMap[cfg.PreviewMode]; ok {
+			a.sessPreviewMode = m
+			a.sessSplit.Show = true
+		}
+	}
+
 	return a
 }
 
@@ -254,6 +371,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, cmd
 
 	case editorDoneMsg:
+		if a.state == viewConfig {
+			// Re-scan config after editor closes
+			a.refreshConfigExplorer()
+		}
+		return a, nil
+
+	case liveInputSentMsg:
+		if msg.err != nil {
+			a.copiedMsg = "Send failed"
+		} else {
+			a.copiedMsg = "Sent!"
+		}
 		return a, nil
 
 	case tickMsg:
@@ -261,13 +390,47 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmd, tickCmd())
 
 	case liveTickMsg:
-		if a.state == viewSessions && a.sessPreviewMode == sessPreviewLive && a.livePreviewSessID != "" {
-			a.refreshLivePreview()
-			return a, liveTickCmd()
+		// 2s tick: async capture for passive updates (process output, unfocused view)
+		if a.state == viewSessions && a.sessPreviewMode == sessPreviewLive && a.paneProxy != nil {
+			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
 		}
 		if a.liveTail {
 			a.handleLiveTail()
 			return a, liveTickCmd()
+		}
+		return a, nil
+
+	case liveFindMsg:
+		// Async result of findTmuxPane — only apply if still on the same session in live mode
+		if a.sessPreviewMode != sessPreviewLive {
+			return a, nil
+		}
+		sess, ok := a.selectedSession()
+		if !ok || sess.ID != msg.sessID {
+			return a, nil // user navigated away, discard stale result
+		}
+		if msg.found {
+			a.paneProxy = &paneProxyState{pane: msg.pane, sessID: msg.sessID}
+			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
+		}
+		a.closePaneProxy()
+		a.sessSplit.Preview.SetContent(dimStyle.Render("(tmux pane not found)"))
+		return a, nil
+
+	case liveCaptureMsg:
+		if a.paneProxy == nil || a.sessPreviewMode != sessPreviewLive {
+			return a, nil
+		}
+		if msg.failed {
+			// Pane gone (session ended) — close proxy, revert to conversation preview
+			a.closePaneProxy()
+			a.sessSplit.Focus = false
+			a.sessPreviewMode = sessPreviewConversation
+			a.sessSplit.CacheKey = ""
+			return a, nil
+		} else {
+			a.sessSplit.Preview.SetContent(msg.content)
+			a.sessSplit.Preview.GotoBottom()
 		}
 		return a, nil
 
@@ -294,13 +457,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		a.copiedMsg = ""
+		// Pane proxy focused: forward ctrl+c to tmux pane instead of quitting
+		if msg.String() == "ctrl+c" && a.isPaneProxyFocused() {
+			return a, captureAfterKeyCmd(a.paneProxy.pane, "ctrl+c")
+		}
 		if msg.String() == "ctrl+c" {
 			return a, tea.Quit
 		}
 
-		// Inline live input intercepts all keys when active
+		// Live input modal intercepts all keys
 		if a.liveInputActive {
-			return a.handleLiveInput(msg)
+			return a.handleLiveInputKey(msg.String())
 		}
 
 		if a.isFiltering() {
@@ -325,6 +492,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.handleConversationKeys(msg)
 		case viewMessageFull:
 			return a.handleMessageFullKeys(msg)
+		case viewConfig:
+			return a.handleConfigKeys(msg)
+		case viewHooks:
+			return a.handleHooksKeys(msg)
 		}
 	}
 
@@ -342,8 +513,11 @@ func (a *App) View() string {
 	case viewSessions:
 		title = a.renderBreadcrumb()
 		content = a.renderSessionSplit()
-		if a.showHelp {
-			content = renderHelpOverlay(a.width, ContentHeight(a.height))
+		if a.sessConvFullText != "" {
+			content = renderFullTextModal(content, a.sessConvFullText, a.sessConvFullScroll, a.width, ContentHeight(a.height))
+			help = formatHelp("↑↓:scroll pgup/pgdn:page esc/c:close")
+		} else if a.showHelp {
+			content = renderHelpModal(content, a.width, ContentHeight(a.height), a.keymap)
 			help = formatHelp("press any key to close")
 		} else if a.moveMode {
 			help = "  " + a.moveInput.View() + helpStyle.Render("  enter:move esc:cancel")
@@ -351,22 +525,33 @@ func (a *App) View() string {
 			help = "  " + a.worktreeInput.View() + helpStyle.Render("  enter:create esc:cancel")
 		} else if a.sessConvSearching {
 			help = "  " + a.sessConvSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
+		} else if a.cmdMode {
+			help = "  " + a.cmdInput.View() + helpStyle.Render("  tab:complete ↵:run esc:cancel")
 		} else {
-			h := "↵open g:dir e:edit x:actions R:refresh G:group S:stats"
-			if !a.sessSplit.Show {
-				h += " tab:preview →:preview"
-			} else if a.sessSplit.Focus && a.sessPreviewMode == sessPreviewConversation {
-				h += " ↑↓:nav ↵:jump →←:fold f/F:all /:search tab:mode"
+			// Pane proxy focused: show proxy-specific help with indicator
+			if a.sessSplit.Focus && a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive {
+				indicator := a.paneProxyIndicator()
+				h := "keys→pane pgup/dn:scroll ^U/D:half ^Q:unfocus"
+				help = "  " + indicator + " " + formatHelp(h)
+			} else if a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive && !a.sessSplit.Focus {
+				indicator := a.paneProxyIndicator()
+				h := "→:focus esc:close []:resize"
+				help = "  " + indicator + " " + formatHelp(h)
 			} else {
-				h += " tab:mode esc:close ←→:focus []:resize"
-			}
-			if a.config.TmuxEnabled && inTmux() {
-				h += " L:live"
-				if sess, ok := a.selectedSession(); ok && sess.IsLive {
-					h += " I:input J:jump"
+				sk := a.keymap.Session
+				h := fmtKey(sk.Open, "open") + " " + fmtKey(sk.Edit, "edit") + " " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Views, "views") + " " + fmtKey(sk.Refresh, "refresh") + " " + fmtKey(sk.Group, "group")
+				if !a.sessSplit.Show {
+					h += " " + fmtKey(sk.Preview, "preview") + " " + fmtKey(sk.Right, "preview")
+				} else if a.sessSplit.Focus && a.sessPreviewMode == sessPreviewConversation {
+					h += " ↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " →←:fold f/F:all " + fmtKey(sk.Search, "search") + " " + fmtKey(sk.Preview, "mode")
+				} else {
+					h += " " + fmtKey(sk.Preview, "mode") + " " + fmtKey(sk.Escape, "close") + " ←→:focus " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 				}
+				if a.config.TmuxEnabled && inTmux() {
+					h += " " + fmtKey(sk.Live, "live")
+				}
+				help = formatHelp(h + " " + fmtKey(sk.Search, "search") + " " + fmtKey(sk.Help, "help") + " " + fmtKey(sk.Quit, "quit"))
 			}
-			help = formatHelp(h + " /:search ?:help q:quit")
 		}
 
 	case viewGlobalStats:
@@ -386,15 +571,23 @@ func (a *App) View() string {
 			badges = badgeStyle.Render(a.liveBadgeText()) + "  "
 		}
 		sp := &a.conv.split
-		h := "↵open c:full e:edit L:live R:refresh"
+		h := "↵:open e:edit L:live R:refresh"
 		if a.config.TmuxEnabled && inTmux() && a.currentSess.IsLive {
 			h += " I:input J:jump"
 		}
 		if sp.Show {
 			if sp.Focus {
-				h += " ↑↓:blocks ←→:fold f/F:all"
+				if a.conv.textPreview {
+					h += " ↑↓:scroll"
+				} else {
+					h += " ↑↓:blocks ←→:fold f/F:all"
+				}
 			} else {
-				h += " tab:preview →:focus"
+				modeLabel := "text"
+				if !a.conv.textPreview {
+					modeLabel = "detail"
+				}
+				h += " tab:" + modeLabel + " →:focus"
 			}
 			h += " esc:close []:resize"
 		} else {
@@ -411,7 +604,7 @@ func (a *App) View() string {
 			if a.copyModeActive {
 				help = formatHelp("all messages  ↑↓:move v/sp:select y/↵:copy home/end esc:cancel")
 			} else {
-				sh := "all messages  ↑↓:scroll v:copy y:all o:pager /:search"
+				sh := "all messages  ↑↓:scroll v:copy y:all /:search"
 				if a.msgFull.searchTerm != "" {
 					sh += fmt.Sprintf(" [%d/%d] n/N:match", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
 				}
@@ -422,25 +615,135 @@ func (a *App) View() string {
 			if a.copyModeActive {
 				help = formatHelp(pos + "  ↑↓:move v/sp:select y/↵:copy home/end esc:cancel")
 			} else {
-				sh := pos + "  ↑↓:blocks ←→:fold n/N:msg f/F:all v:copy y:all o:pager /:search"
+				sh := pos + "  ↑↓:blocks ←→:fold n/N:msg f/F:all v:copy y:all /:search"
 				if a.msgFull.searchTerm != "" {
-					sh = pos + fmt.Sprintf("  [%d/%d] n/N:match ↑↓:blocks ←→:fold f/F:all v:copy y:all o:pager", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
+					sh = pos + fmt.Sprintf("  [%d/%d] n/N:match ↑↓:blocks ←→:fold f/F:all v:copy y:all", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
 				}
 				help = formatHelp(sh + " esc:back q:quit")
 			}
 		}
+
+	case viewConfig:
+		title = a.renderBreadcrumb()
+		content = a.renderConfigSplit()
+		if a.cfgSearching {
+			help = "  " + a.cfgSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
+		} else if a.cfgSearchTerm != "" {
+			badge := fmt.Sprintf("[%d/%d]", a.cfgSearchIdx+1, len(a.cfgSearchMatch))
+			if len(a.cfgSearchMatch) == 0 {
+				badge = "[0/0]"
+			}
+			help = "  " + filterBadge.Render(badge) + formatHelp(" n/N:next/prev esc:clear")
+		} else {
+			h := "e:edit /:search esc:back q:quit"
+			if a.cfgSplit.Show {
+				if a.cfgSplit.Focus {
+					h = "↑↓:scroll e:edit esc:back q:quit"
+				} else {
+					h = "↑↓:nav →:focus e:edit /:search esc:back q:quit"
+				}
+			}
+			help = formatHelp(h)
+		}
+
+	case viewHooks:
+		title = a.renderBreadcrumb()
+		content = a.hooksVP.View()
+		help = formatHelp("↑↓:scroll e:edit esc:back q:quit")
 	}
 
-	// Inline live input prompt
-	if a.liveInputActive {
-		help = "  " + a.liveInputModel.View() + helpStyle.Render("  enter:send esc:cancel")
+
+	// Actions menu hint box floating above help line
+	if a.actionsMenu && a.state == viewSessions {
+		hintBox := a.renderActionsHintBox()
+		contentLines := strings.Split(content, "\n")
+		boxLines := strings.Split(hintBox, "\n")
+		boxH := len(boxLines)
+		startY := len(contentLines) - boxH
+		if startY < 0 {
+			startY = 0
+		}
+		for i, bl := range boxLines {
+			y := startY + i
+			if y < len(contentLines) {
+				contentLines[y] = overlayLine(contentLines[y], bl, 1, a.width)
+			}
+		}
+		content = strings.Join(contentLines, "\n")
+		help = formatHelp("x:actions — pick an action")
 	}
 
-	// Override help with filter input + search hints when filtering
+	// Views menu hint box floating above help line
+	if a.viewsMenu && a.state == viewSessions {
+		hintBox := a.renderViewsHintBox()
+		contentLines := strings.Split(content, "\n")
+		boxLines := strings.Split(hintBox, "\n")
+		boxH := len(boxLines)
+		startY := len(contentLines) - boxH
+		if startY < 0 {
+			startY = 0
+		}
+		for i, bl := range boxLines {
+			y := startY + i
+			if y < len(contentLines) {
+				contentLines[y] = overlayLine(contentLines[y], bl, 1, a.width)
+			}
+		}
+		content = strings.Join(contentLines, "\n")
+		help = formatHelp("v:views — pick a view")
+	}
+
+	// Command mode hint box floating above help line
+	if a.cmdMode && a.state == viewSessions {
+		hintBox := a.renderCmdHintBox()
+		if hintBox != "" {
+			contentLines := strings.Split(content, "\n")
+			boxLines := strings.Split(hintBox, "\n")
+			boxH := len(boxLines)
+			startY := len(contentLines) - boxH
+			if startY < 0 {
+				startY = 0
+			}
+			for i, bl := range boxLines {
+				y := startY + i
+				if y < len(contentLines) {
+					contentLines[y] = overlayLine(contentLines[y], bl, 1, a.width)
+				}
+			}
+			content = strings.Join(contentLines, "\n")
+		}
+	}
+
+	// Override help with filter input when filtering; hints float above
 	if a.isFiltering() {
 		val := a.activeFilterValue()
 		prompt := helpKeyStyle.Render("Search: ") + val + blockCursorStyle.Render("▏")
-		help = "  " + prompt + a.searchHints()
+		help = "  " + prompt + helpStyle.Render("  (space=AND) enter:apply esc:cancel")
+		// Float hint box above the help line
+		hintBox := a.renderSearchHintBox()
+		if hintBox != "" {
+			contentLines := strings.Split(content, "\n")
+			boxLines := strings.Split(hintBox, "\n")
+			boxH := len(boxLines)
+			boxW := 0
+			for _, l := range boxLines {
+				if w := lipgloss.Width(l); w > boxW {
+					boxW = w
+				}
+			}
+			// Place hint box at bottom-left of content area
+			startY := len(contentLines) - boxH
+			if startY < 0 {
+				startY = 0
+			}
+			for i, bl := range boxLines {
+				y := startY + i
+				if y < len(contentLines) {
+					contentLines[y] = overlayLine(contentLines[y], bl, 1, a.width)
+				}
+			}
+			content = strings.Join(contentLines, "\n")
+		}
 	} else if a.hasFilterApplied() {
 		help = "  " + filterBadge.Render("[filtered]") + " " + help
 	}
@@ -450,6 +753,11 @@ func (a *App) View() string {
 	}
 
 	screen := title + "\n" + content + "\n" + help
+
+	// Live input modal overlays everything
+	if a.liveInputActive {
+		screen = a.liveInputModal.render(screen, a.width, a.height)
+	}
 
 	return screen
 }
@@ -466,14 +774,44 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	// Full text modal: scroll or dismiss
+	if a.sessConvFullText != "" {
+		switch key {
+		case "esc", "q", "c":
+			a.sessConvFullText = ""
+			a.sessConvFullScroll = 0
+		case "up", "k":
+			if a.sessConvFullScroll > 0 {
+				a.sessConvFullScroll--
+			}
+		case "down", "j":
+			a.sessConvFullScroll++
+		case "pgup":
+			a.sessConvFullScroll = max(a.sessConvFullScroll-10, 0)
+		case "pgdown":
+			a.sessConvFullScroll += 10
+		}
+		return a, nil
+	}
+
 	// Clear actions menu on any unrelated key
 	if a.actionsMenu {
 		return a.handleActionsMenu(key)
 	}
 
+	// Views menu: pick a view
+	if a.viewsMenu {
+		return a.handleViewsMenu(key)
+	}
+
 	// Edit menu: pick file to open
 	if a.editMenu {
 		return a.handleEditMenu(key)
+	}
+
+	// Command mode: text input for : commands
+	if a.cmdMode {
+		return a.handleCmdMode(msg)
 	}
 
 	// While conv search is active, route all keys to it
@@ -491,14 +829,39 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleWorktreeInput(msg)
 	}
 
+	// Pane proxy focused: scroll via tmux copy mode, rest forwarded to tmux
+	if a.isPaneProxyFocused() {
+		switch key {
+		case "ctrl+q":
+			tmuxCopyModeScroll(a.paneProxy.pane, "cancel")
+			sp.Focus = false
+			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
+		case "pgup", "ctrl+b":
+			return a, a.liveScrollCmd("page-up")
+		case "pgdown", "ctrl+f":
+			return a, a.liveScrollCmd("page-down")
+		case "ctrl+u":
+			return a, a.liveScrollCmd("halfpage-up")
+		case "ctrl+d":
+			return a, a.liveScrollCmd("halfpage-down")
+		}
+		return a.handlePaneProxyKey(key)
+	}
+
 	// View-specific keys
+	km := a.keymap
 	switch key {
-	case "q":
+	case km.Session.Quit:
 		return a, tea.Quit
-	case "esc":
+	case km.Session.Escape:
+		if a.hasMultiSelection() {
+			a.clearMultiSelection()
+			return a, nil
+		}
 		if sp.Show {
 			// If in a non-default preview mode, go back to messages first
 			if a.sessPreviewMode != sessPreviewConversation {
+				a.closePaneProxy()
 				a.sessPreviewMode = sessPreviewConversation
 				sp.CacheKey = ""
 				sp.Focus = false
@@ -513,7 +876,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a, nil
-	case "enter":
+	case km.Session.Open:
 		// If conversation preview is focused, jump to the selected message
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 			return a.jumpToConvMessage()
@@ -524,40 +887,35 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.currentSess = sess
 		return a, a.openConversation(sess)
-	case "g":
+	case km.Session.Select:
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
-		return a.openProjectDir(sess.ProjectPath)
-	case "x":
+		if a.selectedSet[sess.ID] {
+			delete(a.selectedSet, sess.ID)
+		} else {
+			a.selectedSet[sess.ID] = true
+		}
+		idx := a.sessionList.Index()
+		total := len(a.sessionList.VisibleItems())
+		if idx < total-1 {
+			a.sessionList.Select(idx + 1)
+		}
+		return a, nil
+	case km.Session.Actions:
+		if a.hasMultiSelection() {
+			a.actionsMenu = true
+			return a, nil
+		}
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
 		a.actionsMenu = true
 		a.actionsSess = sess
-		a.copiedMsg = "Actions: d:delete  m:move  w:worktree  r:resume"
 		return a, nil
-	case "I":
-		if !a.config.TmuxEnabled {
-			return a, nil
-		}
-		sess, ok := a.selectedSession()
-		if !ok {
-			return a, nil
-		}
-		return a.sendInputToLive(sess.ProjectPath, sess.ID)
-	case "J":
-		if !a.config.TmuxEnabled {
-			return a, nil
-		}
-		sess, ok := a.selectedSession()
-		if !ok {
-			return a, nil
-		}
-		return a.jumpToTmuxPane(sess.ProjectPath, sess.ID)
-	case "L":
+	case km.Session.Live:
 		if !a.config.TmuxEnabled {
 			return a, nil
 		}
@@ -566,27 +924,31 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a.openLivePreview(sess)
-	case "e":
+	case km.Session.Edit:
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
 		}
 		return a.openEditMenu(sess)
-	case "G":
-		a.sessGroupMode = (a.sessGroupMode + 1) % 3
+	case km.Session.Group:
+		a.sessGroupMode = (a.sessGroupMode + 1) % 5
 		a.rebuildSessionList()
 		return a, nil
-	case "R":
+	case km.Session.Refresh:
 		cmd := a.doRefresh()
 		a.copiedMsg = "Refreshed"
 		return a, cmd
-	case "S":
-		return a.openGlobalStats()
-	case "?":
+	case km.Session.Views:
+		a.viewsMenu = true
+		return a, nil
+	case km.Session.Command:
+		a.startCmdMode()
+		return a, nil
+	case km.Session.Help:
 		a.showHelp = true
 		return a, nil
 	// Session has custom tab/shift+tab (mode cycling)
-	case "tab":
+	case km.Session.Preview:
 		if !sp.Show {
 			idx := a.sessionList.Index()
 			sp.Show = true
@@ -598,12 +960,12 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.cycleSessionPreviewMode()
 		}
 		return a, nil
-	case "shift+tab":
+	case km.Session.PreviewBack:
 		if sp.Show {
 			a.cycleSessionPreviewModeReverse()
 		}
 		return a, nil
-	case "left":
+	case km.Session.Left:
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation {
 			// Delegate to conversation handler (collapse), fall through below
 		} else if sp.Focus && sp.Show {
@@ -617,7 +979,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.sessionList.Select(idx)
 			return a, nil
 		}
-	case "right":
+	case km.Session.Right:
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation {
 			// Delegate to conversation handler (expand), fall through below
 		} else {
@@ -630,18 +992,27 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.sessionList.Select(idx)
 			}
 			sp.Focus = true
+			if a.paneProxy != nil {
+				return a, capturePaneCmd(a.paneProxy.pane) // immediate capture on focus
+			}
 			return a, nil
 		}
-	case "[":
+	case km.Session.ResizeShrink:
 		if sp.Show {
 			a.adjustSplitRatio(-5) // preview larger
 		}
 		return a, nil
-	case "]":
+	case km.Session.ResizeGrow:
 		if sp.Show {
 			a.adjustSplitRatio(5) // preview smaller
 		}
 		return a, nil
+	}
+
+	// Translate navigation aliases (e.g. vim j→down, emacs ctrl+n→down)
+	if nav, navMsg := a.keymap.TranslateNav(key, msg); nav != "" {
+		key = nav
+		msg = navMsg
 	}
 
 	// Focused preview: custom conversation nav or simple scroll
@@ -653,8 +1024,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// List boundary (up/down always navigate list, scroll preview at edges)
 	if !sp.Focus && sp.HandleListBoundary(key) {
-		a.updateSessionPreview()
-		return a, nil
+		return a, a.updateSessionPreview()
 	}
 
 	// Default list update
@@ -668,8 +1038,34 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 	}
-	a.updateSessionPreview()
+	previewCmd := a.updateSessionPreview()
+	if cmd == nil {
+		return m, previewCmd
+	}
+	if previewCmd != nil {
+		return m, tea.Batch(cmd, previewCmd)
+	}
 	return m, cmd
+}
+
+// liveScrollCmd sends a tmux copy-mode scroll command and re-captures the pane.
+func (a *App) liveScrollCmd(direction string) tea.Cmd {
+	pane := a.paneProxy.pane
+	return func() tea.Msg {
+		tmuxCopyModeScroll(pane, direction)
+		time.Sleep(20 * time.Millisecond)
+		content, err := tmuxCapturePane(pane)
+		if err != nil || !hasClaude(pane.PID) {
+			return liveCaptureMsg{failed: true}
+		}
+		return liveCaptureMsg{content: content}
+	}
+}
+
+// handlePaneProxyKey forwards a key to the tmux pane and captures the result.
+// Uses captureAfterKeyCmd to send key + capture in one Cmd (no polling needed).
+func (a *App) handlePaneProxyKey(key string) (tea.Model, tea.Cmd) {
+	return a, captureAfterKeyCmd(a.paneProxy.pane, key)
 }
 
 // handleFocusedPreviewKeys handles keys when the session preview pane is focused.
@@ -740,6 +1136,15 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 		}
 		a.sessPreviewPinned = a.sessConvCursor < len(visible)-1
 		return a, nil, true
+	case "c":
+		if a.sessConvCursor < len(visible) {
+			text := entryFullText(visible[a.sessConvCursor].entry)
+			if text != "" {
+				a.sessConvFullText = text
+				a.sessConvFullScroll = 0
+			}
+		}
+		return a, nil, true
 	case "enter":
 		m, cmd := a.jumpToConvMessage()
 		return m, cmd, true
@@ -793,42 +1198,6 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 
 // --- Actions ---
 
-func (a *App) openProjectDir(projectPath string) (tea.Model, tea.Cmd) {
-	if projectPath == "" {
-		a.copiedMsg = "no project path"
-		return a, nil
-	}
-	if _, err := os.Stat(projectPath); os.IsNotExist(err) {
-		a.copiedMsg = "dir not found"
-		return a, nil
-	}
-
-	// In tmux: open a split pane at the project path, keep CSB running
-	if inTmux() {
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/bash"
-		}
-		cmd := "cd " + shellQuote(projectPath) + " && " + shell
-		err := exec.Command("tmux", "split-window", "-h", "-l", "50%", cmd).Run()
-		if err != nil {
-			a.copiedMsg = "tmux split failed"
-		}
-		return a, nil
-	}
-
-	// Non-tmux: take over CSB with a shell
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/bash"
-	}
-	c := exec.Command(shell)
-	c.Dir = projectPath
-	return a, tea.ExecProcess(c, func(err error) tea.Msg {
-		return tea.QuitMsg{}
-	})
-}
-
 func (a *App) openGlobalStats() (tea.Model, tea.Cmd) {
 	if a.globalStatsCache != nil {
 		// Already computed, reuse
@@ -877,21 +1246,58 @@ func (a *App) openLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 		a.copiedMsg = "tmux pane not found"
 		return a, nil
 	}
-	a.livePreviewPane = pane
-	a.livePreviewSessID = sess.ID
+	a.paneProxy = &paneProxyState{pane: pane, sessID: sess.ID}
 	a.toggleSessionPreviewMode(sessPreviewLive)
 	a.refreshLivePreview()
 	return a, liveTickCmd()
 }
 
 func (a *App) refreshLivePreview() {
-	content, err := tmuxCapturePane(a.livePreviewPane)
+	if a.paneProxy == nil {
+		a.sessSplit.Preview.SetContent(dimStyle.Render("(no pane)"))
+		return
+	}
+	content, err := tmuxCapturePane(a.paneProxy.pane)
 	if err != nil {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(capture failed)"))
 		return
 	}
 	a.sessSplit.Preview.SetContent(content)
 	a.sessSplit.Preview.GotoBottom()
+}
+
+// isPaneProxyFocused returns true when pane proxy is active and preview is focused.
+func (a *App) isPaneProxyFocused() bool {
+	return a.paneProxy != nil && a.sessSplit.Focus && a.sessPreviewMode == sessPreviewLive
+}
+
+// paneProxyIndicator returns a styled [LIVE ●]/[SHELL ●] badge for the help line.
+func (a *App) paneProxyIndicator() string {
+	if a.paneProxy == nil {
+		return ""
+	}
+	label := "LIVE"
+	if a.paneProxy.isShell {
+		label = "SHELL"
+	}
+	dot := "○"
+	style := dimStyle
+	if a.sessSplit.Focus {
+		dot = "●"
+		style = liveBadge
+	}
+	return style.Render("[" + label + " " + dot + "]")
+}
+
+// closePaneProxy cleans up the pane proxy, killing spawned shell windows.
+func (a *App) closePaneProxy() {
+	if a.paneProxy == nil {
+		return
+	}
+	if a.paneProxy.isShell {
+		tmuxKillWindow(a.paneProxy.pane)
+	}
+	a.paneProxy = nil
 }
 
 func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
@@ -948,93 +1354,80 @@ type editChoice struct {
 }
 
 func editableFiles(sess session.Session) []editChoice {
-	home, _ := os.UserHomeDir()
-	var choices []editChoice
-
-	if sess.HasMemory {
-		encoded := session.EncodeProjectPath(sess.ProjectPath)
-		p := filepath.Join(home, ".claude", "projects", encoded, "memory", "MEMORY.md")
-		if _, err := os.Stat(p); err == nil {
-			choices = append(choices, editChoice{"m", "memory", p})
-		}
+	return []editChoice{
+		{"s", "session", sess.FilePath},
 	}
-	if sess.HasTodos {
-		p := filepath.Join(home, ".claude", "todos", sess.ID+"-agent-"+sess.ID+".json")
-		if _, err := os.Stat(p); err == nil {
-			choices = append(choices, editChoice{"t", "todos", p})
-		}
-	}
-	if sess.HasTasks {
-		dir := filepath.Join(home, ".claude", "tasks", sess.ID)
-		if _, err := os.Stat(dir); err == nil {
-			choices = append(choices, editChoice{"k", "tasks", dir})
-		}
-	}
-	for i, slug := range sess.PlanSlugs {
-		p := filepath.Join(home, ".claude", "plans", slug+".md")
-		if _, err := os.Stat(p); err == nil {
-			key := "p"
-			label := "plan"
-			if len(sess.PlanSlugs) > 1 {
-				key = fmt.Sprintf("p%d", i+1)
-				label = fmt.Sprintf("plan %d (%s)", i+1, slug)
-			}
-			choices = append(choices, editChoice{key, label, p})
-		}
-	}
-	// Session JSONL file itself
-	choices = append(choices, editChoice{"s", "session", sess.FilePath})
-
-	return choices
 }
 
 func (a *App) openEditMenu(sess session.Session) (tea.Model, tea.Cmd) {
-	choices := editableFiles(sess)
-	if len(choices) == 0 {
-		a.copiedMsg = "No editable files"
-		return a, nil
-	}
-	// If only the session file is available, open it directly
-	if len(choices) == 1 {
-		return a.openInEditor(choices[0].path)
-	}
 	a.editMenu = true
 	a.editSess = sess
-	a.editChoices = choices
-
-	parts := make([]string, len(choices))
-	for i, c := range choices {
-		parts[i] = c.key + ":" + c.label
+	a.editChoices = []editChoice{
+		{"s", "session", sess.FilePath},
+		{"t", "text", ""}, // sentinel: text export
 	}
-	a.copiedMsg = "Edit: " + strings.Join(parts, " ")
+	a.copiedMsg = "Edit: s:session t:text"
 	return a, nil
 }
 
 func (a *App) handleEditMenu(key string) (tea.Model, tea.Cmd) {
 	a.editMenu = false
-	for _, c := range a.editChoices {
-		if c.key == key {
-			return a.openInEditor(c.path)
-		}
+	if key == "s" {
+		return a.openInEditor(a.editSess.FilePath)
+	}
+	if key == "t" {
+		return a.openConvAsText()
 	}
 	a.copiedMsg = ""
 	return a, nil
 }
 
+func (a *App) handleViewsMenu(key string) (tea.Model, tea.Cmd) {
+	a.viewsMenu = false
+	a.copiedMsg = ""
+	switch key {
+	case a.keymap.Views.Stats:
+		return a.openGlobalStats()
+	case a.keymap.Views.Config:
+		return a.openConfigExplorer()
+	case a.keymap.Views.Hooks:
+		return a.openHooksView()
+	}
+	return a, nil
+}
+
+func (a *App) renderViewsHintBox() string {
+	h := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	d := dimStyle
+	sp := "  "
+	km := a.keymap.Views
+	line := h.Render(displayKey(km.Stats)) + d.Render(":stats") + sp + h.Render(displayKey(km.Config)) + d.Render(":config") + sp + h.Render(displayKey(km.Hooks)) + d.Render(":hooks")
+	body := line + "\n" + d.Render("esc:cancel")
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1)
+	return boxStyle.Render(body)
+}
+
 func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	a.actionsMenu = false
 	a.copiedMsg = ""
+	if a.hasMultiSelection() {
+		return a.handleBulkActionsMenu(key)
+	}
+	akm := a.keymap.Actions
 	sess := a.actionsSess
 	switch key {
-	case "d":
+	case akm.Delete:
 		if sess.IsLive {
 			a.copiedMsg = "Cannot delete live session"
 			return a, nil
 		}
 		return a.deleteSession(sess)
-	case "r":
+	case akm.Resume:
 		return a.resumeSession(sess)
-	case "m":
+	case akm.Move:
 		if sess.ProjectPath == "" {
 			a.copiedMsg = "No project path"
 			return a, nil
@@ -1052,7 +1445,23 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		ti.Focus()
 		a.moveInput = ti
 		return a, ti.Cursor.BlinkCmd()
-	case "w":
+	case akm.Kill:
+		if !sess.IsLive {
+			a.copiedMsg = "Not a live session"
+			return a, nil
+		}
+		return a.killLiveSession(sess)
+	case akm.Input:
+		if !a.config.TmuxEnabled {
+			return a, nil
+		}
+		return a.openLiveInput(sess.ProjectPath, sess.ID)
+	case akm.Jump:
+		if !a.config.TmuxEnabled {
+			return a, nil
+		}
+		return a.jumpToTmuxPane(sess.ProjectPath, sess.ID)
+	case akm.Worktree:
 		if sess.ProjectPath == "" {
 			a.copiedMsg = "Not a git repo"
 			return a, nil
@@ -1089,6 +1498,175 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
+	akm := a.keymap.Actions
+	selected := a.selectedSessions()
+	switch key {
+	case akm.Delete:
+		return a.bulkDelete(selected)
+	case akm.Resume:
+		return a.bulkResume(selected)
+	case akm.Kill:
+		return a.bulkKill(selected)
+	case akm.Input:
+		return a.bulkInput(selected)
+	}
+	return a, nil
+}
+
+func (a *App) bulkDelete(selected []session.Session) (tea.Model, tea.Cmd) {
+	deleted, skipped := 0, 0
+	deletedIDs := make(map[string]bool)
+	for _, s := range selected {
+		if s.IsLive {
+			skipped++
+			continue
+		}
+		if err := os.Remove(s.FilePath); err != nil && !os.IsNotExist(err) {
+			skipped++
+			continue
+		}
+		deleted++
+		deletedIDs[s.ID] = true
+		delete(a.selectedSet, s.ID)
+	}
+	// Rebuild session list without actually deleted sessions
+	var remaining []session.Session
+	for _, s := range a.sessions {
+		if !deletedIDs[s.ID] {
+			remaining = append(remaining, s)
+		}
+	}
+	a.sessions = remaining
+	if a.hasFilterApplied() {
+		a.sessionList.ResetFilter()
+	}
+	items := buildGroupedItems(remaining, a.sessGroupMode)
+	a.sessionList.SetItems(items)
+	idx := a.sessionList.Index()
+	if idx >= len(items) {
+		idx = len(items) - 1
+	}
+	if idx >= 0 {
+		a.sessionList.Select(idx)
+	}
+	a.sessSplit.CacheKey = ""
+	a.clearMultiSelection()
+	if skipped > 0 {
+		a.copiedMsg = fmt.Sprintf("Deleted %d (skipped %d live)", deleted, skipped)
+	} else {
+		a.copiedMsg = fmt.Sprintf("Deleted %d", deleted)
+	}
+	return a, nil
+}
+
+func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
+	if !inTmux() {
+		a.copiedMsg = "Requires tmux"
+		return a, nil
+	}
+	count := 0
+	for _, s := range selected {
+		if s.IsLive {
+			continue
+		}
+		dir := s.ProjectPath
+		if dir == "" {
+			dir, _ = os.UserHomeDir()
+		}
+		name := s.ProjectName
+		if name == "" {
+			name = s.ShortID
+		}
+		if err := tmuxNewWindowClaude(name, dir, s.ID); err == nil {
+			count++
+		}
+	}
+	a.clearMultiSelection()
+	a.copiedMsg = fmt.Sprintf("Resumed %d", count)
+	return a, nil
+}
+
+func (a *App) bulkKill(selected []session.Session) (tea.Model, tea.Cmd) {
+	count := 0
+	for _, s := range selected {
+		if !s.IsLive {
+			continue
+		}
+		pane, found := findTmuxPane(s.ProjectPath, s.ID)
+		if !found {
+			continue
+		}
+		target := pane.Session + ":" + pane.Window + "." + pane.Pane
+		exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
+		exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
+		if a.paneProxy != nil && a.paneProxy.sessID == s.ID {
+			a.closePaneProxy()
+			a.sessPreviewMode = sessPreviewConversation
+			a.sessSplit.CacheKey = ""
+			a.sessSplit.Focus = false
+		}
+		count++
+	}
+	a.clearMultiSelection()
+	a.copiedMsg = fmt.Sprintf("Killed %d", count)
+	return a, nil
+}
+
+func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
+	if !inTmux() {
+		a.copiedMsg = "Requires tmux"
+		return a, nil
+	}
+	var panes []tmuxPane
+	for _, s := range selected {
+		if !s.IsLive {
+			continue
+		}
+		pane, found := findTmuxPane(s.ProjectPath, s.ID)
+		if !found || !hasClaude(pane.PID) {
+			continue
+		}
+		panes = append(panes, pane)
+	}
+	if len(panes) == 0 {
+		a.copiedMsg = "No live Claude panes"
+		return a, nil
+	}
+	a.liveInputPanes = panes
+	a.liveInputModal = newInputModal()
+	a.liveInputModal.title = fmt.Sprintf("Send to %d panes", len(panes))
+	a.liveInputActive = true
+	a.liveInputProjDir = selected[0].ProjectPath
+	return a, nil
+}
+
+// killLiveSession sends SIGHUP to the Claude process in the session's tmux pane.
+func (a *App) killLiveSession(sess session.Session) (tea.Model, tea.Cmd) {
+	pane, found := findTmuxPane(sess.ProjectPath, sess.ID)
+	if !found {
+		// Fallback: try to find any Claude process for this path
+		pane, found = findTmuxPane(sess.ProjectPath)
+		if !found {
+			a.copiedMsg = "No tmux pane found"
+			return a, nil
+		}
+	}
+	// Send ctrl+c then ctrl+d to gracefully stop Claude
+	target := pane.Session + ":" + pane.Window + "." + pane.Pane
+	exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
+	exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
+	// Close any live preview for this session
+	if a.paneProxy != nil && a.paneProxy.sessID == sess.ID {
+		a.closePaneProxy()
+		a.sessPreviewMode = sessPreviewConversation
+		a.sessSplit.CacheKey = ""
+		a.sessSplit.Focus = false
+	}
+	a.copiedMsg = "Killed"
+	return a, nil
+}
+
 func (a *App) openInEditor(path string) (tea.Model, tea.Cmd) {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
@@ -1107,6 +1685,8 @@ func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
 		a.copiedMsg = "Delete failed: " + err.Error()
 		return a, nil
 	}
+
+	delete(a.selectedSet, sess.ID)
 
 	// Remove from in-memory list and update the list widget
 	idx := a.sessionList.Index()
@@ -1279,7 +1859,10 @@ func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model
 	return a, nil
 }
 
-func (a *App) sendInputToLive(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
+// liveInputSentMsg is sent after async tmuxSendKeys completes.
+type liveInputSentMsg struct{ err error }
+
+func (a *App) openLiveInput(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
 	if !inTmux() {
 		a.copiedMsg = "Requires tmux"
 		return a, nil
@@ -1289,37 +1872,94 @@ func (a *App) sendInputToLive(projectPath string, sessionID ...string) (tea.Mode
 		a.copiedMsg = "No live Claude pane"
 		return a, nil
 	}
-	a.liveInputActive = true
 	a.liveInputPane = pane
-	ti := textinput.New()
-	ti.Prompt = "Send to Claude: "
-	ti.Width = a.width - 20
-	ti.Focus()
-	a.liveInputModel = ti
-	return a, ti.Cursor.BlinkCmd()
+	a.liveInputModal = newInputModal()
+	a.liveInputActive = true
+	a.liveInputProjDir = projectPath
+	return a, nil
 }
 
-func (a *App) handleLiveInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		text := a.liveInputModel.Value()
-		a.liveInputActive = false
-		if text == "" {
+func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
+	action := a.liveInputModal.handleKey(key)
+
+	switch action {
+	case "send":
+		text := strings.TrimRight(a.liveInputModal.Text(), "\n")
+		if strings.TrimSpace(text) == "" {
+			a.liveInputActive = false
+			a.liveInputPanes = nil
 			return a, nil
 		}
-		if err := tmuxSendKeys(a.liveInputPane, text); err != nil {
-			a.copiedMsg = "Send failed"
-			return a, nil
-		}
-		a.copiedMsg = "Sent!"
-		return a, nil
-	case "esc":
 		a.liveInputActive = false
+		if len(a.liveInputPanes) > 0 {
+			panes := a.liveInputPanes
+			a.liveInputPanes = nil
+			return a, func() tea.Msg {
+				var lastErr error
+				for _, p := range panes {
+					if err := tmuxSendKeys(p, text); err != nil {
+						lastErr = err
+					}
+				}
+				return liveInputSentMsg{err: lastErr}
+			}
+		}
+		pane := a.liveInputPane
+		return a, func() tea.Msg {
+			err := tmuxSendKeys(pane, text)
+			return liveInputSentMsg{err: err}
+		}
+	case "editor":
+		// Write current text to temp file, open $EDITOR in tmux popup
+		a.liveInputActive = false
+		panes := a.liveInputPanes
+		a.liveInputPanes = nil
+		pane := a.liveInputPane
+		text := a.liveInputModal.Text()
+		projDir := a.liveInputProjDir
+		return a, func() tea.Msg {
+			tmpFile, err := os.CreateTemp("", "ccx-input-*.md")
+			if err != nil {
+				return liveInputSentMsg{err: err}
+			}
+			tmpFile.WriteString(text)
+			tmpFile.Close()
+			defer os.Remove(tmpFile.Name())
+
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = "vim"
+			}
+			cmd := fmt.Sprintf("cd %s && %s %s", shellescape(projDir), editor, tmpFile.Name())
+			exec.Command("tmux", "display-popup", "-E", "-w", "80%", "-h", "70%", cmd).Run()
+
+			content, readErr := os.ReadFile(tmpFile.Name())
+			if readErr != nil || len(strings.TrimSpace(string(content))) == 0 {
+				return liveInputSentMsg{err: fmt.Errorf("empty")}
+			}
+			sendText := strings.TrimRight(string(content), "\n")
+			if len(panes) > 0 {
+				var lastErr error
+				for _, p := range panes {
+					if err := tmuxSendKeys(p, sendText); err != nil {
+						lastErr = err
+					}
+				}
+				return liveInputSentMsg{err: lastErr}
+			}
+			return liveInputSentMsg{err: tmuxSendKeys(pane, sendText)}
+		}
+	case "cancel":
+		a.liveInputActive = false
+		a.liveInputPanes = nil
 		return a, nil
 	}
-	var cmd tea.Cmd
-	a.liveInputModel, cmd = a.liveInputModel.Update(msg)
-	return a, cmd
+	return a, nil
+}
+
+// shellescape wraps a string in single quotes for safe shell usage.
+func shellescape(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // --- Live refresh ---
@@ -1329,7 +1969,7 @@ func (a *App) handleTick() tea.Cmd {
 	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
 		if sess, ok := a.selectedSession(); ok && sess.IsLive {
 			a.sessSplit.CacheKey = "" // invalidate to force re-fetch
-			a.updateSessionPreview()
+			_ = a.updateSessionPreview() // conversation mode returns nil cmd
 		}
 	}
 	if !a.liveUpdate {
@@ -1341,66 +1981,99 @@ func (a *App) handleTick() tea.Cmd {
 func (a *App) doRefresh() tea.Cmd {
 	switch a.state {
 	case viewSessions:
-		// Update ModTime and IsLive flags
-		needsSort := false
-		needsRefresh := false
-		for i := range a.sessions {
-			info, err := os.Stat(a.sessions[i].FilePath)
-			if err != nil {
-				continue
-			}
-			if !info.ModTime().Equal(a.sessions[i].ModTime) {
-				a.sessions[i].ModTime = info.ModTime()
-				needsSort = true
-			}
-		}
-		// Snapshot old live state, clear, and re-detect
-		type liveState struct{ live, responding bool }
-		oldLive := make([]liveState, len(a.sessions))
-		for i := range a.sessions {
-			oldLive[i] = liveState{a.sessions[i].IsLive, a.sessions[i].IsResponding}
-			a.sessions[i].IsLive = false
-			a.sessions[i].IsResponding = false
-		}
-		markLiveSessions(a.sessions)
-		for i := range a.sessions {
-			if a.sessions[i].IsLive != oldLive[i].live {
-				needsSort = true
-			}
-			if a.sessions[i].IsResponding != oldLive[i].responding {
-				needsRefresh = true
-			}
-		}
-		if needsSort && !a.isFiltering() && !a.hasFilterApplied() {
-			// Remember currently selected session so cursor follows it after re-sort
+		// Full rescan to discover new/deleted sessions
+		fresh, err := session.ScanSessions(a.config.ClaudeDir)
+		if err == nil && len(fresh) > 0 {
+			// Preserve live state detection
+			markLiveSessions(fresh)
+
+			// Remember cursor position
 			selectedID := ""
 			if sess, ok := a.selectedSession(); ok {
 				selectedID = sess.ID
 			}
 
-			sort.Slice(a.sessions, func(i, j int) bool {
-				return a.sessions[i].ModTime.After(a.sessions[j].ModTime)
-			})
+			a.sessions = fresh
+			a.globalStatsCache = nil // invalidate cached stats
 
-			items := buildGroupedItems(a.sessions, a.sessGroupMode)
-			newIdx := 0
-			for i, item := range items {
-				if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
-					newIdx = i
-					break
+			if !a.isFiltering() && !a.hasFilterApplied() {
+				items := buildGroupedItems(a.sessions, a.sessGroupMode)
+				newIdx := 0
+				for i, item := range items {
+					if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
+						newIdx = i
+						break
+					}
+				}
+				a.sessionList.SetItems(items)
+				a.sessionList.Select(newIdx)
+			}
+		} else {
+			// Fallback: lightweight stat-only refresh
+			needsSort := false
+			needsRefresh := false
+			for i := range a.sessions {
+				info, err := os.Stat(a.sessions[i].FilePath)
+				if err != nil {
+					continue
+				}
+				if !info.ModTime().Equal(a.sessions[i].ModTime) {
+					a.sessions[i].ModTime = info.ModTime()
+					needsSort = true
 				}
 			}
-			a.sessionList.SetItems(items)
-			a.sessionList.Select(newIdx)
-		} else if needsRefresh && !a.isFiltering() && !a.hasFilterApplied() {
-			// Badge-only change: update items without re-sorting
-			items := buildGroupedItems(a.sessions, a.sessGroupMode)
-			idx := a.sessionList.Index()
-			a.sessionList.SetItems(items)
-			a.sessionList.Select(idx)
+			type liveState struct{ live, responding bool }
+			oldLive := make([]liveState, len(a.sessions))
+			for i := range a.sessions {
+				oldLive[i] = liveState{a.sessions[i].IsLive, a.sessions[i].IsResponding}
+				a.sessions[i].IsLive = false
+				a.sessions[i].IsResponding = false
+			}
+			markLiveSessions(a.sessions)
+			for i := range a.sessions {
+				if a.sessions[i].IsLive != oldLive[i].live {
+					needsSort = true
+				}
+				if a.sessions[i].IsResponding != oldLive[i].responding {
+					needsRefresh = true
+				}
+			}
+			if (needsSort || needsRefresh) && !a.isFiltering() && !a.hasFilterApplied() {
+				selectedID := ""
+				if sess, ok := a.selectedSession(); ok {
+					selectedID = sess.ID
+				}
+				sort.Slice(a.sessions, func(i, j int) bool {
+					return a.sessions[i].ModTime.After(a.sessions[j].ModTime)
+				})
+				items := buildGroupedItems(a.sessions, a.sessGroupMode)
+				newIdx := 0
+				for i, item := range items {
+					if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
+						newIdx = i
+						break
+					}
+				}
+				a.sessionList.SetItems(items)
+				a.sessionList.Select(newIdx)
+			}
 		}
+
 		// Refresh preview for live sessions (auto-scroll to bottom)
 		a.refreshSessionPreviewLive()
+
+		// Prune stale selectedSet entries
+		if a.hasMultiSelection() {
+			valid := make(map[string]bool, len(a.sessions))
+			for _, s := range a.sessions {
+				valid[s.ID] = true
+			}
+			for id := range a.selectedSet {
+				if !valid[id] {
+					delete(a.selectedSet, id)
+				}
+			}
+		}
 	}
 
 	return nil
@@ -1477,13 +2150,20 @@ func (a *App) liveBadgeText() string {
 }
 
 // refreshActivePreview re-renders the preview for the current view state.
-func (a *App) refreshActivePreview() {
+// Returns a tea.Cmd if async work is needed (e.g., live pane lookup).
+func (a *App) refreshActivePreview() tea.Cmd {
 	switch a.state {
 	case viewSessions:
-		a.updateSessionPreview()
+		return a.updateSessionPreview()
 	case viewConversation:
-		a.conv.split.RefreshFoldPreview(a.width, a.splitRatio)
+		if a.conv.textPreview {
+			a.conv.split.CacheKey = "" // force re-render
+			a.updateConvPreview()
+		} else {
+			a.conv.split.RefreshFoldPreview(a.width, a.splitRatio)
+		}
 	}
+	return nil
 }
 
 // --- Session split pane ---
@@ -1507,7 +2187,7 @@ func (a *App) renderSessionSplit() string {
 		a.sessionList.Select(idx)
 	}
 
-	a.updateSessionPreview()
+	_ = a.updateSessionPreview() // cmd handled by liveTickMsg for live sessions
 
 	if a.sessSplit.Preview.Width != previewW || a.sessSplit.Preview.Height != contentH {
 		oldOffset := a.sessSplit.Preview.YOffset
@@ -1519,7 +2199,7 @@ func (a *App) renderSessionSplit() string {
 			a.refreshConvPreview()
 		} else {
 			a.sessSplit.CacheKey = ""
-			a.updateSessionPreview()
+			_ = a.updateSessionPreview() // cmd handled by liveTickMsg
 			if a.sessPreviewMode == sessPreviewLive {
 				a.sessSplit.Preview.GotoBottom()
 			} else {
@@ -1537,7 +2217,7 @@ func (a *App) renderSessionSplit() string {
 	}
 
 	// Live preview: always snap to bottom after all updates/resizes
-	if a.sessPreviewMode == sessPreviewLive && a.livePreviewSessID != "" {
+	if a.sessPreviewMode == sessPreviewLive && a.paneProxy != nil {
 		a.sessSplit.Preview.GotoBottom()
 	}
 
@@ -1585,7 +2265,7 @@ func (a *App) cycleSessionPreviewMode() {
 	if a.sessPreviewMode == sessPreviewLive {
 		a.sessPreviewMode = (a.sessPreviewMode + 1) % numSessPreviewModes
 	}
-	a.livePreviewSessID = ""
+	a.closePaneProxy()
 	a.sessSplit.CacheKey = ""
 }
 
@@ -1596,22 +2276,29 @@ func (a *App) cycleSessionPreviewModeReverse() {
 	if a.sessPreviewMode == sessPreviewLive {
 		a.sessPreviewMode = (a.sessPreviewMode + numSessPreviewModes - 1) % numSessPreviewModes
 	}
-	a.livePreviewSessID = ""
+	a.closePaneProxy()
 	a.sessSplit.CacheKey = ""
 }
 
-func (a *App) updateSessionPreview() {
+// liveFindMsg carries the result of an async findTmuxPane lookup.
+type liveFindMsg struct {
+	pane  tmuxPane
+	found bool
+	sessID string
+}
+
+func (a *App) updateSessionPreview() tea.Cmd {
 	if !a.sessSplit.Show {
-		return
+		return nil
 	}
 	sess, ok := a.selectedSession()
 	if !ok {
-		return
+		return nil
 	}
 
 	cacheKey := fmt.Sprintf("%d:%s", a.sessPreviewMode, sess.ID)
 	if cacheKey == a.sessSplit.CacheKey {
-		return
+		return nil
 	}
 
 	// If conversation data is already loaded for this session, just re-render
@@ -1619,7 +2306,7 @@ func (a *App) updateSessionPreview() {
 	if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 && a.sessConvCacheID == sess.ID {
 		a.sessSplit.CacheKey = cacheKey
 		a.refreshConvPreview()
-		return
+		return nil
 	}
 
 	a.sessSplit.CacheKey = cacheKey
@@ -1634,21 +2321,56 @@ func (a *App) updateSessionPreview() {
 		a.updateSessionTasksPlanPreview(sess)
 	case sessPreviewLive:
 		if sess.IsLive {
-			if pane, found := findTmuxPane(sess.ProjectPath, sess.ID); found {
-				a.livePreviewPane = pane
-				a.livePreviewSessID = sess.ID
-				a.refreshLivePreview()
-			} else {
-				a.livePreviewSessID = ""
-				a.sessSplit.Preview.SetContent(dimStyle.Render("(tmux pane not found)"))
+			a.sessSplit.Preview.SetContent(dimStyle.Render("(connecting…)"))
+			// Async: find pane + capture without blocking navigation
+			projectPath := sess.ProjectPath
+			sessID := sess.ID
+			return func() tea.Msg {
+				pane, found := findTmuxPane(projectPath, sessID)
+				return liveFindMsg{pane: pane, found: found, sessID: sessID}
 			}
-		} else {
-			a.livePreviewSessID = ""
-			a.sessSplit.Preview.SetContent(dimStyle.Render("(not a live session)"))
 		}
+		a.closePaneProxy()
+		a.sessSplit.Preview.SetContent(dimStyle.Render("(not a live session)"))
 	default:
 		a.updateSessionConvPreview(sess)
 	}
+	return nil
+}
+
+// prependConvHeaders prepends fork-origin and todo headers to conversation preview content.
+func (a *App) prependConvHeaders(sess session.Session, content string, previewW int) string {
+	// Fork origin header
+	if sess.ParentSessionID != "" {
+		parentLabel := sess.ParentSessionID[:min(8, len(sess.ParentSessionID))]
+		for i := range a.sessions {
+			if a.sessions[i].ID == sess.ParentSessionID {
+				prompt := a.sessions[i].FirstPrompt
+				maxPromptW := previewW - 20
+				if maxPromptW > 0 && len(prompt) > maxPromptW {
+					prompt = prompt[:maxPromptW-3] + "..."
+				}
+				parentLabel += " " + prompt
+				break
+			}
+		}
+		header := dimStyle.Render("── Forked from: "+parentLabel+" ──") + "\n\n"
+		content = header + content
+	}
+
+	// Todo progress header
+	if len(sess.Todos) > 0 {
+		completed := 0
+		for _, t := range sess.Todos {
+			if t.Status == "completed" {
+				completed++
+			}
+		}
+		header := dimStyle.Render(fmt.Sprintf("── Todos [%d/%d] ──", completed, len(sess.Todos))) + "\n\n"
+		content = header + content
+	}
+
+	return content
 }
 
 func (a *App) updateSessionConvPreview(sess session.Session) {
@@ -1702,18 +2424,7 @@ func (a *App) updateSessionConvPreview(sess session.Session) {
 	contentH := max(a.height-3, 1)
 	rendered := renderConversationPreview(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, sess.IsLive)
 
-	// Prepend todo progress header if session has todos
-	content := rendered
-	if len(sess.Todos) > 0 {
-		completed := 0
-		for _, t := range sess.Todos {
-			if t.Status == "completed" {
-				completed++
-			}
-		}
-		header := dimStyle.Render(fmt.Sprintf("── Todos [%d/%d] ──", completed, len(sess.Todos))) + "\n\n"
-		content = header + content
-	}
+	content := a.prependConvHeaders(sess, rendered, previewW)
 
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(content)
@@ -1749,6 +2460,9 @@ func (a *App) refreshConvPreview() {
 	}
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	content := renderConversationPreview(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, isLive)
+	if sess, ok2 := a.selectedSession(); ok2 {
+		content = a.prependConvHeaders(sess, content, previewW)
+	}
 	oldOffset := a.sessSplit.Preview.YOffset
 	a.sessSplit.Preview.SetContent(content)
 
@@ -1959,14 +2673,16 @@ func (a *App) jumpToConvMessage() (tea.Model, tea.Cmd) {
 	// Open conversation (loads messages, builds items, creates list)
 	cmd := a.openConversation(sess)
 
-	// Find the target message in the conversation list by UUID or timestamp
+	// Find the target message in the visible list items by UUID or timestamp.
+	// Must search the list's items (visible only), not a.conv.items (includes folded).
 	bestIdx := 0
 	items := a.convList.Items()
 	found := false
 
 	if target.entry.UUID != "" {
-		for i, ci := range a.conv.items {
-			if ci.kind == convMsg && ci.merged.entry.UUID == target.entry.UUID {
+		for i, li := range items {
+			ci, ok := li.(convItem)
+			if ok && ci.kind == convMsg && ci.merged.entry.UUID == target.entry.UUID {
 				bestIdx = i
 				found = true
 				break
@@ -1975,8 +2691,9 @@ func (a *App) jumpToConvMessage() (tea.Model, tea.Cmd) {
 	}
 	if !found && !target.entry.Timestamp.IsZero() {
 		bestDist := time.Duration(math.MaxInt64)
-		for i, ci := range a.conv.items {
-			if ci.kind != convMsg || ci.merged.entry.Role != target.entry.Role {
+		for i, li := range items {
+			ci, ok := li.(convItem)
+			if !ok || ci.kind != convMsg || ci.merged.entry.Role != target.entry.Role {
 				continue
 			}
 			dist := ci.merged.entry.Timestamp.Sub(target.entry.Timestamp)
@@ -2291,27 +3008,64 @@ func formatHelp(h string) string {
 	return sb.String()
 }
 
-func (a *App) searchHints() string {
+// renderActionsHintBox renders a compact bordered hint box for the actions menu.
+func (a *App) renderActionsHintBox() string {
+	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	d := dimStyle
+	sp := "  "
+	akm := a.keymap.Actions
+
+	var lines []string
+	if a.hasMultiSelection() {
+		header := fmt.Sprintf("%d selected", len(a.selectedSet))
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
+		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
+	} else {
+		sess := a.actionsSess
+		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Worktree))+d.Render(":worktree"))
+		if sess.IsLive && a.config.TmuxEnabled {
+			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
+		}
+	}
+	lines = append(lines, d.Render("esc:cancel"))
+
+	body := strings.Join(lines, "\n")
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1)
+	return boxStyle.Render(body)
+}
+
+// renderSearchHintBox renders a compact bordered hint box for search filters.
+func (a *App) renderSearchHintBox() string {
 	h := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
-	d := helpStyle
-	sp := d.Render(" ")
-	tail := d.Render("  (space=AND)  enter:apply  esc:cancel")
+	d := dimStyle
+	sp := " "
+
+	var lines []string
 	switch a.state {
 	case viewSessions:
-		return d.Render("  ") +
-			h.Render("is:live") + sp + h.Render("is:wt") + sp + h.Render("is:team") + sp +
-			h.Render("has:mem") + sp + h.Render("has:todo") + sp + h.Render("has:task") + sp +
-			h.Render("has:plan") + sp + h.Render("has:agent") + sp + h.Render("has:compact") + sp +
-			h.Render("has:skill") + sp + h.Render("has:mcp") +
-			d.Render("  project  branch  prompt") + tail
+		lines = []string{
+			h.Render("is:") + d.Render("live wt team"),
+			h.Render("has:") + d.Render("mem todo task plan agent compact skill mcp"),
+			d.Render("text: project branch prompt"),
+		}
 	case viewConversation:
-		return d.Render("  ") +
-			h.Render("role=user") + sp + h.Render("role=asst") + sp +
-			h.Render("tool=Bash") + sp + h.Render("tool=Read") + sp +
-			h.Render("tool=Edit") + sp + h.Render("tool=Write") + tail
+		lines = []string{
+			h.Render("role=") + d.Render("user") + sp + h.Render("role=") + d.Render("asst"),
+			h.Render("tool=") + d.Render("Bash Read Edit Write"),
+		}
 	default:
-		return d.Render("  enter:apply  esc:cancel")
+		return ""
 	}
+
+	body := strings.Join(lines, "\n")
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1)
+	return boxStyle.Render(body)
 }
 
 func (a *App) syncAllFilterVisibility() {
@@ -2325,6 +3079,8 @@ func (a *App) isFiltering() bool {
 		return a.sessionList.FilterState() == list.Filtering
 	case viewConversation:
 		return a.convList.FilterState() == list.Filtering
+	case viewConfig:
+		return a.cfgSearching
 	}
 	return false
 }
@@ -2335,6 +3091,8 @@ func (a *App) hasFilterApplied() bool {
 		return a.sessionList.FilterState() == list.FilterApplied
 	case viewConversation:
 		return a.convList.FilterState() == list.FilterApplied
+	case viewConfig:
+		return a.cfgSearchTerm != ""
 	}
 	return false
 }
@@ -2345,6 +3103,8 @@ func (a *App) activeFilterValue() string {
 		return a.sessionList.FilterInput.Value()
 	case viewConversation:
 		return a.convList.FilterInput.Value()
+	case viewConfig:
+		return a.cfgSearchTerm
 	}
 	return ""
 }
@@ -2355,6 +3115,8 @@ func (a *App) resetActiveFilter() {
 		a.sessionList.ResetFilter()
 	case viewConversation:
 		a.convList.ResetFilter()
+	case viewConfig:
+		a.clearCfgSearch()
 	}
 }
 
@@ -2362,12 +3124,30 @@ func (a *App) updateActiveList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch a.state {
 	case viewSessions:
 		m, cmd := a.updateSessionList(msg)
-		a.updateSessionPreview()
+		if previewCmd := a.updateSessionPreview(); previewCmd != nil {
+			if cmd != nil {
+				return m, tea.Batch(cmd, previewCmd)
+			}
+			return m, previewCmd
+		}
 		return m, cmd
 	case viewConversation:
 		if a.listReady(&a.convList) {
 			var cmd tea.Cmd
 			a.convList, cmd = a.convList.Update(msg)
+			return a, cmd
+		}
+		return a, nil
+	case viewConfig:
+		if a.cfgSearching {
+			if km, ok := msg.(tea.KeyMsg); ok {
+				return a.handleCfgSearch(km)
+			}
+		}
+		if a.listReady(&a.cfgList) {
+			var cmd tea.Cmd
+			a.cfgList, cmd = a.cfgList.Update(msg)
+			a.updateConfigPreview()
 			return a, cmd
 		}
 		return a, nil
@@ -2389,7 +3169,12 @@ func (a *App) updateActiveComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 		m, cmd := a.updateSessionList(msg)
-		a.updateSessionPreview()
+		if previewCmd := a.updateSessionPreview(); previewCmd != nil {
+			if cmd != nil {
+				return m, tea.Batch(cmd, previewCmd)
+			}
+			return m, previewCmd
+		}
 		return m, cmd
 	case viewConversation:
 		if a.listReady(&a.convList) {
@@ -2405,6 +3190,18 @@ func (a *App) updateActiveComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewGlobalStats:
 		var cmd tea.Cmd
 		a.globalStatsVP, cmd = a.globalStatsVP.Update(msg)
+		return a, cmd
+	case viewConfig:
+		if a.listReady(&a.cfgList) {
+			var cmd tea.Cmd
+			a.cfgList, cmd = a.cfgList.Update(msg)
+			a.updateConfigPreview()
+			return a, cmd
+		}
+		return a, nil
+	case viewHooks:
+		var cmd tea.Cmd
+		a.hooksVP, cmd = a.hooksVP.Update(msg)
 		return a, cmd
 	}
 	return a, nil
@@ -2446,7 +3243,7 @@ func (a *App) resizeAll() tea.Cmd {
 
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
 	if a.sessionList.Width() == 0 {
-		a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode)
+		a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet)
 		a.sessSplit.CacheKey = ""
 		if a.config.SearchQuery != "" {
 			applyListFilter(&a.sessionList, a.config.SearchQuery)
@@ -2492,6 +3289,19 @@ func (a *App) resizeAll() tea.Cmd {
 			a.refreshMsgFullPreview()
 		}
 	}
+	// Config explorer view
+	if a.cfgList.Width() > 0 {
+		idx := a.cfgList.Index()
+		a.cfgList.SetSize(a.cfgSplit.ListWidth(a.width, a.splitRatio), contentH)
+		a.cfgList.Select(idx)
+		a.cfgSplit.CacheKey = "" // force preview re-render at new size
+	}
+	// Hooks view
+	if a.hooksVP.Width > 0 {
+		a.hooksVP.Width = a.width
+		a.hooksVP.Height = contentH
+		a.hooksVP.SetContent(renderHooksView(a.width))
+	}
 	return cmd
 }
 
@@ -2503,7 +3313,7 @@ func (a *App) rebuildSessionList() {
 
 	contentH := max(a.height-3, 1)
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode)
+	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet)
 	a.sessSplit.CacheKey = ""
 
 	// Restore cursor to previously selected session
@@ -2583,6 +3393,16 @@ func (a *App) renderBreadcrumb() string {
 				label += " " + a.conv.task.Subject
 			}
 			crumbs = append(crumbs, crumb{label, viewConversation})
+		}
+	case viewConfig:
+		crumbs = []crumb{
+			{" Sessions", viewSessions},
+			{"Config", viewConfig},
+		}
+	case viewHooks:
+		crumbs = []crumb{
+			{" Sessions", viewSessions},
+			{"Hooks", viewHooks},
 		}
 	case viewMessageFull:
 		crumbs = []crumb{
@@ -2704,10 +3524,17 @@ func (a *App) renderBreadcrumb() string {
 func (a *App) breadcrumbRightStatus() string {
 	var parts []string
 
-	// Session group mode badge
+	// Session group mode badge (styled)
 	if a.state == viewSessions {
-		modeLabel := []string{"flat", "proj", "tree"}
-		parts = append(parts, modeLabel[a.sessGroupMode])
+		modeLabels := []string{"FLAT", "PROJ", "TREE", "CHAIN", "FORK"}
+		modeColors := []lipgloss.Color{"#9CA3AF", "#3B82F6", "#10B981", "#F59E0B", "#EC4899"}
+		ml := modeLabels[a.sessGroupMode]
+		mc := modeColors[a.sessGroupMode]
+		modeStyle := lipgloss.NewStyle().Foreground(mc).Bold(true)
+		parts = append(parts, modeStyle.Render(ml))
+		if a.hasMultiSelection() {
+			parts = append(parts, fmt.Sprintf("%d selected", len(a.selectedSet)))
+		}
 	}
 
 	// Loading indicator
@@ -2746,6 +3573,10 @@ func (a *App) breadcrumbRightStatus() string {
 		pct = int(a.msgFull.vp.ScrollPercent() * 100)
 	case viewGlobalStats:
 		pct = int(a.globalStatsVP.ScrollPercent() * 100)
+	case viewConfig:
+		if a.cfgSplit.Show {
+			pct = int(a.cfgSplit.Preview.ScrollPercent() * 100)
+		}
 	}
 	if pct >= 0 {
 		parts = append(parts, fmt.Sprintf("%d%%", pct))
@@ -2763,6 +3594,10 @@ func (a *App) activeList() *list.Model {
 	case viewConversation:
 		if a.convList.Width() > 0 {
 			return &a.convList
+		}
+	case viewConfig:
+		if a.cfgList.Width() > 0 {
+			return &a.cfgList
 		}
 	}
 	return nil
@@ -2810,6 +3645,9 @@ func (a *App) navigateTo(target viewState) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a, a.openConversation(a.currentSess)
+
+	case viewConfig:
+		return a.openConfigExplorer()
 	}
 	return a, nil
 }

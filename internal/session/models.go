@@ -43,6 +43,8 @@ type Session struct {
 	TeamRole     string // "leader", "teammate", ""
 	TeammateName string // e.g. "build-deploy" (teammate only)
 
+	ParentSessionID string // UUID of parent session (empty if not a fork)
+
 	HasAgents     bool
 	HasCompaction bool
 	HasSkills     bool

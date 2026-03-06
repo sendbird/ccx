@@ -41,6 +41,9 @@ var (
 	bTaskCreate        = []byte(`"name":"TaskCreate"`)
 	bTaskCreateS       = []byte(`"name": "TaskCreate"`)
 
+	// Fork detection markers
+	bForkedFrom = []byte(`"forkedFrom"`)
+
 	// Stats-specific markers
 	bUsage     = []byte(`"usage":{`)
 	bUsageS    = []byte(`"usage": {`)

@@ -71,12 +71,12 @@ func TestCycleClearsLivePreviewState(t *testing.T) {
 
 	// Simulate being in live preview
 	app.sessPreviewMode = sessPreviewTasksPlan // one before live
-	app.livePreviewSessID = "aaa"
+	app.paneProxy = &paneProxyState{sessID: "aaa"}
 
 	app.cycleSessionPreviewMode()
 
-	if app.livePreviewSessID != "" {
-		t.Errorf("cycleSessionPreviewMode should clear livePreviewSessID, got %q", app.livePreviewSessID)
+	if app.paneProxy != nil {
+		t.Error("cycleSessionPreviewMode should clear paneProxy")
 	}
 	if app.sessPreviewMode == sessPreviewLive {
 		t.Error("should not land on sessPreviewLive")
@@ -150,7 +150,7 @@ func TestLivePreviewNonLiveSessionShowsMessage(t *testing.T) {
 	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
 	app = m.(*App)
 	app.sessPreviewMode = sessPreviewLive
-	app.livePreviewSessID = "aaa"
+	app.paneProxy = &paneProxyState{sessID: "aaa"}
 
 	// Select a non-live session (index 1 = "bbb")
 	app.sessionList.Select(1)
@@ -160,8 +160,8 @@ func TestLivePreviewNonLiveSessionShowsMessage(t *testing.T) {
 	if app.sessPreviewMode != sessPreviewLive {
 		t.Errorf("should stay in sessPreviewLive, got %d", app.sessPreviewMode)
 	}
-	if app.livePreviewSessID != "" {
-		t.Errorf("livePreviewSessID should be cleared, got %q", app.livePreviewSessID)
+	if app.paneProxy != nil {
+		t.Error("paneProxy should be cleared for non-live session")
 	}
 }
 
@@ -171,7 +171,7 @@ func TestLiveTickDoesNotRefreshWhenNotInLiveMode(t *testing.T) {
 	app := newTestApp(fakeSessions())
 
 	app.sessPreviewMode = sessPreviewConversation
-	app.livePreviewSessID = ""
+	app.paneProxy = nil
 
 	m, cmd := app.Update(liveTickMsg{})
 	app = m.(*App)
@@ -186,8 +186,8 @@ func TestLiveTickSchedulesTick(t *testing.T) {
 	app := newTestApp(fakeSessions())
 
 	app.sessPreviewMode = sessPreviewLive
-	app.livePreviewSessID = "aaa"
-	// livePreviewPane is zero-value, so refreshLivePreview will fail silently,
+	app.paneProxy = &paneProxyState{sessID: "aaa"}
+	// paneProxy.pane is zero-value, so refreshLivePreview will fail silently,
 	// but we can still verify the tick is rescheduled.
 
 	m, cmd := app.Update(liveTickMsg{})
@@ -195,6 +195,135 @@ func TestLiveTickSchedulesTick(t *testing.T) {
 
 	if cmd == nil {
 		t.Error("liveTickMsg should schedule next tick when in live preview mode")
+	}
+}
+
+// TestTeaKeyToTmux verifies key mapping from Bubble Tea to tmux.
+func TestTeaKeyToTmux(t *testing.T) {
+	tests := []struct {
+		input   string
+		tmuxKey string
+		literal bool
+	}{
+		{"enter", "Enter", false},
+		{"backspace", "BSpace", false},
+		{"tab", "Tab", false},
+		{"up", "Up", false},
+		{"ctrl+c", "C-c", false},
+		{"a", "a", true},
+		{"1", "1", true},
+		{"space", "Space", false},
+		{" ", "Space", false},
+		{"unknown-key", "", false},
+	}
+	for _, tt := range tests {
+		key, literal := teaKeyToTmux(tt.input)
+		if key != tt.tmuxKey || literal != tt.literal {
+			t.Errorf("teaKeyToTmux(%q) = (%q, %v), want (%q, %v)", tt.input, key, literal, tt.tmuxKey, tt.literal)
+		}
+	}
+}
+
+// TestPaneProxyIndicator verifies LIVE/SHELL badge rendering.
+func TestPaneProxyIndicator(t *testing.T) {
+	app := newTestApp(fakeSessions())
+
+	// No proxy → empty
+	if got := app.paneProxyIndicator(); got != "" {
+		t.Errorf("expected empty indicator with no proxy, got %q", got)
+	}
+
+	// Live proxy, unfocused → contains LIVE and ○
+	app.paneProxy = &paneProxyState{sessID: "aaa"}
+	app.sessSplit.Focus = false
+	got := app.paneProxyIndicator()
+	if got == "" || !contains(got, "LIVE") || !contains(got, "○") {
+		t.Errorf("unfocused live indicator should contain LIVE and ○, got %q", got)
+	}
+
+	// Live proxy, focused → contains LIVE and ●
+	app.sessSplit.Focus = true
+	got = app.paneProxyIndicator()
+	if got == "" || !contains(got, "LIVE") || !contains(got, "●") {
+		t.Errorf("focused live indicator should contain LIVE and ●, got %q", got)
+	}
+
+	// Shell proxy → contains SHELL
+	app.paneProxy = &paneProxyState{isShell: true}
+	got = app.paneProxyIndicator()
+	if got == "" || !contains(got, "SHELL") {
+		t.Errorf("shell indicator should contain SHELL, got %q", got)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchString(s, substr)
+}
+
+func searchString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLiveTickCapturesBothFocusStates verifies liveTickMsg works for both focused and unfocused.
+func TestLiveTickCapturesBothFocusStates(t *testing.T) {
+	app := newTestApp(fakeSessions())
+	app.sessPreviewMode = sessPreviewLive
+	app.paneProxy = &paneProxyState{sessID: "aaa"}
+
+	// Unfocused: should reschedule
+	app.sessSplit.Focus = false
+	_, cmd := app.Update(liveTickMsg{})
+	if cmd == nil {
+		t.Error("liveTickMsg should reschedule when proxy active and unfocused")
+	}
+
+	// Focused: should also reschedule (passive capture for process output)
+	app.sessSplit.Focus = true
+	_, cmd = app.Update(liveTickMsg{})
+	if cmd == nil {
+		t.Error("liveTickMsg should reschedule when proxy active and focused")
+	}
+}
+
+// TestCtrlQFromFocusedPaneProxyUnfocuses verifies ctrl+q unfocuses pane proxy.
+func TestCtrlQFromFocusedPaneProxyUnfocuses(t *testing.T) {
+	app := newTestApp(fakeSessions())
+
+	// Open preview and set up pane proxy
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = m.(*App)
+	app.sessPreviewMode = sessPreviewLive
+	app.paneProxy = &paneProxyState{sessID: "aaa"}
+	app.sessSplit.Focus = true
+
+	// ctrl+q should unfocus, not close
+	m, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	app = m.(*App)
+
+	if app.sessSplit.Focus {
+		t.Error("ctrl+q should unfocus the pane proxy")
+	}
+	if app.paneProxy == nil {
+		t.Error("pane proxy should still exist after unfocus")
+	}
+	if cmd == nil {
+		t.Error("should return liveTickCmd after unfocus")
+	}
+}
+
+// TestClosePaneProxyKillsShell verifies closePaneProxy clears state.
+func TestClosePaneProxyKillsShell(t *testing.T) {
+	app := newTestApp(fakeSessions())
+	// Non-shell proxy: just nil out
+	app.paneProxy = &paneProxyState{sessID: "aaa"}
+	app.closePaneProxy()
+	if app.paneProxy != nil {
+		t.Error("closePaneProxy should nil out paneProxy")
 	}
 }
 

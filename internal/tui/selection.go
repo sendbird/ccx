@@ -180,6 +180,30 @@ func highlightSnippet(text, term string, maxW int, baseStyle lipgloss.Style) str
 	return sb.String()
 }
 
+// highlightInline highlights all case-insensitive occurrences of term in text
+// using matchHighlight style, with the rest rendered in baseStyle.
+func highlightInline(text, term string, baseStyle lipgloss.Style) string {
+	if term == "" {
+		return baseStyle.Render(text)
+	}
+	lower := strings.ToLower(text)
+	lowerTerm := strings.ToLower(term)
+	idx := strings.Index(lower, lowerTerm)
+	if idx < 0 {
+		return baseStyle.Render(text)
+	}
+	var sb strings.Builder
+	for idx >= 0 {
+		sb.WriteString(baseStyle.Render(text[:idx]))
+		sb.WriteString(matchHighlight.Render(text[idx : idx+len(term)]))
+		text = text[idx+len(term):]
+		lower = lower[idx+len(term):]
+		idx = strings.Index(lower, lowerTerm)
+	}
+	sb.WriteString(baseStyle.Render(text))
+	return sb.String()
+}
+
 // listFilterTerm returns the active filter term for a list, or "" if not filtering.
 func listFilterTerm(m list.Model) string {
 	if m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied {

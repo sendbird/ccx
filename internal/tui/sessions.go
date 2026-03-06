@@ -18,6 +18,8 @@ const (
 	groupFlat    = 0
 	groupProject = 1
 	groupTree    = 2
+	groupChain   = 3
+	groupFork    = 4
 )
 
 // buildGroupedItems returns list items for the given group mode.
@@ -27,6 +29,10 @@ func buildGroupedItems(sessions []session.Session, groupMode int) []list.Item {
 		return buildProjectGroupItems(sessions)
 	case groupTree:
 		return buildTreeItems(sessions)
+	case groupChain:
+		return buildChainGroupItems(sessions)
+	case groupFork:
+		return buildForkGroupItems(sessions)
 	default:
 		items := make([]list.Item, len(sessions))
 		for i, s := range sessions {
@@ -124,12 +130,16 @@ func (s sessionItem) FilterValue() string {
 	if s.sess.TeammateName != "" {
 		parts = append(parts, s.sess.TeammateName)
 	}
+	if s.sess.ParentSessionID != "" {
+		parts = append(parts, "is:fork")
+	}
 	return strings.Join(parts, " ")
 }
 
 type sessionDelegate struct {
-	timeW int // max width of time-ago column
-	msgW  int // max width of message count column
+	timeW       int              // max width of time-ago column
+	msgW        int              // max width of message count column
+	selectedSet map[string]bool  // shared reference to App.selectedSet
 }
 
 func (d sessionDelegate) Height() int                             { return 2 }
@@ -158,8 +168,13 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		treePrefixW = 3 // "├─ " is 3 cells wide
 	}
 
+	isMultiSelected := d.selectedSet != nil && d.selectedSet[s.ID]
 	cursor := "  "
-	if selected {
+	if selected && isMultiSelected {
+		cursor = selectMarkStyle.Render("✓") + " "
+	} else if isMultiSelected {
+		cursor = selectMarkStyle.Render("✓") + " "
+	} else if selected {
 		cursor = "> "
 	}
 
@@ -236,6 +251,10 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		badges += " " + mcpBadgeStyle.Render("[X]")
 		badgesW += 4
 	}
+	if s.ParentSessionID != "" {
+		badges += " " + forkBadge.Render("[F]")
+		badgesW += 4
+	}
 
 	// Calculate available width for project column
 	// cursor(2) + tree(treePrefixW) + id(8) + 2 + time + 2 + msg + 2 + project + badges
@@ -245,10 +264,14 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		maxProjW = 4
 	}
 
-	// For tree children, show teammate name (team mode) or branch (project mode)
+	// For tree children, show teammate name, fork indicator, slug, or branch
 	projName := s.ProjectName
 	if si.treeDepth > 0 && s.TeammateName != "" {
 		projName = s.TeammateName
+	} else if si.treeDepth > 0 && s.ParentSessionID != "" {
+		projName = "fork:" + s.ParentSessionID[:8]
+	} else if si.treeDepth > 0 && s.PlanSlug != "" {
+		projName = s.PlanSlug
 	} else if si.treeDepth > 0 && s.GitBranch != "" {
 		projName = s.GitBranch
 	}
@@ -259,11 +282,16 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	fullProj := projName + branch
 	filterTerm := listFilterTerm(m)
 
-	// Style teammate names in cyan
+	// Style teammate names in cyan, fork children in amber
 	if si.treeDepth > 0 && s.TeammateName != "" {
 		projStyle = teamBadge
 		if selected {
 			projStyle = teamBadge.Bold(true)
+		}
+	} else if si.treeDepth > 0 && s.ParentSessionID != "" {
+		projStyle = forkBadge
+		if selected {
+			projStyle = forkBadge.Bold(true)
 		}
 	}
 
@@ -326,12 +354,12 @@ func computeSessionColWidths(sessions []session.Session) (timeW, msgW int) {
 	return
 }
 
-func newSessionList(sessions []session.Session, width, height int, groupMode int) list.Model {
+func newSessionList(sessions []session.Session, width, height int, groupMode int, selectedSet map[string]bool) list.Model {
 	items := buildGroupedItems(sessions, groupMode)
 
 	timeW, msgW := computeSessionColWidths(sessions)
 
-	l := list.New(items, sessionDelegate{timeW: timeW, msgW: msgW}, width, height)
+	l := list.New(items, sessionDelegate{timeW: timeW, msgW: msgW, selectedSet: selectedSet}, width, height)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowFilter(false)
@@ -440,6 +468,213 @@ func buildTreeItems(sessions []session.Session) []list.Item {
 	return items
 }
 
+// buildChainGroupItems groups sessions that share the same PlanSlug (continuation
+// chain). The earliest session in each chain becomes the depth=0 header; later
+// sessions are depth=1 children sorted by Created time.
+func buildChainGroupItems(sessions []session.Session) []list.Item {
+	type chainGroup struct {
+		slug     string
+		sessions []session.Session
+		bestTime time.Time
+	}
+
+	groups := make(map[string]*chainGroup)
+	var noSlug []session.Session
+
+	for i := range sessions {
+		s := &sessions[i]
+		if s.PlanSlug == "" {
+			noSlug = append(noSlug, *s)
+			continue
+		}
+		g, ok := groups[s.PlanSlug]
+		if !ok {
+			g = &chainGroup{slug: s.PlanSlug}
+			groups[s.PlanSlug] = g
+		}
+		g.sessions = append(g.sessions, *s)
+		if s.ModTime.After(g.bestTime) {
+			g.bestTime = s.ModTime
+		}
+	}
+
+	// Sort each chain by Created time (earliest first)
+	for _, g := range groups {
+		sort.Slice(g.sessions, func(i, j int) bool {
+			return g.sessions[i].Created.Before(g.sessions[j].Created)
+		})
+	}
+
+	// Separate chains (2+ sessions) from singletons
+	var chainList []*chainGroup
+	var standalone []session.Session
+	for _, g := range groups {
+		if len(g.sessions) <= 1 {
+			standalone = append(standalone, g.sessions...)
+			continue
+		}
+		chainList = append(chainList, g)
+	}
+	standalone = append(standalone, noSlug...)
+
+	// Sort chains by bestTime desc, standalone by ModTime desc
+	sort.Slice(chainList, func(i, j int) bool {
+		return chainList[i].bestTime.After(chainList[j].bestTime)
+	})
+	sort.Slice(standalone, func(i, j int) bool {
+		return standalone[i].ModTime.After(standalone[j].ModTime)
+	})
+
+	// Merge by recency
+	var items []list.Item
+	ci, si := 0, 0
+	for ci < len(chainList) || si < len(standalone) {
+		useChain := false
+		if ci < len(chainList) && si < len(standalone) {
+			useChain = chainList[ci].bestTime.After(standalone[si].ModTime)
+		} else {
+			useChain = ci < len(chainList)
+		}
+		if useChain {
+			g := chainList[ci]
+			ci++
+			// Earliest session is the header
+			items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
+			children := g.sessions[1:]
+			for idx, ch := range children {
+				items = append(items, sessionItem{
+					sess:      ch,
+					treeDepth: 1,
+					treeLast:  idx == len(children)-1,
+				})
+			}
+		} else {
+			items = append(items, sessionItem{sess: standalone[si], treeDepth: 0})
+			si++
+		}
+	}
+	return items
+}
+
+// buildForkGroupItems groups forked sessions under their parent session.
+// Only ParentSessionID relationships are used — sessions without fork
+// relationships appear standalone (flat).
+func buildForkGroupItems(sessions []session.Session) []list.Item {
+	type forkGroup struct {
+		sessions []session.Session
+		bestTime time.Time
+	}
+
+	byID := make(map[string]*session.Session, len(sessions))
+	for i := range sessions {
+		byID[sessions[i].ID] = &sessions[i]
+	}
+
+	// Walk fork parent chain to find root ancestor in our session list
+	rootOf := func(s *session.Session) string {
+		cur := s
+		seen := map[string]bool{cur.ID: true}
+		for cur.ParentSessionID != "" {
+			parent, ok := byID[cur.ParentSessionID]
+			if !ok || seen[parent.ID] {
+				break
+			}
+			seen[parent.ID] = true
+			cur = parent
+		}
+		return cur.ID
+	}
+
+	groups := make(map[string]*forkGroup)
+	assigned := make(map[string]bool)
+
+	for i := range sessions {
+		s := &sessions[i]
+		if s.ParentSessionID == "" {
+			continue
+		}
+		rootID := rootOf(s)
+		g, ok := groups[rootID]
+		if !ok {
+			g = &forkGroup{}
+			groups[rootID] = g
+			// Include the root session itself
+			if root, exists := byID[rootID]; exists && !assigned[rootID] {
+				g.sessions = append(g.sessions, *root)
+				assigned[rootID] = true
+				if root.ModTime.After(g.bestTime) {
+					g.bestTime = root.ModTime
+				}
+			}
+		}
+		if !assigned[s.ID] {
+			g.sessions = append(g.sessions, *s)
+			assigned[s.ID] = true
+			if s.ModTime.After(g.bestTime) {
+				g.bestTime = s.ModTime
+			}
+		}
+	}
+
+	// Sort each group by Created time (earliest first)
+	for _, g := range groups {
+		sort.Slice(g.sessions, func(i, j int) bool {
+			return g.sessions[i].Created.Before(g.sessions[j].Created)
+		})
+	}
+
+	var forkList []*forkGroup
+	var standalone []session.Session
+	for _, g := range groups {
+		if len(g.sessions) <= 1 {
+			standalone = append(standalone, g.sessions...)
+			continue
+		}
+		forkList = append(forkList, g)
+	}
+	for i := range sessions {
+		if !assigned[sessions[i].ID] {
+			standalone = append(standalone, sessions[i])
+		}
+	}
+
+	sort.Slice(forkList, func(i, j int) bool {
+		return forkList[i].bestTime.After(forkList[j].bestTime)
+	})
+	sort.Slice(standalone, func(i, j int) bool {
+		return standalone[i].ModTime.After(standalone[j].ModTime)
+	})
+
+	// Merge by recency
+	var items []list.Item
+	fi, si := 0, 0
+	for fi < len(forkList) || si < len(standalone) {
+		useFork := false
+		if fi < len(forkList) && si < len(standalone) {
+			useFork = forkList[fi].bestTime.After(standalone[si].ModTime)
+		} else {
+			useFork = fi < len(forkList)
+		}
+		if useFork {
+			g := forkList[fi]
+			fi++
+			items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
+			children := g.sessions[1:]
+			for idx, ch := range children {
+				items = append(items, sessionItem{
+					sess:      ch,
+					treeDepth: 1,
+					treeLast:  idx == len(children)-1,
+				})
+			}
+		} else {
+			items = append(items, sessionItem{sess: standalone[si], treeDepth: 0})
+			si++
+		}
+	}
+	return items
+}
+
 // buildProjectGroupItems groups sessions by ProjectPath. The most recent
 // session in each project becomes the depth=0 header; the rest are depth=1
 // children showing branch name instead of project.
@@ -522,80 +757,278 @@ func timeAgo(t time.Time) string {
 	}
 }
 
-// renderHelpOverlay renders a help screen showing badge descriptions and search filters.
-func renderHelpOverlay(width, height int) string {
+// renderHelpModal renders a centered bordered modal with help content overlaid on bg.
+func renderHelpModal(bg string, screenW, screenH int, km Keymap) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	d := dimStyle
 
 	var sb strings.Builder
-	sb.WriteString(titleStyle.Render("  ccx — Help") + "\n\n")
+	sb.WriteString(titleStyle.Render(" ccx — Help") + "\n\n")
 
-	sb.WriteString(headerStyle.Render("  Badges") + "\n")
-	badges := []struct{ badge, desc string }{
-		{"[LIVE]", "Session has a running Claude process"},
-		{"[BUSY]", "Session is actively responding"},
-		{"[M]", "Session has CLAUDE.md memory file"},
-		{"[W]", "Session uses a git worktree"},
-		{"[T]", "Session has todos (TodoWrite)"},
-		{"[K]", "Session has tasks (TaskCreate/TaskUpdate)"},
-		{"[P]", "Session has a plan file"},
-		{"[A]", "Session spawned subagents (Task tool)"},
-		{"[C]", "Session hit context limit (compacted)"},
-		{"[S]", "Session used skills"},
-		{"[X]", "Session used MCP tools"},
+	// Badges: two-column layout
+	sb.WriteString(headerStyle.Render(" Badges") + "\n")
+	type badge struct {
+		style lipgloss.Style
+		badge string
+		desc  string
 	}
-	for _, b := range badges {
-		sb.WriteString(fmt.Sprintf("    %-8s %s\n", b.badge, dimStyle.Render(b.desc)))
+	allBadges := []badge{
+		{liveBadge, "[LIVE]", "Running Claude"},
+		{busyBadge, "[BUSY]", "Responding"},
+		{memoryBadge, "[M]", "Has memory"},
+		{worktreeBadge, "[W]", "Git worktree"},
+		{todoBadge, "[T]", "Has todos"},
+		{taskBadge, "[K]", "Has tasks"},
+		{planBadge, "[P]", "Has plan"},
+		{agentBadgeStyle, "[A]", "Has subagents"},
+		{compactBadgeStyle, "[C]", "Compacted"},
+		{todoBadge, "[S]", "Used skills"},
+		{mcpBadgeStyle, "[X]", "Used MCP"},
+		{forkBadge, "[F]", "Forked session"},
+	}
+	// Render badges in pairs (two per line)
+	for i := 0; i < len(allBadges); i += 2 {
+		b := allBadges[i]
+		left := fmt.Sprintf(" %s %s", b.style.Render(fmt.Sprintf("%-6s", b.badge)), d.Render(fmt.Sprintf("%-15s", b.desc)))
+		if i+1 < len(allBadges) {
+			b2 := allBadges[i+1]
+			right := fmt.Sprintf(" %s %s", b2.style.Render(fmt.Sprintf("%-6s", b2.badge)), d.Render(b2.desc))
+			sb.WriteString(left + right + "\n")
+		} else {
+			sb.WriteString(left + "\n")
+		}
 	}
 
-	sb.WriteString("\n" + headerStyle.Render("  Search Filters") + "\n")
-	filters := []struct{ filter, desc string }{
+	// Search filters: two-column layout
+	sb.WriteString("\n" + headerStyle.Render(" Search Filters") + "\n")
+	type filter struct{ filter, desc string }
+	allFilters := []filter{
 		{"is:live", "Live sessions"},
-		{"is:busy", "Busy (responding) sessions"},
+		{"is:busy", "Busy sessions"},
 		{"is:wt", "Worktree sessions"},
 		{"is:team", "Team sessions"},
-		{"has:mem", "Sessions with memory"},
-		{"has:todo", "Sessions with todos"},
-		{"has:task", "Sessions with tasks"},
-		{"has:plan", "Sessions with plans"},
-		{"has:agent", "Sessions with subagents"},
-		{"has:compact", "Sessions with compaction"},
-		{"has:skill", "Sessions with skills"},
-		{"has:mcp", "Sessions with MCP tools"},
-		{"team:<name>", "Filter by team name"},
+		{"has:mem", "With memory"},
+		{"has:todo", "With todos"},
+		{"has:task", "With tasks"},
+		{"has:plan", "With plans"},
+		{"has:agent", "With subagents"},
+		{"has:compact", "With compaction"},
+		{"has:skill", "With skills"},
+		{"has:mcp", "With MCP tools"},
+		{"team:<name>", "By team name"},
+		{"is:fork", "Forked sessions"},
 	}
-	for _, f := range filters {
-		sb.WriteString(fmt.Sprintf("    %-14s %s\n", f.filter, dimStyle.Render(f.desc)))
+	for i := 0; i < len(allFilters); i += 2 {
+		f := allFilters[i]
+		left := fmt.Sprintf(" %-13s %s", f.filter, d.Render(fmt.Sprintf("%-17s", f.desc)))
+		if i+1 < len(allFilters) {
+			f2 := allFilters[i+1]
+			right := fmt.Sprintf(" %-13s %s", f2.filter, d.Render(f2.desc))
+			sb.WriteString(left + right + "\n")
+		} else {
+			sb.WriteString(left + "\n")
+		}
 	}
 
-	sb.WriteString("\n" + headerStyle.Render("  Keybindings") + "\n")
+	// Keybindings: single column but concise descriptions
+	sb.WriteString("\n" + headerStyle.Render(" Keybindings") + "\n")
+	sk := km.Session
 	keys := []struct{ key, desc string }{
-		{"↵ / →", "Open session / preview"},
-		{"esc / ←", "Go back / close overlay"},
-		{"g", "Open project directory"},
-		{"e", "Edit session files"},
-		{"x", "Actions menu (delete, move, worktree)"},
-		{"/", "Search / filter sessions"},
-		{"G", "Cycle grouping (flat → project → tree)"},
-		{"S", "Global stats"},
-		{"R", "Refresh session list"},
-		{"tab", "Toggle/cycle preview mode"},
-		{"L", "Live popup (tmux)"},
-		{"?", "This help screen"},
-		{"q", "Quit"},
+		{displayKey(sk.Open) + " / " + displayKey(sk.Right), "Open / preview"},
+		{displayKey(sk.Escape) + " / " + displayKey(sk.Left), "Back / close"},
+		{displayKey(sk.Edit), "Edit session files"},
+		{displayKey(sk.Actions), "Actions (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Move) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.Worktree) + "/" + displayKey(km.Actions.Kill) + "/" + displayKey(km.Actions.Input) + "/" + displayKey(km.Actions.Jump) + ")"},
+		{displayKey(sk.Search), "Search / filter"},
+		{displayKey(sk.Group), "Group (flat→proj→tree→chain)"},
+		{displayKey(km.Views.Stats), "Global stats"},
+		{displayKey(sk.Refresh), "Refresh list"},
+		{displayKey(sk.Preview), "Cycle preview mode"},
+		{displayKey(sk.Live), "Live preview (^Q:unfocus)"},
+		{displayKey(sk.Select), "Toggle multi-select"},
+		{displayKey(sk.Help), "This help"},
+		{displayKey(sk.Quit), "Quit"},
 	}
 	for _, k := range keys {
-		sb.WriteString(fmt.Sprintf("    %-14s %s\n", k.key, dimStyle.Render(k.desc)))
+		sb.WriteString(fmt.Sprintf(" %-12s %s\n", k.key, d.Render(k.desc)))
 	}
 
-	text := sb.String()
-	lines := strings.Split(text, "\n")
-	// Pad to fill height
-	for len(lines) < height {
-		lines = append(lines, "")
+	body := strings.TrimRight(sb.String(), "\n")
+	bodyLines := strings.Split(body, "\n")
+
+	// Modal dimensions: fit content with padding, capped to screen
+	modalW := 60
+	if modalW > screenW-4 {
+		modalW = screenW - 4
 	}
-	if len(lines) > height {
-		lines = lines[:height]
+	modalH := len(bodyLines) + 2 // +2 for top/bottom border
+	if modalH > screenH-2 {
+		modalH = screenH - 2
+		bodyLines = bodyLines[:modalH-2]
+		body = strings.Join(bodyLines, "\n")
 	}
-	return strings.Join(lines, "\n")
+
+	modalStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorPrimary).
+		Width(modalW).
+		Padding(0, 1)
+
+	modal := modalStyle.Render(body)
+
+	return overlayCenter(bg, modal, screenW, screenH)
+}
+
+// renderFullTextModal renders a scrollable modal showing the full text of a
+// conversation entry, overlaid on bg.
+func renderFullTextModal(bg, text string, scroll, screenW, screenH int) string {
+	// Modal size: 80% of screen, capped
+	modalW := min(screenW*4/5, screenW-6)
+	if modalW < 20 {
+		modalW = screenW - 4
+	}
+	innerW := modalW - 4 // border(2) + padding(2)
+
+	wrapped := wrapText(text, innerW)
+	lines := strings.Split(wrapped, "\n")
+
+	// Visible height inside modal (reserve border + title)
+	innerH := min(screenH*3/4, screenH-4)
+	bodyH := innerH - 1 // 1 line for title
+
+	// Clamp scroll
+	maxScroll := max(len(lines)-bodyH, 0)
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	// Slice visible lines
+	end := min(scroll+bodyH, len(lines))
+	visible := lines[scroll:end]
+
+	// Title with scroll indicator
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
+	title := titleStyle.Render(" Full Text")
+	if len(lines) > bodyH {
+		pct := 0
+		if maxScroll > 0 {
+			pct = scroll * 100 / maxScroll
+		}
+		title += dimStyle.Render(fmt.Sprintf("  (%d%%)", pct))
+	}
+
+	body := title + "\n" + strings.Join(visible, "\n")
+
+	modalStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorPrimary).
+		Width(modalW).
+		Padding(0, 1)
+
+	modal := modalStyle.Render(body)
+	return overlayCenter(bg, modal, screenW, screenH)
+}
+
+// overlayCenter places fg (the modal) centered on top of bg, preserving bg
+// content outside the modal area.
+func overlayCenter(bg, fg string, width, height int) string {
+	bgLines := strings.Split(bg, "\n")
+	fgLines := strings.Split(fg, "\n")
+
+	// Pad bg to full height
+	for len(bgLines) < height {
+		bgLines = append(bgLines, "")
+	}
+
+	fgH := len(fgLines)
+	fgW := 0
+	for _, l := range fgLines {
+		if w := lipgloss.Width(l); w > fgW {
+			fgW = w
+		}
+	}
+
+	// Center offsets
+	startY := (height - fgH) / 2
+	startX := (width - fgW) / 2
+	if startY < 0 {
+		startY = 0
+	}
+	if startX < 0 {
+		startX = 0
+	}
+
+	for i, fgLine := range fgLines {
+		bgIdx := startY + i
+		if bgIdx >= len(bgLines) {
+			break
+		}
+		bgLines[bgIdx] = overlayLine(bgLines[bgIdx], fgLine, startX, width)
+	}
+
+	// Trim to height
+	if len(bgLines) > height {
+		bgLines = bgLines[:height]
+	}
+	return strings.Join(bgLines, "\n")
+}
+
+// overlayLine replaces a portion of bgLine starting at col with fgLine,
+// handling ANSI escape sequences properly.
+func overlayLine(bgLine, fgLine string, col, maxWidth int) string {
+	bgCells := splitANSICells(bgLine)
+	fgW := lipgloss.Width(fgLine)
+
+	// Pad bg cells to reach col
+	for len(bgCells) < col+fgW && len(bgCells) < maxWidth {
+		bgCells = append(bgCells, " ")
+	}
+
+	// Build result: bg[:col] + fg + bg[col+fgW:]
+	var sb strings.Builder
+	// Left portion of bg
+	for i := 0; i < col && i < len(bgCells); i++ {
+		sb.WriteString(bgCells[i])
+	}
+	// Modal line
+	sb.WriteString(fgLine)
+	// Right portion of bg
+	for i := col + fgW; i < len(bgCells); i++ {
+		sb.WriteString(bgCells[i])
+	}
+	return sb.String()
+}
+
+// splitANSICells splits a string into per-cell chunks, each containing the
+// character plus any preceding ANSI escape sequences. This allows replacing
+// cells while preserving styling of surrounding content.
+func splitANSICells(s string) []string {
+	var cells []string
+	var pending strings.Builder // accumulates ANSI escapes before next printable
+	inEsc := false
+
+	for _, r := range s {
+		if r == '\x1b' {
+			inEsc = true
+			pending.WriteRune(r)
+			continue
+		}
+		if inEsc {
+			pending.WriteRune(r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '~' {
+				inEsc = false
+			}
+			continue
+		}
+		pending.WriteRune(r)
+		cells = append(cells, pending.String())
+		pending.Reset()
+	}
+	// Trailing escapes (no printable after them) — attach to last cell or discard
+	if pending.Len() > 0 {
+		if len(cells) > 0 {
+			cells[len(cells)-1] += pending.String()
+		}
+	}
+	return cells
 }

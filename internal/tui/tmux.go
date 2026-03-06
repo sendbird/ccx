@@ -369,17 +369,116 @@ func tmuxPromptAndSend(p tmuxPane, promptText string) error {
 	return exec.Command("tmux", "command-prompt", "-p", promptText, sendCmd).Run()
 }
 
-// tmuxCapturePane captures the content of a tmux pane including scrollback.
+// tmuxCapturePane captures the visible content of a tmux pane.
+// Does NOT include scrollback — use tmux copy mode to scroll back.
 func tmuxCapturePane(p tmuxPane) (string, error) {
 	target := p.Session + ":" + p.Window + "." + p.Pane
-	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-t", target, "-S", "-").Output()
+	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-t", target).Output()
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimRight(string(out), "\n"), nil
 }
 
+// tmuxCopyModeScroll enters tmux copy mode (if not already in it) and scrolls.
+// direction: "page-up", "page-down", "halfpage-up", "halfpage-down",
+// "scroll-up", "scroll-down", "cancel" (exit copy mode).
+func tmuxCopyModeScroll(p tmuxPane, direction string) {
+	target := p.Session + ":" + p.Window + "." + p.Pane
+	if direction == "cancel" {
+		exec.Command("tmux", "send-keys", "-t", target, "-X", "cancel").Run()
+		return
+	}
+	// Enter copy mode (idempotent if already in it)
+	exec.Command("tmux", "copy-mode", "-t", target).Run()
+	exec.Command("tmux", "send-keys", "-t", target, "-X", direction).Run()
+}
 
+
+
+// teaKeyToTmux maps a Bubble Tea key string to tmux send-keys argument(s).
+// Returns (tmuxKey, literal). If literal is true, use send-keys -l.
+func teaKeyToTmux(key string) (string, bool) {
+	switch key {
+	case "enter":
+		return "Enter", false
+	case "backspace":
+		return "BSpace", false
+	case "tab":
+		return "Tab", false
+	case "space", " ":
+		return "Space", false
+	case "up":
+		return "Up", false
+	case "down":
+		return "Down", false
+	case "left":
+		return "Left", false
+	case "right":
+		return "Right", false
+	case "home":
+		return "Home", false
+	case "end":
+		return "End", false
+	case "pgup":
+		return "PageUp", false
+	case "pgdown":
+		return "PageDown", false
+	case "delete":
+		return "DC", false
+	case "esc":
+		return "Escape", false
+	case "ctrl+c":
+		return "C-c", false
+	case "ctrl+d":
+		return "C-d", false
+	case "ctrl+z":
+		return "C-z", false
+	case "ctrl+l":
+		return "C-l", false
+	case "ctrl+a":
+		return "C-a", false
+	case "ctrl+e":
+		return "C-e", false
+	case "ctrl+r":
+		return "C-r", false
+	case "ctrl+w":
+		return "C-w", false
+	case "ctrl+u":
+		return "C-u", false
+	case "ctrl+k":
+		return "C-k", false
+	case "ctrl+p":
+		return "C-p", false
+	case "ctrl+n":
+		return "C-n", false
+	default:
+		// Single printable rune → send literally
+		if len(key) == 1 {
+			return key, true
+		}
+		return "", false
+	}
+}
+
+// tmuxSendSingleKey sends a single key event to a tmux pane.
+func tmuxSendSingleKey(p tmuxPane, key string) error {
+	tmuxKey, literal := teaKeyToTmux(key)
+	if tmuxKey == "" {
+		return nil // unsupported key, ignore
+	}
+	target := p.Session + ":" + p.Window + "." + p.Pane
+	if literal {
+		return exec.Command("tmux", "send-keys", "-l", "-t", target, tmuxKey).Run()
+	}
+	return exec.Command("tmux", "send-keys", "-t", target, tmuxKey).Run()
+}
+
+// tmuxKillWindow kills the tmux window containing the given pane.
+func tmuxKillWindow(p tmuxPane) error {
+	target := p.Session + ":" + p.Window
+	return exec.Command("tmux", "kill-window", "-t", target).Run()
+}
 
 // shellQuote wraps a string in single quotes for safe shell embedding.
 func shellQuote(s string) string {
