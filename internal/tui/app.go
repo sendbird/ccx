@@ -1964,6 +1964,33 @@ func shellescape(s string) string {
 
 // --- Live refresh ---
 
+// refreshRespondingState re-checks IsResponding for live sessions by stat-ing
+// their JSONL files. Updates the list if any badge changed.
+func (a *App) refreshRespondingState() {
+	changed := false
+	for i := range a.sessions {
+		if !a.sessions[i].IsLive {
+			if a.sessions[i].IsResponding {
+				a.sessions[i].IsResponding = false
+				changed = true
+			}
+			continue
+		}
+		info, err := os.Stat(a.sessions[i].FilePath)
+		if err != nil {
+			continue
+		}
+		wasResponding := a.sessions[i].IsResponding
+		a.sessions[i].IsResponding = time.Since(info.ModTime()) < 10*time.Second
+		if a.sessions[i].IsResponding != wasResponding {
+			changed = true
+		}
+	}
+	if changed && !a.isFiltering() && !a.hasFilterApplied() {
+		a.rebuildSessionList()
+	}
+}
+
 func (a *App) handleTick() tea.Cmd {
 	// Always refresh conversation preview for live sessions (regardless of liveUpdate)
 	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
@@ -1972,6 +1999,12 @@ func (a *App) handleTick() tea.Cmd {
 			_ = a.updateSessionPreview() // conversation mode returns nil cmd
 		}
 	}
+	// Always re-check IsResponding for live sessions (cheap os.Stat check).
+	// Without this, BUSY badges go stale when liveUpdate is off.
+	if a.state == viewSessions {
+		a.refreshRespondingState()
+	}
+
 	if !a.liveUpdate {
 		return nil
 	}
