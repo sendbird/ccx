@@ -77,9 +77,10 @@ func capturePaneCmd(p tmuxPane) tea.Cmd {
 
 // paneProxyState holds state for both live preview and shell-in-preview.
 type paneProxyState struct {
-	pane    tmuxPane
-	sessID  string // non-empty for live Claude preview, empty for shell
-	isShell bool   // true = we spawned this pane, must kill on close
+	pane     tmuxPane
+	sessID   string // non-empty for live Claude preview, empty for shell
+	isShell  bool   // true = we spawned this pane, must kill on close
+	scrolled bool   // true = user scrolled up in copy mode, don't snap to bottom
 }
 
 type viewState int
@@ -430,7 +431,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		} else {
 			a.sessSplit.Preview.SetContent(msg.content)
-			a.sessSplit.Preview.GotoBottom()
+			if !a.paneProxy.scrolled {
+				a.sessSplit.Preview.GotoBottom()
+			}
 		}
 		return a, nil
 
@@ -834,15 +837,20 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "ctrl+q":
 			tmuxCopyModeScroll(a.paneProxy.pane, "cancel")
+			a.paneProxy.scrolled = false
 			sp.Focus = false
 			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
 		case "pgup", "ctrl+b":
+			a.paneProxy.scrolled = true
 			return a, a.liveScrollCmd("page-up")
 		case "pgdown", "ctrl+f":
+			a.paneProxy.scrolled = true
 			return a, a.liveScrollCmd("page-down")
 		case "ctrl+u":
+			a.paneProxy.scrolled = true
 			return a, a.liveScrollCmd("halfpage-up")
 		case "ctrl+d":
+			a.paneProxy.scrolled = true
 			return a, a.liveScrollCmd("halfpage-down")
 		}
 		return a.handlePaneProxyKey(key)
@@ -969,6 +977,10 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation {
 			// Delegate to conversation handler (collapse), fall through below
 		} else if sp.Focus && sp.Show {
+			if a.paneProxy != nil && a.paneProxy.scrolled {
+				tmuxCopyModeScroll(a.paneProxy.pane, "cancel")
+				a.paneProxy.scrolled = false
+			}
 			sp.Focus = false
 			return a, nil
 		} else if !sp.Focus && sp.Show {
