@@ -77,10 +77,9 @@ func capturePaneCmd(p tmuxPane) tea.Cmd {
 
 // paneProxyState holds state for both live preview and shell-in-preview.
 type paneProxyState struct {
-	pane     tmuxPane
-	sessID   string // non-empty for live Claude preview, empty for shell
-	isShell  bool   // true = we spawned this pane, must kill on close
-	scrolled bool   // true = user scrolled up in copy mode, don't snap to bottom
+	pane    tmuxPane
+	sessID  string // non-empty for live Claude preview, empty for shell
+	isShell bool   // true = we spawned this pane, must kill on close
 }
 
 type viewState int
@@ -431,9 +430,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		} else {
 			a.sessSplit.Preview.SetContent(msg.content)
-			if !a.paneProxy.scrolled {
-				a.sessSplit.Preview.GotoBottom()
-			}
+			a.sessSplit.Preview.GotoBottom()
 		}
 		return a, nil
 
@@ -534,7 +531,7 @@ func (a *App) View() string {
 			// Pane proxy focused: show proxy-specific help with indicator
 			if a.sessSplit.Focus && a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive {
 				indicator := a.paneProxyIndicator()
-				h := "keys→pane pgup/dn:scroll ^U/D:half ^Q:unfocus"
+				h := "keys→pane J/↵:jump ^Q:unfocus"
 				help = "  " + indicator + " " + formatHelp(h)
 			} else if a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive && !a.sessSplit.Focus {
 				indicator := a.paneProxyIndicator()
@@ -832,27 +829,16 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleWorktreeInput(msg)
 	}
 
-	// Pane proxy focused: local scroll for history, other keys forwarded to tmux
+	// Pane proxy focused: keys forwarded to tmux pane
 	if a.isPaneProxyFocused() {
 		switch key {
 		case "ctrl+q":
-			a.paneProxy.scrolled = false
 			sp.Focus = false
 			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
-		case "pgup", "ctrl+b", "pgdown", "ctrl+f", "ctrl+u", "ctrl+d", "up", "down", "home", "end":
-			// First scroll: fetch scrollback history into viewport
-			if !a.paneProxy.scrolled {
-				a.paneProxy.scrolled = true
-				content, err := tmuxCapturePaneWithScrollback(a.paneProxy.pane)
-				if err == nil {
-					sp.Preview.SetContent(content)
-					sp.Preview.GotoBottom()
-				}
-			}
-			scrollPreview(&sp.Preview, key)
-			// If we scrolled back to bottom, exit scroll mode
-			if sp.Preview.AtBottom() {
-				a.paneProxy.scrolled = false
+		case "J", "enter":
+			// Jump to the actual tmux pane
+			if err := switchToTmuxPane(a.paneProxy.pane); err != nil {
+				a.copiedMsg = "Switch failed"
 			}
 			return a, nil
 		}
@@ -980,9 +966,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation {
 			// Delegate to conversation handler (collapse), fall through below
 		} else if sp.Focus && sp.Show {
-			if a.paneProxy != nil {
-				a.paneProxy.scrolled = false
-			}
 			sp.Focus = false
 			return a, nil
 		} else if !sp.Focus && sp.Show {

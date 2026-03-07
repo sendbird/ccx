@@ -108,24 +108,8 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch a.state {
 	case viewSessions:
-		// Live preview: scroll locally with scrollback
+		// Live preview: no local scroll, use J/enter to jump to pane for scrollback
 		if scrolledPreview && a.sessPreviewMode == sessPreviewLive && a.paneProxy != nil {
-			if !a.paneProxy.scrolled {
-				a.paneProxy.scrolled = true
-				content, err := tmuxCapturePaneWithScrollback(a.paneProxy.pane)
-				if err == nil {
-					a.sessSplit.Preview.SetContent(content)
-					a.sessSplit.Preview.GotoBottom()
-				}
-			}
-			if up {
-				scrollPreview(&a.sessSplit.Preview, "up")
-			} else {
-				scrollPreview(&a.sessSplit.Preview, "down")
-			}
-			if a.sessSplit.Preview.AtBottom() {
-				a.paneProxy.scrolled = false
-			}
 			return a, nil
 		}
 		a.sessSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
