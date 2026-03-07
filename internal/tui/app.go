@@ -429,11 +429,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.sessPreviewMode = sessPreviewConversation
 			a.sessSplit.CacheKey = ""
 			return a, nil
-		} else {
+		} else if !a.paneProxy.scrolled {
 			a.sessSplit.Preview.SetContent(msg.content)
-			if !a.paneProxy.scrolled {
-				a.sessSplit.Preview.GotoBottom()
-			}
+			a.sessSplit.Preview.GotoBottom()
 		}
 		return a, nil
 
@@ -837,8 +835,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "ctrl+q":
 			if a.paneProxy.scrolled {
-				// Exit copy mode on remote pane, resume normal capture
-				tmuxCopyModeScroll(a.paneProxy.pane, "cancel")
 				a.paneProxy.scrolled = false
 				return a, capturePaneCmd(a.paneProxy.pane)
 			}
@@ -846,21 +842,32 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
 		case "ctrl+g":
 			// Jump to the actual tmux pane
-			if a.paneProxy.scrolled {
-				tmuxCopyModeScroll(a.paneProxy.pane, "cancel")
-				a.paneProxy.scrolled = false
-			}
+			a.paneProxy.scrolled = false
 			if err := switchToTmuxPane(a.paneProxy.pane); err != nil {
 				a.copiedMsg = "Switch failed"
 			}
 			return a, nil
 		case "ctrl+b", "ctrl+f":
-			// Scroll remote pane via tmux copy mode, then capture
-			a.paneProxy.scrolled = true
-			if key == "ctrl+b" {
-				return a, a.liveScrollCmd("page-up")
+			// Fetch scrollback on first scroll, then scroll local viewport
+			if !a.paneProxy.scrolled {
+				a.paneProxy.scrolled = true
+				content, err := tmuxCapturePaneWithScrollback(a.paneProxy.pane)
+				if err == nil {
+					sp.Preview.SetContent(content)
+					maxOff := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
+					sp.Preview.SetYOffset(maxOff)
+				}
 			}
-			return a, a.liveScrollCmd("page-down")
+			if key == "ctrl+b" {
+				sp.Preview.SetYOffset(max(sp.Preview.YOffset-sp.Preview.Height, 0))
+			} else {
+				maxOff := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
+				sp.Preview.SetYOffset(min(sp.Preview.YOffset+sp.Preview.Height, maxOff))
+			}
+			if sp.Preview.AtBottom() {
+				a.paneProxy.scrolled = false
+			}
+			return a, nil
 		case "shift+enter":
 			// Send backslash + enter for multi-line input in Claude
 			return a, a.liveNewlineCmd()
@@ -1066,20 +1073,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, previewCmd)
 	}
 	return m, cmd
-}
-
-// liveScrollCmd sends a tmux copy-mode scroll command and re-captures the pane.
-func (a *App) liveScrollCmd(direction string) tea.Cmd {
-	pane := a.paneProxy.pane
-	return func() tea.Msg {
-		tmuxCopyModeScroll(pane, direction)
-		time.Sleep(50 * time.Millisecond)
-		content, err := tmuxCapturePane(pane)
-		if err != nil || !hasClaude(pane.PID) {
-			return liveCaptureMsg{failed: true}
-		}
-		return liveCaptureMsg{content: content}
-	}
 }
 
 // handlePaneProxyKey forwards a key to the tmux pane and captures the result.
