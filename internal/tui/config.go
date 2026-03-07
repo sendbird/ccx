@@ -296,7 +296,7 @@ func (a *App) updateConfigPreview() {
 
 	// Highlight search matches in preview and scroll to first match
 	if a.cfgSearchTerm != "" {
-		wrapped = highlightSearchMatches(wrapped, a.cfgSearchTerm)
+		wrapped = highlightSearchMatches(wrapped, a.cfgSearchTerm, -1)
 		// Scroll to first occurrence
 		lower := strings.ToLower(content)
 		lowerTerm := strings.ToLower(a.cfgSearchTerm)

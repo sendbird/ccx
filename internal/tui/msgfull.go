@@ -180,7 +180,7 @@ func (a *App) refreshMsgFullPreview() {
 	oldOffset := a.msgFull.vp.YOffset
 	content := rp.content
 	if a.msgFull.searchTerm != "" {
-		content = highlightSearchMatches(content, a.msgFull.searchTerm)
+		content = highlightSearchMatches(content, a.msgFull.searchTerm, a.msgFullCurrentMatchLine())
 	}
 	a.msgFull.vp.SetContent(content)
 
@@ -424,7 +424,7 @@ func (a *App) commitMsgFullSearch() {
 
 	// Apply search highlighting
 	if a.msgFull.allMessages {
-		content := highlightSearchMatches(a.msgFull.content, term)
+		content := highlightSearchMatches(a.msgFull.content, term, a.msgFullCurrentMatchLine())
 		a.msgFull.vp.SetContent(content)
 	} else {
 		a.refreshMsgFullPreview()
@@ -455,9 +455,21 @@ func (a *App) clearMsgFullSearch() {
 }
 
 // buildMsgFullSearchMatches finds all lines matching the search term.
+// It scans the given content (the same content set on the viewport,
+// before highlight wrapping) so line numbers match what's displayed.
 func (a *App) buildMsgFullSearchMatches() {
 	term := strings.ToLower(a.msgFull.searchTerm)
-	fullPlain := stripANSI(a.msgFull.content)
+	// For single-message view, get the current rendered content
+	// (with cursor/folds) to match actual viewport line numbers.
+	var source string
+	if a.msgFull.allMessages {
+		source = a.msgFull.content
+	} else {
+		fs := &a.msgFull.folds
+		rp := renderFullMessageWithCursor(fs.Entry, a.width, fs.Collapsed, fs.Formatted, fs.BlockCursor)
+		source = rp.content
+	}
+	fullPlain := stripANSI(source)
 	lines := strings.Split(fullPlain, "\n")
 	a.msgFull.searchLines = nil
 	for i, line := range lines {
@@ -527,20 +539,42 @@ func (a *App) prevMsgFullSearchMatch() {
 	a.scrollToSearchMatch()
 }
 
-// scrollToSearchMatch scrolls viewport to show the current search match.
+// scrollToSearchMatch re-renders highlights and scrolls viewport to show the current search match.
 func (a *App) scrollToSearchMatch() {
 	if a.msgFull.searchIdx < 0 || a.msgFull.searchIdx >= len(a.msgFull.searchLines) {
 		return
 	}
+
+	// Re-render content with updated current-match highlight
+	currentLine := a.msgFullCurrentMatchLine()
+	if a.msgFull.allMessages {
+		content := highlightSearchMatches(a.msgFull.content, a.msgFull.searchTerm, currentLine)
+		a.msgFull.vp.SetContent(content)
+	} else {
+		fs := &a.msgFull.folds
+		rp := renderFullMessageWithCursor(fs.Entry, a.width, fs.Collapsed, fs.Formatted, fs.BlockCursor)
+		fs.BlockStarts = rp.blockStarts
+		content := highlightSearchMatches(rp.content, a.msgFull.searchTerm, currentLine)
+		a.msgFull.vp.SetContent(content)
+	}
+
 	line := a.msgFull.searchLines[a.msgFull.searchIdx]
-	maxOffset := max(a.msgFull.vp.TotalLineCount()-a.msgFull.vp.Height, 0)
-	target := min(max(line-a.msgFull.vp.Height/3, 0), maxOffset)
-	a.msgFull.vp.YOffset = target
+	target := max(line-a.msgFull.vp.Height/3, 0)
+	a.msgFull.vp.SetYOffset(target)
+}
+
+// msgFullCurrentMatchLine returns the line number of the current search match, or -1.
+func (a *App) msgFullCurrentMatchLine() int {
+	if len(a.msgFull.searchLines) == 0 || a.msgFull.searchIdx < 0 || a.msgFull.searchIdx >= len(a.msgFull.searchLines) {
+		return -1
+	}
+	return a.msgFull.searchLines[a.msgFull.searchIdx]
 }
 
 // highlightSearchMatches wraps occurrences of the search term with a
 // highlight background in the rendered viewport content.
-func highlightSearchMatches(content, term string) string {
+// currentLine is the line number of the active match (-1 for no active highlight).
+func highlightSearchMatches(content, term string, currentLine int) string {
 	if term == "" {
 		return content
 	}
@@ -551,15 +585,19 @@ func highlightSearchMatches(content, term string) string {
 		if !strings.Contains(strings.ToLower(plain), lowerTerm) {
 			continue
 		}
-		lines[i] = highlightLine(line, term)
+		lines[i] = highlightLine(line, term, i == currentLine)
 	}
 	return strings.Join(lines, "\n")
 }
 
 // highlightLine inserts ANSI highlight escapes around case-insensitive matches
 // in a line that may contain existing ANSI sequences.
-func highlightLine(line, term string) string {
-	const hlStart = "\x1b[43;30m" // yellow bg, black fg
+// If isCurrent is true, uses a brighter style for the active match line.
+func highlightLine(line, term string, isCurrent bool) string {
+	hlStart := "\x1b[43;30m" // yellow bg, black fg
+	if isCurrent {
+		hlStart = "\x1b[46;30m" // cyan bg, black fg (current match)
+	}
 	const hlEnd = "\x1b[0m"
 
 	lowerTerm := strings.ToLower(term)
