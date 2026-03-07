@@ -534,7 +534,7 @@ func (a *App) View() string {
 			// Pane proxy focused: show proxy-specific help with indicator
 			if a.sessSplit.Focus && a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive {
 				indicator := a.paneProxyIndicator()
-				h := "keys→pane ^↑↓:scroll ^J:jump ^Q:unfocus S-↵:newline"
+				h := "keys→pane ^B/F:scroll ^J:jump ^Q:unfocus S-↵:newline"
 				help = "  " + indicator + " " + formatHelp(h)
 			} else if a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive && !a.sessSplit.Focus {
 				indicator := a.paneProxyIndicator()
@@ -845,8 +845,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.copiedMsg = "Switch failed"
 			}
 			return a, nil
-		case "ctrl+up", "ctrl+down":
-			// Local viewport scroll with scrollback
+		case "ctrl+b", "ctrl+f":
+			// Local viewport scroll with scrollback (page up/down)
 			if !a.paneProxy.scrolled {
 				a.paneProxy.scrolled = true
 				content, err := tmuxCapturePaneWithScrollback(a.paneProxy.pane)
@@ -855,10 +855,10 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					sp.Preview.GotoBottom()
 				}
 			}
-			if key == "ctrl+up" {
-				scrollPreview(&sp.Preview, "up")
+			if key == "ctrl+b" {
+				scrollPreview(&sp.Preview, "pgup")
 			} else {
-				scrollPreview(&sp.Preview, "down")
+				scrollPreview(&sp.Preview, "pgdown")
 			}
 			if sp.Preview.AtBottom() {
 				a.paneProxy.scrolled = false
