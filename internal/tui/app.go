@@ -205,6 +205,7 @@ const (
 
 // Config holds application configuration from CLI flags.
 type Config struct {
+	ClaudeDir    string // path to Claude data directory (e.g. ~/.claude)
 	TmuxEnabled  bool   // enable tmux integration (I, J, live modal)
 	TmuxAutoLive bool   // auto-enter live session in same tmux window on startup
 	WorktreeDir  string // subdirectory name for worktrees (default ".worktree")
@@ -1090,6 +1091,9 @@ func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
 		a.copiedMsg = "Delete failed: " + err.Error()
 		return a, nil
 	}
+	os.RemoveAll(filepath.Join(filepath.Dir(sess.FilePath), sess.ID))
+	os.RemoveAll(filepath.Join(a.config.ClaudeDir, "file-history", sess.ID))
+	os.RemoveAll(filepath.Join(a.config.ClaudeDir, "tasks", sess.ID))
 
 	// Remove from in-memory list and update the list widget
 	idx := a.sessionList.Index()

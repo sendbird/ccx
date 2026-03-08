@@ -42,6 +42,17 @@ func main() {
 		os.Exit(0)
 	}
 
+	if claudeDir == "" {
+		claudeDir = os.Getenv("CLAUDE_CONFIG_DIR")
+	}
+	if claudeDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		claudeDir = home + "/.claude"
+	}
 	sessions, err := session.ScanSessions(claudeDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error scanning sessions: %v\n", err)
@@ -63,6 +74,7 @@ func main() {
 	}
 
 	app := tui.NewApp(sessions, tui.Config{
+		ClaudeDir:    claudeDir,
 		TmuxEnabled:  tmuxEnabled,
 		TmuxAutoLive: tmuxAutoLive,
 		WorktreeDir:  worktreeDir,

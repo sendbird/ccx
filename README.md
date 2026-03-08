@@ -26,6 +26,11 @@ ccx              # launch TUI
 ccx --version    # print version
 ```
 
+The Claude data directory is resolved in this order:
+1. `--dir` flag
+2. `CLAUDE_CONFIG_DIR` environment variable
+3. `~/.claude` (default)
+
 ## Features
 
 ### Session Browser
