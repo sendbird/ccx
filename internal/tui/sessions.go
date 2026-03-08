@@ -973,8 +973,37 @@ func overlayCenter(bg, fg string, width, height int) string {
 	return strings.Join(bgLines, "\n")
 }
 
+// placeHintBox overlays hint box lines onto the bottom of content,
+// preserving background content on both sides of the box.
+func placeHintBox(content, hintBox string) string {
+	contentLines := strings.Split(content, "\n")
+	boxLines := strings.Split(hintBox, "\n")
+	startY := len(contentLines) - len(boxLines)
+	if startY < 0 {
+		startY = 0
+	}
+	// Find max width of content for overlay
+	maxW := 0
+	for _, l := range contentLines {
+		if w := lipgloss.Width(l); w > maxW {
+			maxW = w
+		}
+	}
+	if maxW == 0 {
+		maxW = 120
+	}
+	for i, bl := range boxLines {
+		y := startY + i
+		if y < len(contentLines) {
+			contentLines[y] = overlayLine(contentLines[y], bl, 1, maxW)
+		}
+	}
+	return strings.Join(contentLines, "\n")
+}
+
 // overlayLine replaces a portion of bgLine starting at col with fgLine,
-// handling ANSI escape sequences properly.
+// handling ANSI escape sequences properly. After the overlay, it restores
+// the background's ANSI state so right-side cells keep their styling.
 func overlayLine(bgLine, fgLine string, col, maxWidth int) string {
 	bgCells := splitANSICells(bgLine)
 	fgW := lipgloss.Width(fgLine)
@@ -984,16 +1013,47 @@ func overlayLine(bgLine, fgLine string, col, maxWidth int) string {
 		bgCells = append(bgCells, " ")
 	}
 
-	// Build result: bg[:col] + fg + bg[col+fgW:]
+	// Find the last active ANSI SGR sequence at the splice point by scanning
+	// bg cells that will be replaced. Track last non-reset SGR to restore.
+	spliceEnd := col + fgW
+	if spliceEnd > len(bgCells) {
+		spliceEnd = len(bgCells)
+	}
+	lastSGR := "" // last SGR escape (e.g. "\x1b[38;2;...m")
+	for i := 0; i < spliceEnd; i++ {
+		cell := bgCells[i]
+		// Extract ANSI SGR sequences from this cell
+		for j := 0; j < len(cell); j++ {
+			if cell[j] == '\x1b' && j+1 < len(cell) && cell[j+1] == '[' {
+				// Find end of escape
+				k := j + 2
+				for k < len(cell) && !((cell[k] >= 'A' && cell[k] <= 'Z') || (cell[k] >= 'a' && cell[k] <= 'z')) {
+					k++
+				}
+				if k < len(cell) && cell[k] == 'm' {
+					seq := cell[j : k+1]
+					if seq == "\x1b[0m" {
+						lastSGR = "" // reset clears state
+					} else {
+						lastSGR = seq
+					}
+				}
+				j = k
+			}
+		}
+	}
+
+	// Build result: bg[:col] + fg + reset + restore_bg_state + bg[col+fgW:]
 	var sb strings.Builder
-	// Left portion of bg
 	for i := 0; i < col && i < len(bgCells); i++ {
 		sb.WriteString(bgCells[i])
 	}
-	// Modal line (reset ANSI after to prevent bleed into bg)
 	sb.WriteString(fgLine)
 	sb.WriteString("\x1b[0m")
-	// Right portion of bg
+	// Restore the bg ANSI state for right-side cells that inherit styling
+	if lastSGR != "" {
+		sb.WriteString(lastSGR)
+	}
 	for i := col + fgW; i < len(bgCells); i++ {
 		sb.WriteString(bgCells[i])
 	}
