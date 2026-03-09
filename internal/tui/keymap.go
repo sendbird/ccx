@@ -35,6 +35,7 @@ type ActionsKeymap struct {
 	Delete   string `yaml:"delete"`
 	Move     string `yaml:"move"`
 	Resume   string `yaml:"resume"`
+	CopyPath string `yaml:"copy_path"`
 	Worktree string `yaml:"worktree"`
 	Kill     string `yaml:"kill"`
 	Input    string `yaml:"input"`
@@ -96,6 +97,7 @@ func DefaultKeymap() Keymap {
 			Delete:   "d",
 			Move:     "m",
 			Resume:   "r",
+			CopyPath: "y",
 			Worktree: "w",
 			Kill:     "k",
 			Input:    "i",
@@ -209,6 +211,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Actions.Resume != "" {
 		dst.Actions.Resume = src.Actions.Resume
+	}
+	if src.Actions.CopyPath != "" {
+		dst.Actions.CopyPath = src.Actions.CopyPath
 	}
 	if src.Actions.Worktree != "" {
 		dst.Actions.Worktree = src.Actions.Worktree

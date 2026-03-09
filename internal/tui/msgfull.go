@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -115,6 +116,8 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		copyToClipboard(stripANSI(a.msgFull.content))
 		a.copiedMsg = "Copied!"
 		return a, nil
+	case "L":
+		return a.toggleLiveTail()
 	case "/":
 		if a.msgFull.allMessages {
 			a.startMsgFullSearch()
@@ -189,6 +192,80 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return a, nil
+}
+
+// handleLiveTailMsgFull refreshes the message detail view during live tail.
+// Re-loads messages from disk; if the current message (typically the last one)
+// has new content blocks, grow the fold state and scroll to the bottom.
+func (a *App) handleLiveTailMsgFull() {
+	oldMergedLen := len(a.msgFull.merged)
+	oldIdx := a.msgFull.idx
+	entries, err := session.LoadMessages(a.msgFull.sess.FilePath)
+	if err != nil {
+		return
+	}
+	a.msgFull.messages = entries
+	a.msgFull.merged = filterConversation(mergeConversationTurns(entries))
+
+	if len(a.msgFull.merged) == 0 {
+		return
+	}
+
+	if a.msgFull.allMessages {
+		a.msgFull.content = renderAllMessages(a.msgFull.merged, a.width)
+		content := a.msgFull.content
+		if a.msgFull.searchTerm != "" {
+			a.buildMsgFullSearchMatches()
+			content = highlightSearchMatches(content, a.msgFull.searchTerm, a.msgFullCurrentMatchLine())
+		}
+		a.msgFull.vp.SetContent(content)
+		a.msgFull.vp.YOffset = max(a.msgFull.vp.TotalLineCount()-a.msgFull.vp.Height, 0)
+		return
+	}
+
+	// If new messages appeared and we were on the last one, follow to new last
+	wasLast := oldMergedLen == 0 || oldIdx >= oldMergedLen-1
+	if wasLast {
+		a.msgFull.idx = len(a.msgFull.merged) - 1
+	}
+	// Clamp idx
+	if a.msgFull.idx >= len(a.msgFull.merged) {
+		a.msgFull.idx = len(a.msgFull.merged) - 1
+	}
+
+	newEntry := a.msgFull.merged[a.msgFull.idx].entry
+	fs := &a.msgFull.folds
+	oldEntry := fs.Entry
+	oldBlockCount := len(oldEntry.Content)
+	newBlockCount := len(newEntry.Content)
+
+	if newEntry.Role == oldEntry.Role && reflect.DeepEqual(newEntry.Content, oldEntry.Content) {
+		// No change — nothing to update
+		return
+	}
+
+	if oldBlockCount > 0 && newBlockCount > oldBlockCount {
+		// Grow: preserve existing fold state, add defaults for new blocks
+		fs.GrowBlocks(newEntry, oldBlockCount, nil, nil)
+	} else {
+		// Reset (new message or shrunk): full re-init
+		fs.Reset(newEntry)
+	}
+
+	// Re-render and scroll to bottom
+	ro := renderOpts{visible: fs.BlockVisible, hideHooks: fs.HideHooks}
+	rp := renderFullMessageWithCursor(fs.Entry, a.width, fs.Collapsed, fs.Formatted, fs.BlockCursor, ro)
+	fs.BlockStarts = rp.blockStarts
+	a.msgFull.content = rp.content
+	a.msgFull.vp.SetContent(rp.content)
+
+	// Move block cursor to last block and scroll to bottom
+	if len(fs.Entry.Content) > 0 {
+		fs.BlockCursor = len(fs.Entry.Content) - 1
+	}
+	total := a.msgFull.vp.TotalLineCount()
+	maxOffset := max(total-a.msgFull.vp.Height, 0)
+	a.msgFull.vp.YOffset = maxOffset
 }
 
 // refreshMsgFullPreview re-renders the message full viewport.

@@ -137,9 +137,9 @@ func (s sessionItem) FilterValue() string {
 }
 
 type sessionDelegate struct {
-	timeW       int              // max width of time-ago column
-	msgW        int              // max width of message count column
-	selectedSet map[string]bool  // shared reference to App.selectedSet
+	timeW       int             // max width of time-ago column
+	msgW        int             // max width of message count column
+	selectedSet map[string]bool // shared reference to App.selectedSet
 }
 
 func (d sessionDelegate) Height() int                             { return 2 }
@@ -838,7 +838,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap) string {
 		{displayKey(sk.Open) + " / " + displayKey(sk.Right), "Open / preview"},
 		{displayKey(sk.Escape) + " / " + displayKey(sk.Left), "Back / close"},
 		{displayKey(sk.Edit), "Edit session files"},
-		{displayKey(sk.Actions), "Actions (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Move) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.Worktree) + "/" + displayKey(km.Actions.Kill) + "/" + displayKey(km.Actions.Input) + "/" + displayKey(km.Actions.Jump) + ")"},
+		{displayKey(sk.Actions), "Actions (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Move) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.CopyPath) + "/" + displayKey(km.Actions.Worktree) + "/" + displayKey(km.Actions.Kill) + "/" + displayKey(km.Actions.Input) + "/" + displayKey(km.Actions.Jump) + ")"},
 		{displayKey(sk.Search), "Search / filter"},
 		{displayKey(sk.Group), "Group (flat→proj→tree→chain)"},
 		{displayKey(km.Views.Stats), "Global stats"},

@@ -19,7 +19,7 @@ import (
 )
 
 type tickMsg time.Time
-type liveTickMsg time.Time     // slow live capture (2s, unfocused)
+type liveTickMsg time.Time // slow live capture (2s, unfocused)
 type spinnerTickMsg time.Time
 type globalStatsMsg session.GlobalStats
 
@@ -170,14 +170,14 @@ type App struct {
 	sessTasksCacheKey  string
 
 	// Conversation preview state
-	sessConvEntries    []mergedMsg  // merged conversation messages
-	sessConvCursor     int          // current message cursor
-	sessConvCacheID    string       // session ID for which convEntries are loaded
-	sessConvExpanded   map[int]bool // which messages are expanded
-	sessConvSearching  bool             // typing in preview search
+	sessConvEntries     []mergedMsg     // merged conversation messages
+	sessConvCursor      int             // current message cursor
+	sessConvCacheID     string          // session ID for which convEntries are loaded
+	sessConvExpanded    map[int]bool    // which messages are expanded
+	sessConvSearching   bool            // typing in preview search
 	sessConvSearchInput textinput.Model // search input for preview
-	sessConvFiltered   []int            // indices into sessConvEntries matching search
-	sessConvFilterTerm string           // applied filter term
+	sessConvFiltered    []int           // indices into sessConvEntries matching search
+	sessConvFilterTerm  string          // applied filter term
 
 	// Group mode: groupFlat=0, groupProject=1, groupTree=2
 	sessGroupMode   int
@@ -185,8 +185,8 @@ type App struct {
 	liveUpdate      bool // auto-refresh disabled by default
 
 	// Edit file menu
-	editMenu    bool
-	editSess    session.Session
+	editMenu bool
+	editSess session.Session
 
 	// Actions menu (x key)
 	actionsMenu bool
@@ -204,9 +204,9 @@ type App struct {
 	sessConvFullScroll int    // scroll offset in full text modal
 
 	// Move project
-	moveMode      bool
-	moveInput     textinput.Model
-	moveSess      session.Session
+	moveMode  bool
+	moveInput textinput.Model
+	moveSess  session.Session
 
 	// Worktree creation
 	worktreeMode  bool
@@ -230,8 +230,8 @@ type App struct {
 		agents   []session.Subagent
 		items    []convItem
 		split    SplitPane
-		agent       session.Subagent  // non-zero when viewing agent conversation
-		task        session.TaskItem  // non-zero when viewing task conversation
+		agent    session.Subagent // non-zero when viewing agent conversation
+		task     session.TaskItem // non-zero when viewing task conversation
 		// Preview detail level: text → tool → hook (cycled with tab)
 		previewMode int // 0=text, 1=tool (no hooks), 2=hook (with hooks)
 
@@ -257,9 +257,9 @@ type App struct {
 		// Viewport search
 		searching   bool
 		searchInput textinput.Model
-		searchTerm  string   // committed search term
-		searchLines []int    // line numbers that match
-		searchIdx   int      // current match index in searchLines
+		searchTerm  string // committed search term
+		searchLines []int  // line numbers that match
+		searchIdx   int    // current match index in searchLines
 
 		// Block filter for single-message mode
 		blockFiltering bool
@@ -270,29 +270,29 @@ type App struct {
 	navStack []navFrame
 
 	// Config explorer (viewConfig)
-	cfgTree        *session.ConfigTree
-	cfgList        list.Model
-	cfgSplit       SplitPane
-	cfgSearching   bool
-	cfgSearchInput textinput.Model
-	cfgSearchTerm  string
-	cfgSearchMatch []int // indices of matching items
-	cfgSearchIdx   int   // current match index
-	cfgSearchHist  []string // search history (most recent last)
-	cfgSearchHistI int      // -1 = new input, 0..N = browsing history
-	cfgSelectedSet map[string]bool // config file path → selected
-	cfgFilterCat   int             // -1 = all, 0..N = ConfigCategory value
-	cfgNaming      bool            // naming input active for new config
-	cfgNamingInput textinput.Model
-	cfgNamingCat   session.ConfigCategory
+	cfgTree           *session.ConfigTree
+	cfgList           list.Model
+	cfgSplit          SplitPane
+	cfgSearching      bool
+	cfgSearchInput    textinput.Model
+	cfgSearchTerm     string
+	cfgSearchMatch    []int           // indices of matching items
+	cfgSearchIdx      int             // current match index
+	cfgSearchHist     []string        // search history (most recent last)
+	cfgSearchHistI    int             // -1 = new input, 0..N = browsing history
+	cfgSelectedSet    map[string]bool // config file path → selected
+	cfgFilterCat      int             // -1 = all, 0..N = ConfigCategory value
+	cfgNaming         bool            // naming input active for new config
+	cfgNamingInput    textinput.Model
+	cfgNamingCat      session.ConfigCategory
 	cfgProjectPicker  bool              // project picker overlay active
 	cfgProjectEntries []cfgProjectEntry // all projects
 	cfgProjectInput   textinput.Model   // fuzzy search input
 	cfgProjectCursor  int               // selected index in filtered list
-	cfgTrash         []cfgTrashEntry // undo stack for deleted items
-	cfgDeleteConfirm bool            // waiting for second x press
-	cfgActionsMenu   bool            // config actions menu open
-	cfgPageMenu      bool            // config page jump popup
+	cfgTrash          []cfgTrashEntry   // undo stack for deleted items
+	cfgDeleteConfirm  bool              // waiting for second x press
+	cfgActionsMenu    bool              // config actions menu open
+	cfgPageMenu       bool              // config page jump popup
 
 	// Hooks view (legacy, kept for viewport reuse)
 	hooksVP viewport.Model
@@ -304,6 +304,7 @@ type App struct {
 	cmdSuggestions []cmdEntry
 	cmdSuggIdx     int // -1 = none selected
 }
+
 // selectedSession returns the currently selected session from the session list.
 func (a *App) selectedSession() (session.Session, bool) {
 	item, ok := a.sessionList.SelectedItem().(sessionItem)
@@ -338,7 +339,7 @@ const (
 	sessPreviewStats
 	sessPreviewMemory
 	sessPreviewTasksPlan
-	sessPreviewLive // tmux pane capture
+	sessPreviewLive     // tmux pane capture
 	numSessPreviewModes = 5
 )
 
@@ -819,7 +820,6 @@ func (a *App) View() string {
 		}
 
 	}
-
 
 	// Actions menu hint box floating above help line
 	if a.actionsMenu && a.state == viewSessions {
@@ -1627,6 +1627,23 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 	})
 }
 
+func (a *App) copySelectedSessionPath() (tea.Model, tea.Cmd) {
+	sess, ok := a.selectedSession()
+	if !ok {
+		return a, nil
+	}
+	if sess.FilePath == "" {
+		a.copiedMsg = "No session file"
+		return a, nil
+	}
+	if err := copyToClipboard(sess.FilePath); err != nil {
+		a.copiedMsg = "Copy failed"
+		return a, nil
+	}
+	a.copiedMsg = "Session path copied"
+	return a, nil
+}
+
 // --- Edit file with $EDITOR ---
 
 type editChoice struct {
@@ -1738,6 +1755,8 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.deleteSession(sess)
 	case akm.Resume:
 		return a.resumeSession(sess)
+	case akm.CopyPath:
+		return a.copySelectedSessionPath()
 	case akm.Move:
 		if sess.ProjectPath == "" {
 			a.copiedMsg = "No project path"
@@ -2306,7 +2325,7 @@ func (a *App) handleTick() tea.Cmd {
 	// Always refresh conversation preview for live sessions (regardless of liveUpdate)
 	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
 		if sess, ok := a.selectedSession(); ok && sess.IsLive {
-			a.sessSplit.CacheKey = "" // invalidate to force re-fetch
+			a.sessSplit.CacheKey = ""    // invalidate to force re-fetch
 			_ = a.updateSessionPreview() // conversation mode returns nil cmd
 		}
 	}
@@ -2423,7 +2442,6 @@ func (a *App) doRefresh() tea.Cmd {
 	return nil
 }
 
-
 // handleLiveTail refreshes messages and snaps to the latest message + updates preview.
 func (a *App) handleLiveTail() {
 	switch a.state {
@@ -2455,14 +2473,27 @@ func (a *App) handleLiveTail() {
 
 		debugLog.Printf("handleLiveTail: after updateConvPreview CK=%q YOffset=%d blockCursor=%d totalLines=%d height=%d",
 			sp.CacheKey, sp.Preview.YOffset,
-			func() int { if sp.Folds != nil { return sp.Folds.BlockCursor }; return -1 }(),
+			func() int {
+				if sp.Folds != nil {
+					return sp.Folds.BlockCursor
+				}
+				return -1
+			}(),
 			sp.Preview.TotalLineCount(), sp.Preview.Height)
 
 		a.scrollConvPreviewToTail()
 
 		debugLog.Printf("handleLiveTail: after scrollToTail YOffset=%d blockCursor=%d",
 			sp.Preview.YOffset,
-			func() int { if sp.Folds != nil { return sp.Folds.BlockCursor }; return -1 }())
+			func() int {
+				if sp.Folds != nil {
+					return sp.Folds.BlockCursor
+				}
+				return -1
+			}())
+
+	case viewMessageFull:
+		a.handleLiveTailMsgFull()
 	}
 }
 
@@ -2476,8 +2507,6 @@ func (a *App) toggleLiveTail() (tea.Model, tea.Cmd) {
 	a.copiedMsg = "Live tail OFF"
 	return a, nil
 }
-
-
 
 func vpAtBottom(vp *viewport.Model) bool {
 	total := vp.TotalLineCount()
@@ -2626,8 +2655,8 @@ func (a *App) cycleSessionPreviewModeReverse() {
 
 // liveFindMsg carries the result of an async findTmuxPane lookup.
 type liveFindMsg struct {
-	pane  tmuxPane
-	found bool
+	pane   tmuxPane
+	found  bool
 	sessID string
 }
 
@@ -3244,7 +3273,6 @@ func (a *App) adjustSplitRatio(delta int) {
 	a.resizeAll()
 }
 
-
 // --- Helpers ---
 
 func (a *App) sessPreviewAtBottom() bool {
@@ -3366,7 +3394,8 @@ func (a *App) renderActionsHintBox() string {
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
 	} else {
 		sess := a.actionsSess
-		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Worktree))+d.Render(":worktree"))
+		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
+		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree"))
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
 		}
@@ -3720,7 +3749,6 @@ func (a *App) updateSessionList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	a.sessionList, cmd = a.sessionList.Update(msg)
 	return a, cmd
 }
-
 
 // breadcrumbSegment tracks the X range and target for a clickable breadcrumb part.
 type breadcrumbSegment struct {

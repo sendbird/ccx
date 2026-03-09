@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -41,6 +44,65 @@ func makeGrowingEntry(ts time.Time, blockCount int) session.Entry {
 		}
 	}
 	return session.Entry{Role: "assistant", Timestamp: ts, Content: blocks}
+}
+
+func writeSessionJSONL(t *testing.T, entries []session.Entry) string {
+	t.Helper()
+
+	type rawBlock map[string]any
+	type rawMessage struct {
+		Role    string     `json:"role"`
+		Content []rawBlock `json:"content"`
+	}
+	type rawEntry struct {
+		Type      string     `json:"type"`
+		Timestamp string     `json:"timestamp"`
+		Message   rawMessage `json:"message"`
+	}
+
+	var lines []string
+	for _, entry := range entries {
+		blocks := make([]rawBlock, 0, len(entry.Content))
+		for _, block := range entry.Content {
+			switch block.Type {
+			case "text":
+				blocks = append(blocks, rawBlock{"type": "text", "text": block.Text})
+			case "thinking":
+				blocks = append(blocks, rawBlock{"type": "thinking", "text": block.Text})
+			case "tool_use":
+				var input any
+				if block.ToolInput != "" {
+					_ = json.Unmarshal([]byte(block.ToolInput), &input)
+				}
+				blocks = append(blocks, rawBlock{
+					"type":  "tool_use",
+					"id":    block.ID,
+					"name":  block.ToolName,
+					"input": input,
+				})
+			case "tool_result":
+				blocks = append(blocks, rawBlock{"type": "tool_result", "content": block.Text})
+			}
+		}
+		line, err := json.Marshal(rawEntry{
+			Type:      entry.Role,
+			Timestamp: entry.Timestamp.Format(time.RFC3339Nano),
+			Message: rawMessage{
+				Role:    entry.Role,
+				Content: blocks,
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal session entry: %v", err)
+		}
+		lines = append(lines, string(line))
+	}
+
+	path := t.TempDir() + "/session.jsonl"
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write session jsonl: %v", err)
+	}
+	return path
 }
 
 // setupConvApp creates an App with a conversation loaded from entries.
@@ -810,5 +872,73 @@ func TestLiveTailSelectsLastMessageNotAgentOrTask(t *testing.T) {
 	}
 	if lastMsg >= len(visItems)-1 {
 		t.Errorf("lastMsg index (%d) should be before trailing items (total %d)", lastMsg, len(visItems))
+	}
+}
+
+func TestHandleLiveTailMsgFullFollowsNewLastMessage(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	initial := []session.Entry{
+		makeTextEntry("user", base, "Hello"),
+		makeTextEntry("assistant", base.Add(time.Second), "Reply 1"),
+	}
+	path := writeSessionJSONL(t, initial)
+
+	app := setupConvApp(t, initial, 120, 30)
+	app.currentSess.FilePath = path
+	app.conv.sess.FilePath = path
+	app.state = viewMessageFull
+	app.msgFull.sess = app.currentSess
+	app.msgFull.messages = app.conv.messages
+	app.msgFull.merged = app.conv.merged
+	app.msgFull.agents = app.conv.agents
+	app.navToMsgFull(len(app.msgFull.merged) - 1)
+	app.liveTail = true
+
+	updated := append(append([]session.Entry{}, initial...), makeTextEntry("user", base.Add(2*time.Second), "Follow-up"))
+	path = writeSessionJSONL(t, updated)
+	app.msgFull.sess.FilePath = path
+
+	app.handleLiveTailMsgFull()
+
+	if got, want := app.msgFull.idx, len(app.msgFull.merged)-1; got != want {
+		t.Fatalf("msgFull idx = %d, want %d", got, want)
+	}
+	if got := app.msgFull.merged[app.msgFull.idx].entry.Content[0].Text; got != "Follow-up" {
+		t.Fatalf("live tail should follow new last message, got %q", got)
+	}
+}
+
+func TestHandleLiveTailMsgFullRefreshesAllMessagesView(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	initial := []session.Entry{
+		makeTextEntry("user", base, "Hello"),
+		makeTextEntry("assistant", base.Add(time.Second), "Reply 1"),
+	}
+	path := writeSessionJSONL(t, initial)
+
+	app := setupConvApp(t, initial, 120, 30)
+	app.currentSess.FilePath = path
+	app.conv.sess.FilePath = path
+	app.state = viewMessageFull
+	app.msgFull.sess = app.currentSess
+	app.msgFull.messages = app.conv.messages
+	app.msgFull.merged = app.conv.merged
+	app.msgFull.agents = app.conv.agents
+	app.msgFull.allMessages = true
+	app.msgFull.vp = viewport.New(app.width, ContentHeight(app.height))
+	app.msgFull.content = renderAllMessages(app.msgFull.merged, app.width)
+	app.msgFull.vp.SetContent(app.msgFull.content)
+
+	updated := append(append([]session.Entry{}, initial...), makeTextEntry("user", base.Add(2*time.Second), "Newest tail line"))
+	path = writeSessionJSONL(t, updated)
+	app.msgFull.sess.FilePath = path
+
+	app.handleLiveTailMsgFull()
+
+	if !strings.Contains(app.msgFull.content, "Newest tail line") {
+		t.Fatalf("allMessages content did not refresh with latest message")
+	}
+	if app.msgFull.vp.YOffset != max(app.msgFull.vp.TotalLineCount()-app.msgFull.vp.Height, 0) {
+		t.Fatalf("allMessages live tail should scroll to bottom, got YOffset=%d", app.msgFull.vp.YOffset)
 	}
 }
