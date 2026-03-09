@@ -4,6 +4,7 @@ import (
 	"encoding/gob"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -67,6 +68,37 @@ func (sc *sessionCache) save() {
 	}
 	defer f.Close()
 	gob.NewEncoder(f).Encode(sc.entries)
+}
+
+// LoadCachedSessions loads all sessions from the cache file without any
+// filesystem scanning. Returns nil if no cache exists. Used for instant
+// first paint at startup.
+func LoadCachedSessions(claudeDir string) []Session {
+	if claudeDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil
+		}
+		claudeDir = filepath.Join(home, ".claude")
+	}
+
+	sc := loadCache(claudeDir)
+	if len(sc.entries) == 0 {
+		return nil
+	}
+
+	sessions := make([]Session, 0, len(sc.entries))
+	for _, cached := range sc.entries {
+		if cached.Sess.MsgCount > 0 {
+			sessions = append(sessions, cached.Sess)
+		}
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].ModTime.After(sessions[j].ModTime)
+	})
+
+	return sessions
 }
 
 // prune removes entries for files that no longer exist.

@@ -60,12 +60,16 @@ func main() {
 		km = &def
 	}
 
-	// Phase 1: scan only live sessions synchronously (~40ms) for instant display.
+	// Load cached sessions for instant first paint (~5ms).
+	// Falls back to live-only scan (~40ms) if no cache exists.
 	// Full scan happens asynchronously inside the TUI.
-	livePaths := tui.DetectLiveProjectPaths()
-	liveSessions, _ := session.ScanSessionsForPaths(claudeDir, livePaths)
+	initialSessions := session.LoadCachedSessions(claudeDir)
+	if len(initialSessions) == 0 {
+		livePaths := tui.DetectLiveProjectPaths()
+		initialSessions, _ = session.ScanSessionsForPaths(claudeDir, livePaths)
+	}
 
-	app := tui.NewApp(liveSessions, tui.Config{
+	app := tui.NewApp(initialSessions, tui.Config{
 		ClaudeDir:    claudeDir,
 		TmuxEnabled:  tmuxEnabled,
 		TmuxAutoLive: tmuxAutoLive,
