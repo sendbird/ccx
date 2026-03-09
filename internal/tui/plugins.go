@@ -104,6 +104,9 @@ func (d plgDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 	if p.Blocked {
 		statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Render(" BLOCKED")
 		statusW = lipgloss.Width(statusStr)
+	} else if !p.Installed {
+		statusStr = dimStyle.Render(" (available)")
+		statusW = lipgloss.Width(statusStr)
 	}
 
 	// Tree connector
@@ -125,6 +128,8 @@ func (d plgDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 	fmt.Fprint(w, line)
 }
 
+var componentTypeOrder = []string{"agent", "skill", "command", "hook", "mcp", "lsp", "script", "setting", "memory"}
+
 func componentBadge(components []session.PluginComponent) string {
 	counts := map[string]int{}
 	for _, c := range components {
@@ -134,7 +139,7 @@ func componentBadge(components []session.PluginComponent) string {
 		return ""
 	}
 	var parts []string
-	for _, typ := range []string{"agent", "hook", "command", "mcp", "lsp"} {
+	for _, typ := range componentTypeOrder {
 		if n := counts[typ]; n > 0 {
 			abbrev := string(typ[0])
 			parts = append(parts, fmt.Sprintf("%d%s", n, abbrev))
@@ -150,21 +155,51 @@ func componentBadge(components []session.PluginComponent) string {
 
 func buildPluginItems(tree *session.PluginTree) []list.Item {
 	var items []list.Item
-	lastMkt := ""
+
+	// Split into installed and available
+	var installed, available []session.Plugin
 	for _, p := range tree.Plugins {
-		mkt := p.Marketplace
-		if mkt == "" {
-			mkt = "(local)"
+		if p.Installed {
+			installed = append(installed, p)
+		} else {
+			available = append(available, p)
 		}
-		if mkt != lastMkt {
-			items = append(items, plgItem{
-				isHeader: true,
-				label:    strings.ToUpper(mkt),
-			})
-			lastMkt = mkt
-		}
-		items = append(items, plgItem{plugin: p})
 	}
+
+	// Installed plugins
+	if len(installed) > 0 {
+		items = append(items, plgItem{isHeader: true, label: "INSTALLED"})
+		lastMkt := ""
+		for _, p := range installed {
+			mkt := p.Marketplace
+			if mkt == "" {
+				mkt = "(local)"
+			}
+			if mkt != lastMkt {
+				items = append(items, plgItem{isHeader: true, label: "  " + mkt})
+				lastMkt = mkt
+			}
+			items = append(items, plgItem{plugin: p})
+		}
+	}
+
+	// Available (not-installed) plugins
+	if len(available) > 0 {
+		items = append(items, plgItem{isHeader: true, label: "AVAILABLE"})
+		lastMkt := ""
+		for _, p := range available {
+			mkt := p.Marketplace
+			if mkt == "" {
+				mkt = "(local)"
+			}
+			if mkt != lastMkt {
+				items = append(items, plgItem{isHeader: true, label: "  " + mkt})
+				lastMkt = mkt
+			}
+			items = append(items, plgItem{plugin: p})
+		}
+	}
+
 	return items
 }
 
@@ -418,6 +453,12 @@ func renderPluginDetail(p session.Plugin, width int) string {
 		writeField("Category:", p.Manifest.Category)
 	}
 
+	if p.Installed {
+		writeField("Status:", "installed")
+	} else {
+		writeField("Status:", "available")
+	}
+
 	if !p.Install.InstalledAt.IsZero() {
 		writeField("Installed:", p.Install.InstalledAt.Format("2006-01-02"))
 	}
@@ -460,29 +501,31 @@ func renderPluginDetail(p session.Plugin, width int) string {
 		componentsByType[c.Type] = append(componentsByType[c.Type], c)
 	}
 
-	typeOrder := []string{"agent", "hook", "command", "mcp", "lsp"}
 	typeLabels := map[string]string{
 		"agent":   "Agents",
-		"hook":    "Hooks",
+		"skill":   "Skills",
 		"command": "Commands",
+		"hook":    "Hooks",
 		"mcp":     "MCP Servers",
 		"lsp":     "LSP Servers",
+		"script":  "Scripts",
+		"setting": "Settings",
+		"memory":  "Memory",
 	}
 
-	for _, typ := range typeOrder {
+	hasAny := false
+	for _, typ := range componentTypeOrder {
 		comps := componentsByType[typ]
+		if len(comps) == 0 {
+			continue
+		}
+		hasAny = true
 		label := typeLabels[typ]
 		countStr := fmt.Sprintf("%d", len(comps))
 
 		header := labelStyle.Render(label) + dimStyle.Render(" ("+countStr+")")
 		b.WriteString(header)
 		b.WriteString("\n")
-
-		if len(comps) == 0 {
-			b.WriteString(dimStyle.Render("  (none)"))
-			b.WriteString("\n")
-			continue
-		}
 
 		for _, c := range comps {
 			icon := componentIcon(c.Type)
@@ -495,13 +538,43 @@ func renderPluginDetail(p session.Plugin, width int) string {
 		}
 	}
 
+	if !hasAny {
+		b.WriteString(dimStyle.Render("  (no components)"))
+		b.WriteString("\n")
+	}
+
+	// Sub-plugins
+	if len(p.SubPlugins) > 0 {
+		b.WriteString("\n")
+		b.WriteString(separator)
+		b.WriteString("\n")
+		b.WriteString(labelStyle.Render(fmt.Sprintf("Sub-plugins (%d)", len(p.SubPlugins))))
+		b.WriteString("\n")
+		for _, sp := range p.SubPlugins {
+			spBadge := componentBadge(sp.Components)
+			b.WriteString("  ")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Render(sp.Name))
+			if spBadge != "" {
+				b.WriteString(dimStyle.Render(" " + spBadge))
+			}
+			b.WriteString("\n")
+			if sp.Description != "" {
+				b.WriteString("    ")
+				b.WriteString(dimStyle.Render(sp.Description))
+				b.WriteString("\n")
+			}
+		}
+	}
+
 	// Install path
-	b.WriteString("\n")
-	b.WriteString(separator)
-	b.WriteString("\n")
-	b.WriteString(labelStyle.Render("Path: "))
-	b.WriteString(dimStyle.Render(p.Install.InstallPath))
-	b.WriteString("\n")
+	if p.Install.InstallPath != "" {
+		b.WriteString("\n")
+		b.WriteString(separator)
+		b.WriteString("\n")
+		b.WriteString(labelStyle.Render("Path: "))
+		b.WriteString(dimStyle.Render(p.Install.InstallPath))
+		b.WriteString("\n")
+	}
 
 	return b.String()
 }
@@ -510,14 +583,22 @@ func componentIcon(typ string) string {
 	switch typ {
 	case "agent":
 		return ">"
-	case "hook":
-		return "#"
+	case "skill":
+		return "*"
 	case "command":
 		return "$"
+	case "hook":
+		return "#"
 	case "mcp":
 		return "@"
 	case "lsp":
 		return "~"
+	case "script":
+		return "!"
+	case "setting":
+		return "="
+	case "memory":
+		return "+"
 	default:
 		return "-"
 	}
@@ -594,10 +675,7 @@ func filterPluginItems(items []list.Item, term string) []list.Item {
 			headerUsed = false
 			continue
 		}
-		searchable := strings.ToLower(pi.plugin.Name + " " + pi.plugin.Marketplace)
-		if pi.plugin.Manifest != nil {
-			searchable += " " + strings.ToLower(pi.plugin.Manifest.Description)
-		}
+		searchable := pluginSearchText(pi.plugin)
 		if strings.Contains(searchable, lower) {
 			if lastHeader != nil && !headerUsed {
 				filtered = append(filtered, lastHeader)
@@ -607,6 +685,17 @@ func filterPluginItems(items []list.Item, term string) []list.Item {
 		}
 	}
 	return filtered
+}
+
+func pluginSearchText(p session.Plugin) string {
+	s := strings.ToLower(p.Name + " " + p.Marketplace)
+	if p.Manifest != nil {
+		s += " " + strings.ToLower(p.Manifest.Description)
+	}
+	for _, sp := range p.SubPlugins {
+		s += " " + strings.ToLower(sp.Name+" "+sp.Description)
+	}
+	return s
 }
 
 func (a *App) plgSearchNext(dir int) {
@@ -626,8 +715,7 @@ func (a *App) plgSearchNext(dir int) {
 		if !ok || pi.isHeader {
 			continue
 		}
-		searchable := strings.ToLower(pi.plugin.Name + " " + pi.plugin.Marketplace)
-		if strings.Contains(searchable, lower) {
+		if strings.Contains(pluginSearchText(pi.plugin), lower) {
 			a.plgList.Select(idx)
 			a.updatePluginPreview()
 			return
