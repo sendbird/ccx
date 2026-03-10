@@ -456,7 +456,14 @@ func parseSubPlugins(installPath string) []SubPlugin {
 			Description: rsp.Description,
 			Version:     rsp.Version,
 		}
-		sp.Components = resolveComponentPaths(installPath, rsp)
+		// Prefer scanning source dir for complete component discovery
+		if rsp.Source != "" {
+			sourceDir := filepath.Join(installPath, filepath.Clean(rsp.Source))
+			sp.Components = scanAllComponents(sourceDir)
+		}
+		if len(sp.Components) == 0 {
+			sp.Components = resolveComponentPaths(installPath, rsp)
+		}
 		subs = append(subs, sp)
 	}
 	return subs
@@ -464,6 +471,7 @@ func parseSubPlugins(installPath string) []SubPlugin {
 
 type rawSubPlugin struct {
 	Name        string   `json:"name"`
+	Source      string   `json:"source"` // relative path to plugin dir (e.g. "./plugins/engineering")
 	Description string   `json:"description"`
 	Version     string   `json:"version"`
 	Agents      []string `json:"agents"`
@@ -578,11 +586,22 @@ func discoverFromMarketplaceManifest(data []byte, mktPath, mktName string) []Plu
 			Name:        rsp.Name,
 			Marketplace: mktName,
 		}
+
+		// Resolve components: prefer scanning source dir, fall back to explicit paths
+		var components []PluginComponent
+		if rsp.Source != "" {
+			sourceDir := filepath.Join(mktPath, filepath.Clean(rsp.Source))
+			components = scanAllComponents(sourceDir)
+		}
+		if len(components) == 0 {
+			components = resolveComponentPaths(mktPath, rsp)
+		}
+
 		p.SubPlugins = []SubPlugin{{
 			Name:        rsp.Name,
 			Description: rsp.Description,
 			Version:     rsp.Version,
-			Components:  resolveComponentPaths(mktPath, rsp),
+			Components:  components,
 		}}
 		// Flatten sub-plugin components to top level
 		for _, sp := range p.SubPlugins {
