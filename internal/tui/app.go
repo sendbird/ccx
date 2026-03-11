@@ -874,7 +874,7 @@ func (a *App) View() string {
 		title = a.renderBreadcrumb()
 		if a.plgDetailActive {
 			content = a.renderPluginDetailSplit()
-			h := "↑↓:nav →:preview sp:sel x:actions e:edit esc:back q:quit"
+			h := "↑↓:nav →:preview sp:sel x:actions e:edit c:copy-path o:shell esc:back q:quit"
 			if a.plgDetailSplit.Show && a.plgDetailSplit.Focus {
 				h = "↑↓:scroll ←:unfocus q:quit"
 			}

@@ -919,6 +919,10 @@ func (a *App) handlePluginDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case "e":
 		return a.editPluginComponent()
+	case "c":
+		return a.copyPluginPath()
+	case "o":
+		return a.openPluginShell()
 	case "x":
 		a.plgCompActionsMenu = true
 		return a, nil
@@ -970,6 +974,10 @@ func (a *App) handlePlgCompActionsMenu(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "e":
 		return a.editPluginComponent()
+	case "c":
+		return a.copyPluginPath()
+	case "o":
+		return a.openPluginShell()
 	}
 	// Any other key cancels
 	return a, nil
@@ -978,13 +986,14 @@ func (a *App) handlePlgCompActionsMenu(key string) (tea.Model, tea.Cmd) {
 func (a *App) renderPlgCompActionsHintBox() string {
 	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	d := dimStyle
+	sp := "  "
 
 	var lines []string
 	if a.plgCompHasSelection() {
 		header := fmt.Sprintf("%d selected", len(a.plgCompSelectedSet))
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
 	}
-	line := hl.Render("e") + d.Render(":edit")
+	line := hl.Render("e") + d.Render(":edit") + sp + hl.Render("c") + d.Render(":copy-path") + sp + hl.Render("o") + d.Render(":open-shell")
 	lines = append(lines, line)
 	lines = append(lines, d.Render("esc:cancel"))
 
@@ -994,6 +1003,41 @@ func (a *App) renderPlgCompActionsHintBox() string {
 		BorderForeground(colorDim).
 		Padding(0, 1)
 	return boxStyle.Render(body)
+}
+
+// copyPluginPath copies the plugin install path to clipboard.
+func (a *App) copyPluginPath() (tea.Model, tea.Cmd) {
+	p := a.plgDetailPlugin
+	path := p.Install.InstallPath
+	if path == "" {
+		a.copiedMsg = "No install path"
+		return a, nil
+	}
+	if err := copyToClipboard(path); err != nil {
+		a.copiedMsg = "Copy failed"
+		return a, nil
+	}
+	a.copiedMsg = "Copied: " + path
+	return a, nil
+}
+
+// openPluginShell opens a shell at the plugin install path.
+func (a *App) openPluginShell() (tea.Model, tea.Cmd) {
+	p := a.plgDetailPlugin
+	path := p.Install.InstallPath
+	if path == "" {
+		a.copiedMsg = "No install path"
+		return a, nil
+	}
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "sh"
+	}
+	c := exec.Command(shell)
+	c.Dir = path
+	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+		return editorDoneMsg{}
+	})
 }
 
 // editPluginComponent opens selected component files (or current item) in $EDITOR.
@@ -1358,6 +1402,43 @@ func (a *App) handlePlgActionsMenu(key string) (tea.Model, tea.Cmd) {
 	case "u":
 		a.plgActionsMenu = false
 		return a.runPluginCmd("update")
+	case "c":
+		a.plgActionsMenu = false
+		targets := a.plgActionTargets()
+		if len(targets) == 0 {
+			return a, nil
+		}
+		path := targets[0].Install.InstallPath
+		if path == "" {
+			a.copiedMsg = "No install path"
+			return a, nil
+		}
+		if err := copyToClipboard(path); err != nil {
+			a.copiedMsg = "Copy failed"
+			return a, nil
+		}
+		a.copiedMsg = "Copied: " + path
+		return a, nil
+	case "o":
+		a.plgActionsMenu = false
+		targets := a.plgActionTargets()
+		if len(targets) == 0 {
+			return a, nil
+		}
+		path := targets[0].Install.InstallPath
+		if path == "" {
+			a.copiedMsg = "No install path"
+			return a, nil
+		}
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "sh"
+		}
+		c := exec.Command(shell)
+		c.Dir = path
+		return a, tea.ExecProcess(c, func(err error) tea.Msg {
+			return editorDoneMsg{}
+		})
 	case "x":
 		// Second press confirms uninstall
 		if a.plgUninstallConfirm {
@@ -1544,7 +1625,8 @@ func (a *App) renderPlgActionsHintBox() string {
 	if a.plgHasSelection() {
 		line2 += sp + hl.Render("t") + d.Render(":test")
 	}
-	lines = append(lines, line1, line2)
+	line3 := hl.Render("c") + d.Render(":copy-path") + sp + hl.Render("o") + d.Render(":open-shell")
+	lines = append(lines, line1, line2, line3)
 	lines = append(lines, d.Render("esc:cancel"))
 
 	body := strings.Join(lines, "\n")
