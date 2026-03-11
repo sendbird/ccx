@@ -818,9 +818,22 @@ func buildConfigTestEnv(items []session.ConfigItem) (*isolatedEnv, error) {
 		}
 	}
 
-	// Generate CLAUDE.md with embedded memory content
+	// Generate CLAUDE.md with embedded memory content, and symlink
+	// non-CLAUDE.md memory files so @references in the content still resolve.
 	if len(memoryItems) > 0 {
 		generateTestCLAUDEmd(env.ConfigDir, memoryItems)
+		for _, item := range memoryItems {
+			if filepath.Base(item.Path) == "CLAUDE.md" {
+				continue // already embedded in generated CLAUDE.md
+			}
+			rel := extractRelConfigPath(item.Path, claudeDir)
+			if rel == "" {
+				continue
+			}
+			dst := filepath.Join(env.ConfigDir, rel)
+			os.MkdirAll(filepath.Dir(dst), 0o755)
+			os.Symlink(item.Path, dst)
+		}
 	}
 
 	hasHooks := false
@@ -957,19 +970,7 @@ func (a *App) launchConfigTest() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Build combined prompt from selected config file contents
-	promptFile := filepath.Join(env.HomeDir, "system-prompt.txt")
-	if err := buildSystemPromptFile(items, promptFile); err != nil {
-		env.Cleanup()
-		a.copiedMsg = "Failed: " + err.Error()
-		return a, nil
-	}
-
-	script := env.Script(
-		fmt.Sprintf("--system-prompt \"$(cat %s)\"", shellQuote(promptFile)),
-		"--settings", shellQuote(env.SettingsPath()),
-		"--setting-sources", `""`,
-	)
+	script := env.Script()
 
 	a.copiedMsg = fmt.Sprintf("Testing %d configs…", len(items))
 
@@ -981,29 +982,6 @@ func (a *App) launchConfigTest() (tea.Model, tea.Cmd) {
 
 type configTestDoneMsg struct{ tmpDir string }
 
-// buildSystemPromptFile concatenates selected config file contents into a single
-// system prompt file, with headers separating each source.
-func buildSystemPromptFile(items []session.ConfigItem, outPath string) error {
-	var sb strings.Builder
-	sb.WriteString("You are testing a specific set of Claude Code configurations.\n")
-	sb.WriteString("ONLY the following config files are active for this session:\n\n")
-
-	for _, item := range items {
-		// Skip non-text configs (settings.json, MCP json, hooks)
-		if item.Category == session.ConfigMCP || item.Category == session.ConfigHook {
-			continue
-		}
-		data, err := os.ReadFile(item.Path)
-		if err != nil {
-			continue
-		}
-		sb.WriteString(fmt.Sprintf("--- %s (%s) ---\n", item.Name, item.Path))
-		sb.Write(data)
-		sb.WriteString("\n\n")
-	}
-
-	return os.WriteFile(outPath, []byte(sb.String()), 0o644)
-}
 
 // --- Category filter ---
 
