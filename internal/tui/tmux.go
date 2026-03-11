@@ -580,10 +580,22 @@ func (e *isolatedEnv) Script(extraArgs ...string) string {
 	if args != "" {
 		claudeCmd += " " + args
 	}
+	// Create an editor wrapper that restores real HOME so vim/nvim
+	// can find its config, then reverts HOME for Claude.
+	realHome, _ := os.UserHomeDir()
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	wrapperPath := filepath.Join(e.HomeDir, "editor.sh")
+	wrapperContent := fmt.Sprintf("#!/bin/bash\nHOME=%s exec %s \"$@\"\n",
+		shellQuote(realHome), editor)
+	os.WriteFile(wrapperPath, []byte(wrapperContent), 0o755)
+
 	return fmt.Sprintf(
-		`unset CLAUDECODE; %sexport HOME=%s; cd %s; %s; `+
+		`unset CLAUDECODE; %sexport REAL_HOME=%s; export EDITOR=%s; export HOME=%s; cd %s; %s; `+
 			`rc=$?; if [ $rc -ne 0 ]; then echo ""; echo "[claude exited: $rc] press any key"; read -n1; fi`,
-		oauthTokenEnv(), shellQuote(e.HomeDir), shellQuote(e.HomeDir), claudeCmd,
+		oauthTokenEnv(), shellQuote(realHome), shellQuote(wrapperPath), shellQuote(e.HomeDir), shellQuote(e.HomeDir), claudeCmd,
 	)
 }
 
