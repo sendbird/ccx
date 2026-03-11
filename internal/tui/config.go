@@ -805,39 +805,8 @@ func buildConfigTestEnv(items []session.ConfigItem) (*isolatedEnv, error) {
 	// Selected settings.json/hooks will be symlinked below if the user chose them.
 	env.WriteSettings([]byte("{}"))
 
-	// Separate memory items (ConfigGlobal) from other items.
-	// Memory files need to be embedded into a generated CLAUDE.md because
-	// @~/.claude/... references resolve to fake HOME where files don't exist.
-	var memoryItems []session.ConfigItem
-	var otherItems []session.ConfigItem
-	for _, item := range items {
-		if item.Category == session.ConfigGlobal {
-			memoryItems = append(memoryItems, item)
-		} else {
-			otherItems = append(otherItems, item)
-		}
-	}
-
-	// Generate CLAUDE.md with embedded memory content, and symlink
-	// non-CLAUDE.md memory files so @references in the content still resolve.
-	if len(memoryItems) > 0 {
-		generateTestCLAUDEmd(env.ConfigDir, memoryItems)
-		for _, item := range memoryItems {
-			if filepath.Base(item.Path) == "CLAUDE.md" {
-				continue // already embedded in generated CLAUDE.md
-			}
-			rel := extractRelConfigPath(item.Path, claudeDir)
-			if rel == "" {
-				continue
-			}
-			dst := filepath.Join(env.ConfigDir, rel)
-			os.MkdirAll(filepath.Dir(dst), 0o755)
-			os.Symlink(item.Path, dst)
-		}
-	}
-
 	hasHooks := false
-	for _, item := range otherItems {
+	for _, item := range items {
 		rel := extractRelConfigPath(item.Path, claudeDir)
 		if rel == "" {
 			continue
@@ -883,62 +852,6 @@ func buildConfigTestEnv(items []session.ConfigItem) (*isolatedEnv, error) {
 	return env, nil
 }
 
-// generateTestCLAUDEmd creates a CLAUDE.md in the test env by concatenating
-// only the selected memory files. @references are stripped from CLAUDE.md
-// since referenced files are either selected (embedded inline) or not available.
-func generateTestCLAUDEmd(configDir string, items []session.ConfigItem) {
-	// Build set of selected paths so we know which @references are covered
-	selectedPaths := make(map[string]bool)
-	for _, item := range items {
-		selectedPaths[item.Path] = true
-	}
-
-	var b strings.Builder
-	for i, item := range items {
-		data, err := os.ReadFile(item.Path)
-		if err != nil {
-			continue
-		}
-		content := strings.TrimSpace(string(data))
-		if content == "" {
-			continue
-		}
-
-		// For CLAUDE.md: strip @reference lines to avoid broken references
-		if filepath.Base(item.Path) == "CLAUDE.md" {
-			content = stripAtReferences(content)
-		}
-
-		if i > 0 {
-			b.WriteString("\n---\n\n")
-		}
-		b.WriteString(content)
-		b.WriteString("\n")
-	}
-
-	claudeMdPath := filepath.Join(configDir, "CLAUDE.md")
-	os.WriteFile(claudeMdPath, []byte(b.String()), 0o644)
-}
-
-// stripAtReferences removes lines containing @~/ or @./ file references
-// that would break in the test env's fake HOME.
-func stripAtReferences(content string) string {
-	lines := strings.Split(content, "\n")
-	var out []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// Skip lines that are just @references (e.g. "@~/.claude/contexts/dev.md")
-		if strings.HasPrefix(trimmed, "@") || strings.HasPrefix(trimmed, "- @") {
-			continue
-		}
-		// Skip inline @references like "bash, command: @~/.claude/memory/command.md"
-		if strings.Contains(trimmed, "@~/") || strings.Contains(trimmed, "@./") {
-			continue
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
-}
 
 // injectHooksConfig copies the "hooks" key from srcSettings into dstSettings.
 // If dstSettings already has content (e.g. from being selected as MCP config),
