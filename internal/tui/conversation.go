@@ -109,6 +109,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleEditMenu(key)
 	}
 
+	// Actions menu
+	if a.convActionsMenu {
+		return a.handleConvActionsMenu(key)
+	}
+
 	switch key {
 	case "q":
 		return a, tea.Quit
@@ -186,6 +191,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
+	case "x":
+		a.convActionsMenu = true
+		return a, nil
 	}
 
 	// Tab/shift+tab cycles preview mode when preview is open: text → tool → hook

@@ -10,6 +10,7 @@ run: build
 	$(BIN)
 
 install: build
+	rm -f ~/.local/bin/ccx
 	cp $(BIN) ~/.local/bin/ccx
 
 clean:

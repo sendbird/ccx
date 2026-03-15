@@ -95,6 +95,11 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		msg = navMsg
 	}
 
+	// Actions menu
+	if a.convActionsMenu {
+		return a.handleConvActionsMenu(key)
+	}
+
 	switch key {
 	case "q":
 		return a, tea.Quit
@@ -129,6 +134,9 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			a.startMsgFullBlockFilter()
 		}
+		return a, nil
+	case "x":
+		a.convActionsMenu = true
 		return a, nil
 	}
 

@@ -167,50 +167,6 @@ func hasClaude(shellPID int) bool {
 	return len(strings.TrimSpace(string(out))) > 0
 }
 
-// claudeArgsForShell returns the full command line of claude child processes
-// under the given shell PID, or "" if none found.
-func claudeArgsForShell(shellPID int) string {
-	if shellPID == 0 {
-		return ""
-	}
-	out, err := exec.Command("pgrep", "-P", strconv.Itoa(shellPID), "-af", "claude").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// claudePane represents a tmux pane running a Claude process.
-type claudePane struct {
-	path       string // absolute pane CWD
-	args       string // claude process command line
-	windowName string // tmux window name
-}
-
-// findClaudePanes returns tmux panes that have an active Claude child process,
-// along with the claude process command line for session-ID matching.
-func findClaudePanes() []claudePane {
-	if !inTmux() {
-		return nil
-	}
-	panes, err := listTmuxPanes()
-	if err != nil {
-		return nil
-	}
-	var result []claudePane
-	for _, p := range panes {
-		args := claudeArgsForShell(p.PID)
-		if args == "" {
-			continue
-		}
-		absPath, _ := filepath.Abs(p.Path)
-		if absPath != "" {
-			result = append(result, claudePane{path: absPath, args: args, windowName: p.WindowName})
-		}
-	}
-	return result
-}
-
 // findLiveProjectPaths returns project paths that have an active Claude process.
 // Used as fallback for non-tmux environments.
 func findLiveProjectPaths() map[string]bool {
@@ -243,13 +199,20 @@ func findLiveProjectPaths() map[string]bool {
 // Claude processes. Used for fast phase-1 session scanning at startup.
 func DetectLiveProjectPaths() []string {
 	if inTmux() {
-		cps := findClaudePanes()
-		seen := make(map[string]bool, len(cps))
+		panes, err := listTmuxPanes()
+		if err != nil {
+			return nil
+		}
+		claudeProcs := batchFindClaudeProcs()
+		seen := make(map[string]bool)
 		var paths []string
-		for _, cp := range cps {
-			if !seen[cp.path] {
-				seen[cp.path] = true
-				paths = append(paths, cp.path)
+		for _, p := range panes {
+			if _, ok := claudeProcs[p.PID]; ok {
+				absPath, _ := filepath.Abs(p.Path)
+				if absPath != "" && !seen[absPath] {
+					seen[absPath] = true
+					paths = append(paths, absPath)
+				}
 			}
 		}
 		return paths
@@ -269,10 +232,6 @@ func DetectLiveProjectPaths() []string {
 func markLiveSessions(sessions []session.Session) {
 	if inTmux() {
 		markLiveSessionsTmux(sessions)
-		// Set TmuxWindowName for ALL sessions (not just live) by matching
-		// ProjectPath to any tmux pane's CWD. This allows searching by
-		// window name even for non-live sessions in the same project.
-		setTmuxWindowNames(sessions)
 	} else {
 		markLiveSessionsNonTmux(sessions)
 	}
@@ -287,37 +246,9 @@ func markLiveSessions(sessions []session.Session) {
 	}
 }
 
-// setTmuxWindowNames maps all tmux pane CWDs to window names and applies
-// them to sessions. Sessions already having a window name (from live matching) are skipped.
-func setTmuxWindowNames(sessions []session.Session) {
-	panes, err := listTmuxPanes()
-	if err != nil {
-		return
-	}
-	// Build path → window name map (first pane wins per path)
-	pathWindow := make(map[string]string, len(panes))
-	for _, p := range panes {
-		absPath, _ := filepath.Abs(p.Path)
-		if absPath == "" || p.WindowName == "" {
-			continue
-		}
-		if _, ok := pathWindow[absPath]; !ok {
-			pathWindow[absPath] = p.WindowName
-		}
-	}
-	for i := range sessions {
-		if sessions[i].TmuxWindowName != "" {
-			continue
-		}
-		if wn, ok := pathWindow[sessions[i].ProjectPath]; ok {
-			sessions[i].TmuxWindowName = wn
-		}
-	}
-}
-
 func markLiveSessionsTmux(sessions []session.Session) {
-	cps := findClaudePanes()
-	if len(cps) == 0 {
+	panes, err := listTmuxPanes()
+	if err != nil || len(panes) == 0 {
 		return
 	}
 
@@ -327,7 +258,45 @@ func markLiveSessionsTmux(sessions []session.Session) {
 		pathIdx[s.ProjectPath] = append(pathIdx[s.ProjectPath], i)
 	}
 
-	matched := make([]bool, len(cps)) // track which panes found a session-ID match
+	// Set TmuxWindowName for ALL sessions by matching ProjectPath to pane CWD
+	pathWindow := make(map[string]string, len(panes))
+	for _, p := range panes {
+		absPath, _ := filepath.Abs(p.Path)
+		if absPath != "" && p.WindowName != "" {
+			if _, exists := pathWindow[absPath]; !exists {
+				pathWindow[absPath] = p.WindowName
+			}
+		}
+	}
+	for i := range sessions {
+		if wn, ok := pathWindow[sessions[i].ProjectPath]; ok && sessions[i].TmuxWindowName == "" {
+			sessions[i].TmuxWindowName = wn
+		}
+	}
+
+	// Batch pgrep: find all claude processes and their parent PIDs in one call
+	claudeProcs := batchFindClaudeProcs()
+	if len(claudeProcs) == 0 {
+		return
+	}
+
+	// Build pane PID → claude args map
+	type claudeMatch struct {
+		args       string
+		windowName string
+		path       string
+	}
+	var cps []claudeMatch
+	for _, p := range panes {
+		if args, ok := claudeProcs[p.PID]; ok {
+			absPath, _ := filepath.Abs(p.Path)
+			if absPath != "" {
+				cps = append(cps, claudeMatch{args: args, windowName: p.WindowName, path: absPath})
+			}
+		}
+	}
+
+	matched := make([]bool, len(cps))
 	for ci, cp := range cps {
 		for _, si := range pathIdx[cp.path] {
 			if sessions[si].IsLive {
@@ -361,6 +330,47 @@ func markLiveSessionsTmux(sessions []session.Session) {
 			sessions[bestIdx].TmuxWindowName = cp.windowName
 		}
 	}
+}
+
+// batchFindClaudeProcs finds all claude processes and maps parent PID → args.
+// Uses two commands total (pgrep + ps) instead of per-pane pgrep calls.
+func batchFindClaudeProcs() map[int]string {
+	// Get all claude PIDs (exact binary name match to avoid matching ccx itself)
+	pidOut, err := exec.Command("pgrep", "-x", "claude").Output()
+	if err != nil {
+		return nil
+	}
+	pids := strings.Fields(strings.TrimSpace(string(pidOut)))
+	if len(pids) == 0 {
+		return nil
+	}
+
+	// Single ps call to get ppid and args for all claude PIDs
+	psArgs := []string{"-o", "pid=,ppid=,args=", "-p", strings.Join(pids, ",")}
+	psOut, err := exec.Command("ps", psArgs...).Output()
+	if err != nil {
+		return nil
+	}
+
+	result := make(map[int]string)
+	for line := range strings.SplitSeq(strings.TrimSpace(string(psOut)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: "  PID  PPID ARGS..."
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		args := strings.Join(fields[2:], " ")
+		result[ppid] = args
+	}
+	return result
 }
 
 func markLiveSessionsNonTmux(sessions []session.Session) {

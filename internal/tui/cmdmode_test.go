@@ -135,7 +135,11 @@ func TestRegistryCompleteness(t *testing.T) {
 		"group:chain": false, "group:fork": false,
 		"preview:conv": false, "preview:stats": false, "preview:mem": false,
 		"preview:tasks": false, "preview:live": false,
-		"view:stats": false, "view:config": false, "view:hooks": false,
+		"view:sessions": false, "view:stats": false, "view:config": false,
+		"view:config:hooks": false, "view:plugins": false,
+		"view:stats:tools": false, "view:stats:mcp": false,
+		"view:stats:agents": false, "view:stats:skills": false,
+		"view:stats:commands": false, "view:stats:errors": false,
 		"refresh": false,
 	}
 	for _, entry := range registry {

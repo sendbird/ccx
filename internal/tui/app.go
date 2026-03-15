@@ -194,6 +194,20 @@ type App struct {
 	actionsSess session.Session
 	editChoices []editChoice // available files to edit
 
+	// URL menu (u key in actions)
+	urlMenu        bool
+	urlAllItems    []urlItem       // unfiltered full list
+	urlItems       []urlItem       // filtered (displayed) list
+	urlCursor      int
+	urlSelected    map[string]bool // selected URLs for multi-open/copy
+	urlSearching   bool            // typing in search input
+	urlSearchInput textinput.Model
+	urlSearchTerm  string
+	urlScope       string          // context label: "session", "message", "block"
+
+	// Conversation/message-full actions menu (x key)
+	convActionsMenu bool
+
 	// Views menu (V key)
 	viewsMenu bool
 
@@ -481,6 +495,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case openStatsPageMsg:
+		if a.state == viewGlobalStats && !a.globalStatsLoading {
+			return a.openStatsDetail(msg.page)
+		}
+		return a, nil
+
 	case editorDoneMsg:
 		if a.state == viewConfig {
 			// Re-scan config after editor closes
@@ -662,6 +682,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// URL menu: available from any view
+		if a.urlMenu {
+			return a.handleURLMenu(msg)
+		}
+
+		// Command mode: available from any view
+		if a.cmdMode {
+			return a.handleCmdMode(msg)
+		}
+		if msg.String() == a.keymap.Session.Command {
+			// Don't enter command mode when typing in text inputs
+			if !a.isInTextInput() {
+				a.startCmdMode()
+				return a, nil
+			}
+		}
+
 		switch a.state {
 		case viewSessions:
 			return a.handleSessionKeys(msg)
@@ -723,8 +760,6 @@ func (a *App) View() string {
 			help = "  " + a.worktreeInput.View() + helpStyle.Render("  enter:create esc:cancel")
 		} else if a.sessConvSearching {
 			help = "  " + a.sessConvSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
-		} else if a.cmdMode {
-			help = "  " + a.cmdInput.View() + helpStyle.Render("  tab:complete ↵:run esc:cancel")
 		} else {
 			// Pane proxy focused: show proxy-specific help with indicator
 			if a.sessSplit.Focus && a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive {
@@ -787,7 +822,7 @@ func (a *App) View() string {
 		if a.conv.blockFiltering {
 			help = "  " + a.conv.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
 		} else {
-			h := "↵:open e:edit L:live R:refresh"
+			h := "↵:open e:edit x:actions L:live R:refresh"
 			if a.config.TmuxEnabled && inTmux() && a.currentSess.IsLive {
 				h += " I:input J:jump"
 			}
@@ -829,7 +864,7 @@ func (a *App) View() string {
 			if a.copyModeActive {
 				help = formatHelp("all messages  ↑↓:move v/sp:sel y/↵:copy home/end esc:cancel")
 			} else {
-				sh := "all messages  ↑↓:scroll v:copy y:all /:search"
+				sh := "all messages  ↑↓:scroll v:copy y:all x:actions /:search"
 				if a.msgFull.searchTerm != "" {
 					sh += fmt.Sprintf(" [%d/%d] n/N:match", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
 				}
@@ -841,7 +876,7 @@ func (a *App) View() string {
 				help = formatHelp(pos + "  ↑↓:move v/sp:sel y/↵:copy home/end esc:cancel")
 			} else {
 				selCount := len(a.msgFull.folds.Selected)
-				sh := pos + "  ↑↓:blocks ←→:fold sp:select n/N:msg f/F:all v:copy y:all /:filter"
+				sh := pos + "  ↑↓:blocks ←→:fold sp:select n/N:msg f/F:all v:copy y:all x:actions /:filter"
 				if selCount > 0 {
 					sh = pos + fmt.Sprintf("  [%d sel] ↑↓:blocks sp:select y:copy esc:clear", selCount)
 				} else if a.msgFull.searchTerm != "" {
@@ -930,6 +965,31 @@ func (a *App) View() string {
 		}
 	}
 
+	// Command mode help — overrides view-specific help in any view
+	if a.cmdMode {
+		help = "  " + a.cmdInput.View() + helpStyle.Render("  tab:complete ↵:run esc:cancel")
+	}
+
+	// URL menu hint box
+	if a.urlMenu {
+		hintBox := a.renderURLMenu()
+		if hintBox != "" {
+			content = placeHintBox(content, hintBox)
+		}
+		if a.urlSearching {
+			help = "  " + a.urlSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
+		} else {
+			help = formatHelp("↑↓:nav ↵:open y:copy /:search esc:close")
+		}
+	}
+
+	// Conversation/message-full actions menu hint box
+	if a.convActionsMenu && (a.state == viewConversation || a.state == viewMessageFull) {
+		hintBox := renderConvActionsHintBox()
+		content = placeHintBox(content, hintBox)
+		help = formatHelp("x:actions — pick an action")
+	}
+
 	// Actions menu hint box floating above help line
 	if a.actionsMenu && a.state == viewSessions {
 		hintBox := a.renderActionsHintBox()
@@ -1002,7 +1062,7 @@ func (a *App) View() string {
 	}
 
 	// Command mode hint box floating above help line
-	if a.cmdMode && a.state == viewSessions {
+	if a.cmdMode {
 		hintBox := a.renderCmdHintBox()
 		if hintBox != "" {
 			content = placeHintBox(content, hintBox)
@@ -1110,11 +1170,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Edit menu: pick file to open
 	if a.editMenu {
 		return a.handleEditMenu(key)
-	}
-
-	// Command mode: text input for : commands
-	if a.cmdMode {
-		return a.handleCmdMode(msg)
 	}
 
 	// While conv search is active, route all keys to it
@@ -1243,9 +1298,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case km.Session.Views:
 		a.viewsMenu = true
-		return a, nil
-	case km.Session.Command:
-		a.startCmdMode()
 		return a, nil
 	case km.Session.Help:
 		a.showHelp = true
@@ -1950,6 +2002,10 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		ti.Focus()
 		a.worktreeInput = ti
 		return a, ti.Cursor.BlinkCmd()
+	case akm.URLs:
+		return a.openURLMenuFromItems(extractSessionURLs(sess.FilePath), "session")
+	case akm.Files:
+		return a.openURLMenuFromItems(extractSessionFilePaths(sess.FilePath), "session files")
 	}
 	return a, nil
 }
@@ -3524,7 +3580,7 @@ func (a *App) renderActionsHintBox() string {
 	} else {
 		sess := a.actionsSess
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
-		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree"))
+		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree")+sp+hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files"))
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
 		}
@@ -3585,6 +3641,14 @@ func (a *App) renderSearchHintBox() string {
 func (a *App) syncAllFilterVisibility() {
 	syncFilterVisibility(&a.sessionList)
 	syncFilterVisibility(&a.convList)
+}
+
+// isInTextInput returns true when the user is typing in any text input
+// (search, move, worktree, live input, etc.) where ':' should be literal.
+func (a *App) isInTextInput() bool {
+	return a.isFiltering() || a.moveMode || a.worktreeMode ||
+		a.sessConvSearching || a.liveInputActive || a.cfgSearching || a.cfgNaming ||
+		a.urlSearching
 }
 
 func (a *App) isFiltering() bool {

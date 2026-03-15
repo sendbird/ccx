@@ -10,8 +10,14 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sendbird/ccx/internal/session"
 	"gopkg.in/yaml.v3"
 )
+
+// openStatsPageMsg is sent to open a specific stats detail page after stats loads.
+type openStatsPageMsg struct {
+	page statsDetailMode
+}
 
 // cmdEntry defines a single command in the command registry.
 type cmdEntry struct {
@@ -115,10 +121,66 @@ func buildCmdRegistry() []cmdEntry {
 
 		// Views
 		{
+			name: "view:sessions", aliases: []string{"v:sessions", "v:sess"},
+			desc: "session browser",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.state = viewSessions
+				return a, nil
+			},
+		},
+		{
 			name: "view:stats", aliases: []string{"v:stats"},
 			desc: "global stats",
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				return a.openGlobalStats()
+			},
+		},
+		{
+			name: "view:stats:tools", aliases: []string{"v:stats:t"},
+			desc: "stats → tools",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				m, cmd := a.openGlobalStats()
+				return m, tea.Batch(cmd, func() tea.Msg { return openStatsPageMsg{statsDetailTools} })
+			},
+		},
+		{
+			name: "view:stats:mcp", aliases: []string{"v:stats:m"},
+			desc: "stats → mcp tools",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				m, cmd := a.openGlobalStats()
+				return m, tea.Batch(cmd, func() tea.Msg { return openStatsPageMsg{statsDetailMCP} })
+			},
+		},
+		{
+			name: "view:stats:agents", aliases: []string{"v:stats:a"},
+			desc: "stats → agents",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				m, cmd := a.openGlobalStats()
+				return m, tea.Batch(cmd, func() tea.Msg { return openStatsPageMsg{statsDetailAgents} })
+			},
+		},
+		{
+			name: "view:stats:skills", aliases: []string{"v:stats:s"},
+			desc: "stats → skills",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				m, cmd := a.openGlobalStats()
+				return m, tea.Batch(cmd, func() tea.Msg { return openStatsPageMsg{statsDetailSkills} })
+			},
+		},
+		{
+			name: "view:stats:commands", aliases: []string{"v:stats:c"},
+			desc: "stats → commands",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				m, cmd := a.openGlobalStats()
+				return m, tea.Batch(cmd, func() tea.Msg { return openStatsPageMsg{statsDetailCommands} })
+			},
+		},
+		{
+			name: "view:stats:errors", aliases: []string{"v:stats:e"},
+			desc: "stats → errors",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				m, cmd := a.openGlobalStats()
+				return m, tea.Batch(cmd, func() tea.Msg { return openStatsPageMsg{statsDetailErrors} })
 			},
 		},
 		{
@@ -129,10 +191,140 @@ func buildCmdRegistry() []cmdEntry {
 			},
 		},
 		{
-			name: "view:hooks", aliases: []string{"v:hooks"},
-			desc: "hooks view",
+			name: "view:config:hooks", aliases: []string{"v:hooks"},
+			desc: "config → hooks",
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				return a.openHooksView()
+			},
+		},
+		{
+			name: "view:plugins", aliases: []string{"v:plugins", "v:plg"},
+			desc: "plugin explorer",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				return a.openPluginExplorer()
+			},
+		},
+
+		// Page filters (for use with multi-command, e.g. "view:config page:hooks")
+		{
+			name: "page:memory", aliases: []string{"p:memory", "page:mem"},
+			desc: "filter to memory/global",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewConfig {
+					a.cfgFilterCat = cfgFilterMemory
+					a.rebuildCfgList()
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:project", aliases: []string{"p:project", "page:proj"},
+			desc: "filter to project",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewConfig {
+					a.cfgFilterCat = int(session.ConfigProject)
+					a.rebuildCfgList()
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:local", aliases: []string{"p:local"},
+			desc: "filter to local",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewConfig {
+					a.cfgFilterCat = int(session.ConfigLocal)
+					a.rebuildCfgList()
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:skills", aliases: []string{"p:skills"},
+			desc: "filter to skills",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewConfig {
+					a.cfgFilterCat = int(session.ConfigSkill)
+					a.rebuildCfgList()
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:agents", aliases: []string{"p:agents"},
+			desc: "filter to agents",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewConfig {
+					a.cfgFilterCat = int(session.ConfigAgent)
+					a.rebuildCfgList()
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:commands", aliases: []string{"p:commands", "page:cmds"},
+			desc: "filter to commands",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewConfig {
+					a.cfgFilterCat = int(session.ConfigCommand)
+					a.rebuildCfgList()
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:mcp", aliases: []string{"p:mcp"},
+			desc: "filter to MCP",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewConfig {
+					a.cfgFilterCat = int(session.ConfigMCP)
+					a.rebuildCfgList()
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:hooks", aliases: []string{"p:hooks"},
+			desc: "filter to hooks",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewConfig {
+					a.cfgFilterCat = int(session.ConfigHook)
+					a.rebuildCfgList()
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:tools", aliases: []string{"p:tools"},
+			desc: "stats → tools",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewGlobalStats {
+					return a.openStatsDetail(statsDetailTools)
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:errors", aliases: []string{"p:errors"},
+			desc: "stats → errors",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewGlobalStats {
+					return a.openStatsDetail(statsDetailErrors)
+				}
+				return a, nil
+			},
+		},
+		{
+			name: "page:overview", aliases: []string{"p:overview"},
+			desc: "stats → overview / config → all",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				if a.state == viewGlobalStats {
+					a.statsDetail = statsDetailNone
+				} else if a.state == viewConfig {
+					a.cfgFilterCat = cfgFilterAll
+					a.rebuildCfgList()
+				}
+				return a, nil
 			},
 		},
 
@@ -220,7 +412,13 @@ func (a *App) handleCmdMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if a.cmdSuggIdx < 0 {
 				a.cmdSuggIdx = 0
 			}
-			a.cmdInput.SetValue(a.cmdSuggestions[a.cmdSuggIdx].name)
+			completed := a.cmdSuggestions[a.cmdSuggIdx].name
+			// For multi-command: replace only the last part
+			cur := a.cmdInput.Value()
+			if idx := strings.LastIndex(cur, " "); idx >= 0 {
+				completed = cur[:idx+1] + completed
+			}
+			a.cmdInput.SetValue(completed)
 			a.cmdInput.SetCursor(len(a.cmdInput.Value()))
 			a.updateCmdSuggestions()
 		}
@@ -271,9 +469,10 @@ func (a *App) updateCmdSuggestions() {
 	if input == "" {
 		// Show category hints when empty
 		a.cmdSuggestions = []cmdEntry{
+			{name: "view:", desc: "sessions stats config plugins"},
+			{name: "page:", desc: "memory hooks tools errors ..."},
 			{name: "group:", desc: "flat proj tree chain fork"},
 			{name: "preview:", desc: "conv stats mem tasks live"},
-			{name: "view:", desc: "stats config hooks"},
 			{name: "set:ratio", desc: "N  (15-85)"},
 			{name: "refresh", desc: "reload sessions"},
 			{name: "keymap:edit", desc: "edit keymap config"},
@@ -281,8 +480,17 @@ func (a *App) updateCmdSuggestions() {
 		return
 	}
 
+	// For multi-command input, match against the last part
+	matchInput := input
+	if idx := strings.LastIndex(input, " "); idx >= 0 {
+		matchInput = input[idx+1:]
+	}
+	if matchInput == "" {
+		return
+	}
+
 	for _, entry := range a.cmdRegistry {
-		if matchCmdEntry(entry, input) {
+		if matchCmdEntry(entry, matchInput) {
 			a.cmdSuggestions = append(a.cmdSuggestions, entry)
 			if len(a.cmdSuggestions) >= 8 {
 				break
@@ -306,30 +514,46 @@ func matchCmdEntry(entry cmdEntry, input string) bool {
 	return false
 }
 
-// executeCommand runs a command by name/alias, or falls back to session filter.
+// executeCommand runs a command by name/alias. Supports space-separated
+// multi-commands like "view:config page:hooks" — each part is executed in order.
 func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 	lower := strings.ToLower(strings.TrimSpace(input))
 
-	// Check set:ratio N
+	// Check set:ratio N (consumes the whole input)
 	if strings.HasPrefix(lower, "set:ratio") {
 		return a.executeCmdSetRatio(input)
 	}
 
-	// Exact match against registry
+	// Split into parts for multi-command support
+	parts := strings.Fields(lower)
+	var cmds []tea.Cmd
+	for _, part := range parts {
+		entry, ok := a.findCmdEntry(part)
+		if !ok {
+			a.copiedMsg = "Unknown command: " + part
+			return a, tea.Batch(cmds...)
+		}
+		_, cmd := entry.action(a)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return a, tea.Batch(cmds...)
+}
+
+// findCmdEntry looks up a command entry by exact name or alias match.
+func (a *App) findCmdEntry(lower string) (cmdEntry, bool) {
 	for _, entry := range a.cmdRegistry {
 		if strings.ToLower(entry.name) == lower {
-			return entry.action(a)
+			return entry, true
 		}
 		for _, alias := range entry.aliases {
 			if strings.ToLower(alias) == lower {
-				return entry.action(a)
+				return entry, true
 			}
 		}
 	}
-
-	// Unknown command
-	a.copiedMsg = "Unknown command: " + input
-	return a, nil
+	return cmdEntry{}, false
 }
 
 // executeCmdSetRatio handles "set:ratio N" commands.

@@ -40,6 +40,8 @@ type ActionsKeymap struct {
 	Kill     string `yaml:"kill"`
 	Input    string `yaml:"input"`
 	Jump     string `yaml:"jump"`
+	URLs     string `yaml:"urls"`
+	Files    string `yaml:"files"`
 }
 
 // ViewsKeymap defines configurable keybindings for the views menu.
@@ -103,6 +105,8 @@ func DefaultKeymap() Keymap {
 			Kill:     "k",
 			Input:    "i",
 			Jump:     "j",
+			URLs:     "u",
+			Files:    "f",
 		},
 		Views: ViewsKeymap{
 			Stats:   "s",
