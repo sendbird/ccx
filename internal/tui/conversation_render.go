@@ -145,10 +145,27 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, style.Render(subj))
 		}
 	case convAgent:
+		// Group header for unattached agents
+		if ci.groupTag != "" {
+			fold := "▸"
+			if !ci.folded {
+				fold = "▾"
+			}
+			label := fmt.Sprintf("%s Agents [%d]", fold, ci.count)
+			style := dimStyle
+			if selected {
+				style = selectedStyle
+			}
+			line = fmt.Sprintf("%s%s %s", indent, cursor, style.Render(label))
+			break
+		}
 		a := ci.agent
 		badge := agentBadgeStyle.Render("⊕")
 		typeStr := ""
-		if a.AgentType != "" {
+		if a.AgentType == "aside_question" {
+			badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render("?")
+			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render(":btw")
+		} else if a.AgentType != "" {
 			typeStr = dimStyle.Render(":" + a.AgentType)
 		}
 		msgs := dimStyle.Render(fmt.Sprintf("(%dm)", a.MsgCount))
@@ -256,8 +273,36 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 		tasksByID[t.ID] = t
 	}
 
+	// Pre-assign each agent to the last assistant message that precedes its timestamp.
+	// This places agents chronologically at the right position in the conversation.
+	agentsByMsg := make(map[int][]session.Subagent) // message index → agents
+	for _, a := range agents {
+		if a.Timestamp.IsZero() || isSystemAgent(a) {
+			continue
+		}
+		bestIdx := -1
+		for mi, m := range merged {
+			if m.entry.Role != "assistant" || m.entry.Timestamp.IsZero() {
+				continue
+			}
+			if !a.Timestamp.Before(m.entry.Timestamp) {
+				bestIdx = mi
+			}
+		}
+		if bestIdx >= 0 {
+			agentsByMsg[bestIdx] = append(agentsByMsg[bestIdx], a)
+		} else {
+			// Agent predates all messages — attach to first assistant message
+			for mi, m := range merged {
+				if m.entry.Role == "assistant" {
+					agentsByMsg[mi] = append(agentsByMsg[mi], a)
+					break
+				}
+			}
+		}
+	}
+
 	var items []convItem
-	assignedAgents := make(map[string]bool) // track agents already placed
 
 	for mi, m := range merged {
 		parentIdx := len(items)
@@ -271,24 +316,8 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 			continue
 		}
 
-		// Find agents spawned during this message range (skip already-assigned and system agents)
-		var msgAgents []session.Subagent
-		for _, a := range agents {
-			if a.Timestamp.IsZero() || assignedAgents[a.ID] || isSystemAgent(a) {
-				continue
-			}
-			// Agent timestamp should fall within the message time range
-			if !m.entry.Timestamp.IsZero() {
-				diff := a.Timestamp.Sub(m.entry.Timestamp).Seconds()
-				if diff >= -5 && diff < 120 {
-					msgAgents = append(msgAgents, a)
-				}
-			}
-		}
-
-		// Add agent sub-items
-		for _, a := range msgAgents {
-			assignedAgents[a.ID] = true
+		// Add agent sub-items assigned to this message
+		for _, a := range agentsByMsg[mi] {
 			items = append(items, convItem{
 				kind:      convAgent,
 				agent:     a,

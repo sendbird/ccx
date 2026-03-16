@@ -1838,17 +1838,39 @@ func editableFiles(sess session.Session) []editChoice {
 func (a *App) openEditMenu(sess session.Session) (tea.Model, tea.Cmd) {
 	a.editMenu = true
 	a.editSess = sess
-	a.editChoices = []editChoice{
-		{"s", "session", sess.FilePath},
-		{"t", "text", ""}, // sentinel: text export
+	a.editChoices = nil
+
+	// When inside a subagent, the primary file is the agent's JSONL
+	if a.conv.agent.FilePath != "" {
+		a.editChoices = append(a.editChoices,
+			editChoice{"s", "agent", a.conv.agent.FilePath},
+			editChoice{"p", "parent", sess.FilePath},
+		)
+	} else {
+		a.editChoices = append(a.editChoices,
+			editChoice{"s", "session", sess.FilePath},
+		)
 	}
+
+	// If cursor is on a subagent item, offer its file
+	if a.state == viewConversation {
+		if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convAgent && item.groupTag == "" {
+			a.editChoices = append(a.editChoices,
+				editChoice{"a", "agent:" + item.agent.ShortID, item.agent.FilePath},
+			)
+		}
+	}
+
+	a.editChoices = append(a.editChoices, editChoice{"t", "text", ""})
 	return a, nil
 }
 
 func (a *App) handleEditMenu(key string) (tea.Model, tea.Cmd) {
 	a.editMenu = false
-	if key == "s" {
-		return a.openInEditor(a.editSess.FilePath)
+	for _, c := range a.editChoices {
+		if c.key == key && c.path != "" {
+			return a.openInEditor(c.path)
+		}
 	}
 	if key == "t" {
 		return a.openConvAsText()

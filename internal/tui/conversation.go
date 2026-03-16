@@ -888,6 +888,10 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 		return a, nil
 	}
 
+	// For aside/subagents, skip the injected context summary (first user message
+	// that starts with "This session is being continued...").
+	entries = filterAgentContextEntries(entries)
+
 	merged := filterConversation(mergeConversationTurns(entries))
 	agents, _ := session.FindSubagents(agent.FilePath)
 	items := buildConvItems(merged, agents, nil)

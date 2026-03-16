@@ -148,6 +148,34 @@ func isSystemText(text string) bool {
 		text == "Prompt is too long"
 }
 
+// filterAgentContextEntries removes injected context summaries from subagent entries.
+// Subagents (including /btw aside agents) receive the parent's compacted context as
+// their first user message. This filters it out so only the agent's own content shows.
+func filterAgentContextEntries(entries []session.Entry) []session.Entry {
+	if len(entries) == 0 {
+		return entries
+	}
+	// Check first entry: if it's a user message starting with context continuation marker, skip it
+	first := entries[0]
+	if first.Role == "user" {
+		for _, b := range first.Content {
+			text := b.Text
+			if b.Type == "text" && len(text) == 0 {
+				// content might be a string (not blocks) — check raw
+				continue
+			}
+			if strings.HasPrefix(text, "This session is being continued from a previous conversation") {
+				return entries[1:]
+			}
+		}
+		// Also check if content is a raw string (not blocks)
+		if len(first.Content) == 0 {
+			// The raw entry might have string content — already filtered by parser
+		}
+	}
+	return entries
+}
+
 // isSystemAgent returns true if the agent is an internal system agent
 // (e.g. autocompaction summary agents) that should be hidden from the UI.
 func isSystemAgent(a session.Subagent) bool {
