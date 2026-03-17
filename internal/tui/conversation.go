@@ -154,12 +154,17 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.pushNavFrame()
 			return a.openAgentConversation(item.agent)
 		case convMsg:
-			// If preview focused on a Task block, jump to the agent
+			// If preview focused on a block, check for actionable types
 			if sp.Focus && sp.Folds != nil {
 				bc := sp.Folds.BlockCursor
 				entry := sp.Folds.Entry
 				if bc >= 0 && bc < len(entry.Content) {
 					block := entry.Content[bc]
+					// Open cached image
+					if block.Type == "image" && block.ImagePasteID > 0 {
+						return a.openCachedImage(block.ImagePasteID)
+					}
+					// Jump to agent for Task blocks
 					if block.Type == "tool_use" && block.ToolName == "Task" {
 						if agent, found := a.findAgentForConv(entry); found {
 							a.pushNavFrame()
@@ -181,6 +186,8 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case "e":
 		return a.openEditMenu(a.currentSess)
+	case "i":
+		return a.openMessageImage()
 	case "I":
 		if !a.config.TmuxEnabled {
 			return a, nil
@@ -494,6 +501,11 @@ func buildAgentPreviewEntry(agent session.Subagent) session.Entry {
 					agent.ShortID, agent.AgentType, agent.MsgCount, agent.FirstPrompt)},
 			},
 		}
+	}
+
+	entries = filterAgentContextEntries(entries)
+	if agent.AgentType == "aside_question" {
+		entries = filterSideQuestionContext(entries)
 	}
 
 	// Header block
@@ -891,6 +903,11 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	// For aside/subagents, skip the injected context summary (first user message
 	// that starts with "This session is being continued...").
 	entries = filterAgentContextEntries(entries)
+
+	// For side-question agents, collapse the parent session context
+	if agent.AgentType == "aside_question" {
+		entries = filterSideQuestionContext(entries)
+	}
 
 	merged := filterConversation(mergeConversationTurns(entries))
 	agents, _ := session.FindSubagents(agent.FilePath)

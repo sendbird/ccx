@@ -176,6 +176,45 @@ func filterAgentContextEntries(entries []session.Entry) []session.Entry {
 	return entries
 }
 
+// filterSideQuestionContext strips background context from side-question (aside_question)
+// agent files. These files contain the entire parent session as injected context,
+// with only the last user+assistant pair being the actual side-question exchange.
+// Returns a single context-summary entry followed by the real messages.
+func filterSideQuestionContext(entries []session.Entry) []session.Entry {
+	if len(entries) <= 2 {
+		return entries
+	}
+
+	// Find the last user message — everything from there onwards is the real exchange.
+	lastUserIdx := -1
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+	if lastUserIdx <= 0 {
+		return entries
+	}
+
+	// Build a summary entry for the collapsed context
+	contextCount := lastUserIdx
+	summary := session.Entry{
+		Role:      "assistant",
+		Timestamp: entries[0].Timestamp,
+		Content: []session.ContentBlock{{
+			Type:    "system_tag",
+			TagName: "context",
+			Text:    fmt.Sprintf("(%d background context messages from parent session)", contextCount),
+		}},
+	}
+
+	result := make([]session.Entry, 0, 1+len(entries)-lastUserIdx)
+	result = append(result, summary)
+	result = append(result, entries[lastUserIdx:]...)
+	return result
+}
+
 // isSystemAgent returns true if the agent is an internal system agent
 // (e.g. autocompaction summary agents) that should be hidden from the UI.
 func isSystemAgent(a session.Subagent) bool {

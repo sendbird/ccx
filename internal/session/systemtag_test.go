@@ -1,0 +1,255 @@
+package session
+
+import (
+	"testing"
+)
+
+func TestSplitSystemTags_SingleTag(t *testing.T) {
+	input := "<system-reminder>You must do X</system-reminder>\n\nWhat is 2+2?"
+	blocks := splitSystemTags(input)
+	if blocks == nil {
+		t.Fatal("expected split, got nil")
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("got %d blocks, want 2", len(blocks))
+	}
+	if blocks[0].Type != "system_tag" {
+		t.Errorf("block[0] type = %q, want system_tag", blocks[0].Type)
+	}
+	if blocks[0].TagName != "system-reminder" {
+		t.Errorf("block[0] TagName = %q, want system-reminder", blocks[0].TagName)
+	}
+	if blocks[0].Text != "You must do X" {
+		t.Errorf("block[0] Text = %q, want %q", blocks[0].Text, "You must do X")
+	}
+	if blocks[1].Type != "text" {
+		t.Errorf("block[1] type = %q, want text", blocks[1].Type)
+	}
+	if blocks[1].Text != "What is 2+2?" {
+		t.Errorf("block[1] Text = %q, want %q", blocks[1].Text, "What is 2+2?")
+	}
+}
+
+func TestSplitSystemTags_MultipleTags(t *testing.T) {
+	input := "Hello\n<system-reminder>reminder content</system-reminder>\nmiddle text\n<task-notification>task info</task-notification>\nfinal text"
+	blocks := splitSystemTags(input)
+	if blocks == nil {
+		t.Fatal("expected split, got nil")
+	}
+	if len(blocks) != 5 {
+		t.Fatalf("got %d blocks, want 5", len(blocks))
+	}
+
+	expected := []struct {
+		typ, tag string
+	}{
+		{"text", ""},
+		{"system_tag", "system-reminder"},
+		{"text", ""},
+		{"system_tag", "task-notification"},
+		{"text", ""},
+	}
+	for i, want := range expected {
+		if blocks[i].Type != want.typ {
+			t.Errorf("block[%d] type = %q, want %q", i, blocks[i].Type, want.typ)
+		}
+		if want.tag != "" && blocks[i].TagName != want.tag {
+			t.Errorf("block[%d] TagName = %q, want %q", i, blocks[i].TagName, want.tag)
+		}
+	}
+}
+
+func TestSplitSystemTags_OnlyTag(t *testing.T) {
+	input := "<system-reminder>All system content</system-reminder>"
+	blocks := splitSystemTags(input)
+	if blocks == nil {
+		t.Fatal("expected split, got nil")
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("got %d blocks, want 1", len(blocks))
+	}
+	if blocks[0].Type != "system_tag" {
+		t.Errorf("type = %q, want system_tag", blocks[0].Type)
+	}
+}
+
+func TestSplitSystemTags_NoSystemTags(t *testing.T) {
+	input := "Just plain text with <code>some tags</code>"
+	blocks := splitSystemTags(input)
+	if blocks != nil {
+		t.Errorf("expected nil for non-system tags, got %d blocks", len(blocks))
+	}
+}
+
+func TestSplitSystemTags_EmptyString(t *testing.T) {
+	blocks := splitSystemTags("")
+	if blocks != nil {
+		t.Errorf("expected nil for empty string, got %d blocks", len(blocks))
+	}
+}
+
+func TestSplitSystemTags_UnclosedTag(t *testing.T) {
+	input := "<system-reminder>unclosed content without end tag"
+	blocks := splitSystemTags(input)
+	if blocks != nil {
+		t.Errorf("expected nil for unclosed tag, got %d blocks", len(blocks))
+	}
+}
+
+func TestSplitSystemTags_NestedContent(t *testing.T) {
+	input := `<system-reminder>
+The following skills are available:
+- keybindings-help: Use when the user wants to customize keyboard shortcuts
+- simplify: Review changed code
+</system-reminder>
+
+hi`
+	blocks := splitSystemTags(input)
+	if blocks == nil {
+		t.Fatal("expected split, got nil")
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("got %d blocks, want 2", len(blocks))
+	}
+	if blocks[0].Type != "system_tag" {
+		t.Errorf("block[0] type = %q, want system_tag", blocks[0].Type)
+	}
+	if blocks[1].Text != "hi" {
+		t.Errorf("block[1] Text = %q, want %q", blocks[1].Text, "hi")
+	}
+}
+
+func TestSplitSystemTags_SideQuestionPattern(t *testing.T) {
+	// Real pattern from side-question subagents
+	input := `<system-reminder>This is a side question from the user. You must answer this question directly in a single response.
+
+CRITICAL CONSTRAINTS:
+- You have NO tools available
+- This is a one-off response
+</system-reminder>
+
+hi`
+	blocks := splitSystemTags(input)
+	if blocks == nil {
+		t.Fatal("expected split, got nil")
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("got %d blocks, want 2", len(blocks))
+	}
+	if blocks[0].Type != "system_tag" {
+		t.Errorf("block[0] type = %q, want system_tag", blocks[0].Type)
+	}
+	if blocks[0].TagName != "system-reminder" {
+		t.Errorf("block[0] TagName = %q, want system-reminder", blocks[0].TagName)
+	}
+	if blocks[1].Type != "text" {
+		t.Errorf("block[1] type = %q, want text", blocks[1].Type)
+	}
+	if blocks[1].Text != "hi" {
+		t.Errorf("block[1] Text = %q, want %q", blocks[1].Text, "hi")
+	}
+}
+
+func TestSplitSystemTags_AvailableDeferredTools(t *testing.T) {
+	input := `<available-deferred-tools>
+AskUserQuestion
+WebFetch
+WebSearch
+</available-deferred-tools>
+
+Please help me with code.`
+	blocks := splitSystemTags(input)
+	if blocks == nil {
+		t.Fatal("expected split, got nil")
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("got %d blocks, want 2", len(blocks))
+	}
+	if blocks[0].TagName != "available-deferred-tools" {
+		t.Errorf("TagName = %q, want available-deferred-tools", blocks[0].TagName)
+	}
+}
+
+func TestSplitSystemTags_CommandPattern(t *testing.T) {
+	input := `<local-command-caveat>Caveat: generated by local commands.</local-command-caveat><command-name>clear</command-name>
+            <command-message>clear</command-message>
+            <command-args></command-args>`
+	blocks := splitSystemTags(input)
+	if blocks == nil {
+		t.Fatal("expected split, got nil")
+	}
+	// Should have 4 system_tag blocks (caveat, name, message, args)
+	systemCount := 0
+	for _, b := range blocks {
+		if b.Type == "system_tag" {
+			systemCount++
+		}
+	}
+	if systemCount != 4 {
+		t.Errorf("got %d system_tag blocks, want 4", systemCount)
+	}
+}
+
+func TestParseEntry_SystemTagSplitting(t *testing.T) {
+	// Verify the full pipeline: ParseEntry → splitSystemTags → content blocks
+	line := `{"type":"user","timestamp":"2025-01-15T10:00:00Z","message":{"role":"user","content":"<system-reminder>Do not forget X</system-reminder>\n\nWhat is Go?"}}`
+	entry, err := ParseEntry(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entry.Content) != 2 {
+		t.Fatalf("content blocks = %d, want 2", len(entry.Content))
+	}
+	if entry.Content[0].Type != "system_tag" {
+		t.Errorf("block[0] type = %q, want system_tag", entry.Content[0].Type)
+	}
+	if entry.Content[1].Type != "text" {
+		t.Errorf("block[1] type = %q, want text", entry.Content[1].Type)
+	}
+}
+
+func TestParseEntry_SystemTagInBlockContent(t *testing.T) {
+	// Content as array of blocks (not plain string)
+	line := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>Reminder</system-reminder>\n\nactual text"},{"type":"text","text":"plain block"}]}}`
+	entry, err := ParseEntry(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// First text block should be split into system_tag + text, second stays as text
+	if len(entry.Content) != 3 {
+		t.Fatalf("content blocks = %d, want 3 (system_tag + text + text)", len(entry.Content))
+	}
+	if entry.Content[0].Type != "system_tag" {
+		t.Errorf("block[0] type = %q, want system_tag", entry.Content[0].Type)
+	}
+	if entry.Content[1].Type != "text" {
+		t.Errorf("block[1] type = %q, want text", entry.Content[1].Type)
+	}
+	if entry.Content[2].Type != "text" {
+		t.Errorf("block[2] type = %q, want text", entry.Content[2].Type)
+	}
+	if entry.Content[2].Text != "plain block" {
+		t.Errorf("block[2] Text = %q, want %q", entry.Content[2].Text, "plain block")
+	}
+}
+
+func TestEntryPreview_SkipsSystemTag(t *testing.T) {
+	e := Entry{Content: []ContentBlock{
+		{Type: "system_tag", TagName: "system-reminder", Text: "long system instructions"},
+		{Type: "text", Text: "actual question"},
+	}}
+	got := EntryPreview(e)
+	if got != "actual question" {
+		t.Errorf("preview = %q, want %q (should skip system_tag)", got, "actual question")
+	}
+}
+
+func TestEntryPreview_OnlySystemTag(t *testing.T) {
+	e := Entry{Content: []ContentBlock{
+		{Type: "system_tag", TagName: "system-reminder", Text: "only system stuff"},
+	}}
+	got := EntryPreview(e)
+	if got != "(no content)" {
+		t.Errorf("preview = %q, want %q", got, "(no content)")
+	}
+}

@@ -55,7 +55,16 @@ func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lip
 		}
 	}
 
-	line := fmt.Sprintf("%s%s  %s  %s%s", cursor, role, ts, idxStr, preview)
+	// Image badge
+	imgBadge := ""
+	for _, block := range e.Content {
+		if block.Type == "image" {
+			imgBadge = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#87CEEB")).Render("🖼")
+			break
+		}
+	}
+
+	line := fmt.Sprintf("%s%s  %s  %s%s%s", cursor, role, ts, idxStr, imgBadge, preview)
 	fmt.Fprint(w, clamp.Render(line))
 }
 

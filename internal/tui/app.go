@@ -1861,6 +1861,39 @@ func (a *App) openEditMenu(sess session.Session) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Offer images from the current message (extracted from cache or JSONL base64)
+	if a.state == viewConversation || a.state == viewMessageFull {
+		var entry session.Entry
+		if a.state == viewConversation {
+			// Try folds first, then fall back to selected list item
+			if a.conv.split.Folds != nil {
+				entry = a.conv.split.Folds.Entry
+			}
+			if len(entry.Content) == 0 {
+				if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
+					entry = item.merged.entry
+				}
+			}
+		} else {
+			entry = a.msgFull.folds.Entry
+		}
+		imgCount := 0
+		for _, block := range entry.Content {
+			if block.Type == "image" && block.ImagePasteID > 0 {
+				if p := a.resolveImagePath(block.ImagePasteID); p != "" {
+					key := "i"
+					if imgCount > 0 {
+						key = fmt.Sprintf("%d", imgCount)
+					}
+					a.editChoices = append(a.editChoices,
+						editChoice{key, fmt.Sprintf("image #%d", block.ImagePasteID), p},
+					)
+					imgCount++
+				}
+			}
+		}
+	}
+
 	a.editChoices = append(a.editChoices, editChoice{"t", "text", ""})
 	return a, nil
 }
@@ -2200,6 +2233,73 @@ func (a *App) killLiveSession(sess session.Session) (tea.Model, tea.Cmd) {
 		a.sessSplit.Focus = false
 	}
 	a.copiedMsg = "Killed"
+	return a, nil
+}
+
+func (a *App) resolveImagePath(pasteID int) string {
+	home, _ := os.UserHomeDir()
+	p, err := session.ExtractImageToTemp(home, a.currentSess.FilePath, a.currentSess.ID, pasteID)
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// openMessageImage finds the first image in the current message and opens it.
+// Works from conversation view (split preview) and detail view.
+func (a *App) openMessageImage() (tea.Model, tea.Cmd) {
+	var entry session.Entry
+	switch a.state {
+	case viewConversation:
+		if a.conv.split.Folds != nil {
+			entry = a.conv.split.Folds.Entry
+		}
+		if len(entry.Content) == 0 {
+			if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
+				entry = item.merged.entry
+			}
+		}
+	case viewMessageFull:
+		entry = a.msgFull.folds.Entry
+	}
+
+	// If block cursor is on an image, open that one
+	var folds *FoldState
+	if a.state == viewConversation && a.conv.split.Folds != nil {
+		folds = a.conv.split.Folds
+	} else if a.state == viewMessageFull {
+		folds = &a.msgFull.folds
+	}
+	if folds != nil {
+		bc := folds.BlockCursor
+		if bc >= 0 && bc < len(entry.Content) && entry.Content[bc].Type == "image" && entry.Content[bc].ImagePasteID > 0 {
+			return a.openCachedImage(entry.Content[bc].ImagePasteID)
+		}
+	}
+
+	// Otherwise open the first image in the message
+	for _, block := range entry.Content {
+		if block.Type == "image" && block.ImagePasteID > 0 {
+			return a.openCachedImage(block.ImagePasteID)
+		}
+	}
+
+	a.copiedMsg = "No image in this message"
+	return a, nil
+}
+
+func (a *App) openCachedImage(pasteID int) (tea.Model, tea.Cmd) {
+	p := a.resolveImagePath(pasteID)
+	if p == "" {
+		a.copiedMsg = "Image not found"
+		return a, nil
+	}
+	c := exec.Command("open", p)
+	if err := c.Start(); err != nil {
+		a.copiedMsg = "Error: " + err.Error()
+		return a, nil
+	}
+	a.copiedMsg = "Opened image #" + fmt.Sprintf("%d", pasteID)
 	return a, nil
 }
 

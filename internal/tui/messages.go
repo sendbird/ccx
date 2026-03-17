@@ -212,7 +212,7 @@ type foldSet map[int]bool
 func defaultFolds(e session.Entry) foldSet {
 	fs := make(foldSet)
 	for i, block := range e.Content {
-		if block.Type == "tool_use" || block.Type == "tool_result" || block.Type == "thinking" {
+		if block.Type == "tool_use" || block.Type == "tool_result" || block.Type == "thinking" || block.Type == "system_tag" {
 			fs[i] = true
 		}
 	}
@@ -413,7 +413,7 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 		isMarked := opts.selected != nil && opts.selected[i]
 
 		// Fold/format indicators (only in block-navigation mode)
-		isFoldable := block.Type == "tool_use" || block.Type == "tool_result" || block.Type == "thinking"
+		isFoldable := block.Type == "tool_use" || block.Type == "tool_result" || block.Type == "thinking" || block.Type == "system_tag"
 		var cursorPrefix string
 		if blockCursor >= 0 {
 			indicator := " "
@@ -543,9 +543,30 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				wrapped := wrapText(block.Text, w)
 				buf.WriteString(dimStyle.Render(wrapped) + "\n\n")
 			}
+		case "system_tag":
+			buf.WriteString(cursorPrefix)
+			label := "<" + block.TagName + ">"
+			if folded {
+				summary := session.StripXMLTags(stripANSI(block.Text))
+				summary = strings.ReplaceAll(summary, "\n", " ")
+				summary = strings.Join(strings.Fields(summary), " ")
+				if len(summary) > 60 {
+					summary = summary[:57] + "..."
+				}
+				buf.WriteString(dimStyle.Render(label+"  "+summary) + "\n")
+			} else {
+				buf.WriteString(dimStyle.Render(label) + "\n")
+				text := session.StripXMLTags(stripANSI(block.Text))
+				wrapped := wrapText(text, w)
+				buf.WriteString(dimStyle.Render(wrapped) + "\n\n")
+			}
 		case "image":
 			buf.WriteString(cursorPrefix)
-			buf.WriteString(dimStyle.Render(block.Text) + "\n\n")
+			label := block.Text
+			if block.ImagePasteID > 0 {
+				label = fmt.Sprintf("🖼 %s  (paste #%d — Enter to open)", block.Text, block.ImagePasteID)
+			}
+			buf.WriteString(dimStyle.Render(label) + "\n\n")
 		}
 
 		// Apply background highlight to the cursor block (or marked blocks)

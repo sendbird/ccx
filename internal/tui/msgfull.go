@@ -175,10 +175,13 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case "enter":
-		// On Agent block: recursive drill-down
+		// On actionable blocks: image open, agent drill-down
 		fs := &a.msgFull.folds
 		if fs.BlockCursor >= 0 && fs.BlockCursor < len(fs.Entry.Content) {
 			block := fs.Entry.Content[fs.BlockCursor]
+			if block.Type == "image" && block.ImagePasteID > 0 {
+				return a.openCachedImage(block.ImagePasteID)
+			}
 			if block.Type == "tool_use" && block.ToolName == "Task" {
 				if agent, found := a.findAgentInMsgFull(fs.Entry); found {
 					a.pushMsgFullFrame()
@@ -187,6 +190,8 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return a, nil
+	case "i":
+		return a.openMessageImage()
 	}
 
 	// Fold navigation
