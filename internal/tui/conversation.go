@@ -146,7 +146,14 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		switch item.kind {
 		case convTask:
-			// Drill into task — show conversation entries related to this task
+			// If this task has a corresponding agent (via TaskOutput), jump to it
+			if item.groupTag == "" {
+				if agents := a.findTaskAgents(); len(agents) == 1 {
+					a.pushNavFrame()
+					return a.openAgentConversation(agents[0])
+				}
+			}
+			// Otherwise drill into task — show conversation entries related to this task
 			a.pushNavFrame()
 			return a.openTaskConversation(item.task)
 		case convAgent:
@@ -584,6 +591,42 @@ func renderTaskSummary(task session.TaskItem, width int) string {
 }
 
 // findAgentForConv finds the agent matching a message entry in the conversation.
+// findTaskAgents returns all subagents referenced by TaskOutput tool_use blocks
+// in the conversation. TaskOutput.task_id is the agent ID.
+func (a *App) findTaskAgents() []session.Subagent {
+	agents := a.conv.agents
+	if len(agents) == 0 {
+		return nil
+	}
+
+	agentByID := make(map[string]session.Subagent, len(agents))
+	for _, ag := range agents {
+		agentByID[ag.ID] = ag
+	}
+
+	seen := make(map[string]bool)
+	var result []session.Subagent
+	for _, e := range a.conv.messages {
+		for _, b := range e.Content {
+			if b.Type != "tool_use" || b.ToolName != "TaskOutput" {
+				continue
+			}
+			var input struct {
+				TaskID string `json:"task_id"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			if input.TaskID == "" || seen[input.TaskID] {
+				continue
+			}
+			seen[input.TaskID] = true
+			if ag, ok := agentByID[input.TaskID]; ok {
+				result = append(result, ag)
+			}
+		}
+	}
+	return result
+}
+
 func (a *App) findAgentForConv(entry session.Entry) (session.Subagent, bool) {
 	agents := a.conv.agents
 	if len(agents) == 0 {
@@ -805,7 +848,7 @@ func extractTaskEntries(entries []session.Entry, taskID string) []session.Entry 
 
 	for i, e := range entries {
 		for _, b := range e.Content {
-			if b.Type != "tool_use" || (b.ToolName != "TaskUpdate" && b.ToolName != "TaskCreate") {
+			if b.Type != "tool_use" || !isTaskTool(b.ToolName) {
 				continue
 			}
 			var input struct {

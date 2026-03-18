@@ -465,6 +465,7 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				if formatted {
 					text = tryFormatJSON(text)
 				}
+				text = formatMarkdownTables(text)
 				wrapped := wrapText(text, max(w-2, 10))
 				buf.WriteString(wrapped + "\n\n")
 			}
@@ -623,6 +624,123 @@ func applyBgToLine(line string, width int) string {
 	padded := padToWidth(line, width)
 	inner := strings.ReplaceAll(padded, resetCode, resetCode+bgCode)
 	return bgCode + inner + resetCode
+}
+
+// formatMarkdownTables detects markdown tables in text and re-renders them
+// with aligned columns. Non-table lines pass through unchanged.
+func formatMarkdownTables(text string) string {
+	lines := strings.Split(text, "\n")
+	var result []string
+	i := 0
+	for i < len(lines) {
+		// Detect table start: line with | and next line is separator (|---|...)
+		if isTableRow(lines[i]) && i+1 < len(lines) && isTableSeparator(lines[i+1]) {
+			// Collect all contiguous table lines
+			start := i
+			for i < len(lines) && (isTableRow(lines[i]) || isTableSeparator(lines[i])) {
+				i++
+			}
+			result = append(result, alignTable(lines[start:i])...)
+			continue
+		}
+		result = append(result, lines[i])
+		i++
+	}
+	return strings.Join(result, "\n")
+}
+
+func isTableRow(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.Contains(trimmed, "|") && len(trimmed) > 1
+}
+
+func isTableSeparator(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.Contains(trimmed, "|") || !strings.Contains(trimmed, "-") {
+		return false
+	}
+	for _, ch := range trimmed {
+		if ch != '|' && ch != '-' && ch != ':' && ch != ' ' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseTableCells(line string) []string {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.Trim(trimmed, "|")
+	parts := strings.Split(trimmed, "|")
+	cells := make([]string, len(parts))
+	for i, p := range parts {
+		cells[i] = strings.TrimSpace(p)
+	}
+	return cells
+}
+
+func alignTable(lines []string) []string {
+	// Parse all rows into cells
+	type row struct {
+		cells []string
+		isSep bool
+	}
+	var rows []row
+	maxCols := 0
+	for _, line := range lines {
+		if isTableSeparator(line) {
+			rows = append(rows, row{isSep: true})
+			continue
+		}
+		cells := parseTableCells(line)
+		if len(cells) > maxCols {
+			maxCols = len(cells)
+		}
+		rows = append(rows, row{cells: cells})
+	}
+
+	if maxCols == 0 {
+		return lines
+	}
+
+	// Calculate max width per column
+	colWidths := make([]int, maxCols)
+	for _, r := range rows {
+		if r.isSep {
+			continue
+		}
+		for j, cell := range r.cells {
+			if j < maxCols && len(cell) > colWidths[j] {
+				colWidths[j] = len(cell)
+			}
+		}
+	}
+
+	// Render aligned rows
+	var result []string
+	for _, r := range rows {
+		var sb strings.Builder
+		sb.WriteString("|")
+		if r.isSep {
+			for j := range maxCols {
+				sb.WriteString(" ")
+				sb.WriteString(strings.Repeat("-", colWidths[j]))
+				sb.WriteString(" |")
+			}
+		} else {
+			for j := range maxCols {
+				cell := ""
+				if j < len(r.cells) {
+					cell = r.cells[j]
+				}
+				sb.WriteString(" ")
+				sb.WriteString(cell)
+				sb.WriteString(strings.Repeat(" ", colWidths[j]-len(cell)))
+				sb.WriteString(" |")
+			}
+		}
+		result = append(result, sb.String())
+	}
+	return result
 }
 
 // wrapText wraps text to the given width, preserving existing line breaks.

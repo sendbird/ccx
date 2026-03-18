@@ -203,6 +203,61 @@ func TestRender_BlockStarts(t *testing.T) {
 	}
 }
 
+func TestRender_MarkdownTable(t *testing.T) {
+	entry := session.Entry{
+		Role:      "assistant",
+		Timestamp: time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC),
+		Content: []session.ContentBlock{
+			{Type: "text", Text: "Here's the summary:\n\n| State | Ctrl+/ does | Esc does |\n|---|---|---|\n| **Panel open** | → Chat mode | (goes to Claude) |\n| **Chat mode** | → Close panel | → Back to focus |\n| **Panel closed** | → Open panel | (goes to Claude) |\n\nNo more conflicts."},
+		},
+	}
+	folds := defaultFolds(entry)
+	rp := renderFullMessageWithCursor(entry, 80, folds, nil, -1)
+	assertGolden(t, "markdown_table", stripANSIForGolden(rp.content))
+}
+
+func TestFormatMarkdownTables_Alignment(t *testing.T) {
+	input := "| Name | Age |\n|---|---|\n| Alice | 30 |\n| Bob | 7 |"
+	got := formatMarkdownTables(input)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 4 {
+		t.Fatalf("got %d lines, want 4", len(lines))
+	}
+	// All lines should have the same length (aligned columns)
+	w := len(lines[0])
+	for i, line := range lines {
+		if len(line) != w {
+			t.Errorf("line %d length=%d, want %d: %q", i, len(line), w, line)
+		}
+	}
+	// Header cells should be padded
+	if !strings.Contains(lines[0], "| Name  |") {
+		t.Errorf("expected padded Name, got: %q", lines[0])
+	}
+}
+
+func TestFormatMarkdownTables_NoTable(t *testing.T) {
+	input := "Just regular text\nwith no tables"
+	got := formatMarkdownTables(input)
+	if got != input {
+		t.Errorf("non-table text should pass through unchanged")
+	}
+}
+
+func TestFormatMarkdownTables_MixedContent(t *testing.T) {
+	input := "Before table\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter table"
+	got := formatMarkdownTables(input)
+	if !strings.Contains(got, "Before table") {
+		t.Error("should preserve text before table")
+	}
+	if !strings.Contains(got, "After table") {
+		t.Error("should preserve text after table")
+	}
+	if !strings.Contains(got, "| A |") {
+		t.Error("should contain aligned table")
+	}
+}
+
 func TestRender_CompactMessage(t *testing.T) {
 	entry := session.Entry{
 		Role:      "user",

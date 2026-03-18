@@ -256,7 +256,7 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 				continue
 			}
 			for _, block := range m.entry.Content {
-				if block.Type == "tool_use" && (block.ToolName == "TaskCreate" || block.ToolName == "TaskUpdate" || block.ToolName == "TodoWrite") {
+				if block.Type == "tool_use" && isTaskTool(block.ToolName) {
 					taskMsgIndices = append(taskMsgIndices, i)
 					break
 				}
@@ -504,6 +504,38 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 			}
 			compactParts = append(compactParts, compactLabel)
 			detailLines = append(detailLines, detailLabel)
+		case "TaskOutput":
+			var input struct {
+				TaskID string `json:"task_id"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			label := "⏳ waiting #" + input.TaskID
+			if len(input.TaskID) > 8 {
+				label = "⏳ waiting #" + input.TaskID[:8]
+			}
+			compactParts = append(compactParts, label)
+			detailLines = append(detailLines, "⏳ Waiting for agent output: "+input.TaskID)
+		case "TaskGet":
+			var input struct {
+				TaskID string `json:"taskId"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			compactParts = append(compactParts, "get #"+input.TaskID)
+			detailLines = append(detailLines, "📋 Read task #"+input.TaskID)
+		case "TaskStop":
+			var input struct {
+				TaskID string `json:"task_id"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			label := "⏹ stop #" + input.TaskID
+			if len(input.TaskID) > 8 {
+				label = "⏹ stop #" + input.TaskID[:8]
+			}
+			compactParts = append(compactParts, label)
+			detailLines = append(detailLines, "⏹ Stopped agent: "+input.TaskID)
+		case "TaskList":
+			compactParts = append(compactParts, "list")
+			detailLines = append(detailLines, "📋 Listed tasks")
 		case "TodoWrite":
 			compactParts = append(compactParts, "todo updated")
 			detailLines = append(detailLines, "Todo list updated")
@@ -513,6 +545,14 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 		compact:  strings.Join(compactParts, ", "),
 		detailed: strings.Join(detailLines, "\n"),
 	}
+}
+
+func isTaskTool(name string) bool {
+	switch name {
+	case "TaskCreate", "TaskUpdate", "TaskGet", "TaskOutput", "TaskStop", "TaskList", "TodoWrite":
+		return true
+	}
+	return false
 }
 
 // visibleConvItems returns only the items that should be displayed,
