@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 func main() {

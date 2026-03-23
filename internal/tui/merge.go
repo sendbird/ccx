@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 // mergedMsg represents a logical conversation turn, potentially combining
@@ -146,6 +146,73 @@ func isSystemText(text string) bool {
 	return strings.HasPrefix(text, "<system-reminder>") ||
 		strings.HasPrefix(text, "<system>") ||
 		text == "Prompt is too long"
+}
+
+// filterAgentContextEntries removes injected context summaries from subagent entries.
+// Subagents (including /btw aside agents) receive the parent's compacted context as
+// their first user message. This filters it out so only the agent's own content shows.
+func filterAgentContextEntries(entries []session.Entry) []session.Entry {
+	if len(entries) == 0 {
+		return entries
+	}
+	// Check first entry: if it's a user message starting with context continuation marker, skip it
+	first := entries[0]
+	if first.Role == "user" {
+		for _, b := range first.Content {
+			text := b.Text
+			if b.Type == "text" && len(text) == 0 {
+				// content might be a string (not blocks) — check raw
+				continue
+			}
+			if strings.HasPrefix(text, "This session is being continued from a previous conversation") {
+				return entries[1:]
+			}
+		}
+		// Also check if content is a raw string (not blocks)
+		if len(first.Content) == 0 {
+			// The raw entry might have string content — already filtered by parser
+		}
+	}
+	return entries
+}
+
+// filterSideQuestionContext strips background context from side-question (aside_question)
+// agent files. These files contain the entire parent session as injected context,
+// with only the last user+assistant pair being the actual side-question exchange.
+// Returns a single context-summary entry followed by the real messages.
+func filterSideQuestionContext(entries []session.Entry) []session.Entry {
+	if len(entries) <= 2 {
+		return entries
+	}
+
+	// Find the last user message — everything from there onwards is the real exchange.
+	lastUserIdx := -1
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+	if lastUserIdx <= 0 {
+		return entries
+	}
+
+	// Build a summary entry for the collapsed context
+	contextCount := lastUserIdx
+	summary := session.Entry{
+		Role:      "assistant",
+		Timestamp: entries[0].Timestamp,
+		Content: []session.ContentBlock{{
+			Type:    "system_tag",
+			TagName: "context",
+			Text:    fmt.Sprintf("(%d background context messages from parent session)", contextCount),
+		}},
+	}
+
+	result := make([]session.Entry, 0, 1+len(entries)-lastUserIdx)
+	result = append(result, summary)
+	result = append(result, entries[lastUserIdx:]...)
+	return result
 }
 
 // isSystemAgent returns true if the agent is an internal system agent

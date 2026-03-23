@@ -15,7 +15,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/extract"
+	"github.com/keyolk/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/tmux"
 )
 
 type tickMsg time.Time
@@ -67,12 +69,12 @@ func liveTickCmd() tea.Cmd {
 // captureAfterKeyCmd sends a key to the tmux pane, waits briefly for tmux to
 // process it, then captures the pane content. This gives responsive feedback
 // on keypress without constant polling.
-func captureAfterKeyCmd(p tmuxPane, key string) tea.Cmd {
+func captureAfterKeyCmd(p tmux.Pane, key string) tea.Cmd {
 	return func() tea.Msg {
-		tmuxSendSingleKey(p, key)
+		tmux.SendSingleKey(p, key)
 		time.Sleep(30 * time.Millisecond)
-		content, err := tmuxCapturePane(p)
-		if err != nil || !hasClaude(p.PID) {
+		content, err := tmux.CapturePane(p)
+		if err != nil || !tmux.HasClaude(p.PID) {
 			return liveCaptureMsg{failed: true}
 		}
 		return liveCaptureMsg{content: content}
@@ -80,10 +82,10 @@ func captureAfterKeyCmd(p tmuxPane, key string) tea.Cmd {
 }
 
 // capturePaneCmd returns a Cmd that captures tmux pane content asynchronously.
-func capturePaneCmd(p tmuxPane) tea.Cmd {
+func capturePaneCmd(p tmux.Pane) tea.Cmd {
 	return func() tea.Msg {
-		content, err := tmuxCapturePane(p)
-		if err != nil || !hasClaude(p.PID) {
+		content, err := tmux.CapturePane(p)
+		if err != nil || !tmux.HasClaude(p.PID) {
 			return liveCaptureMsg{failed: true}
 		}
 		return liveCaptureMsg{content: content}
@@ -92,7 +94,7 @@ func capturePaneCmd(p tmuxPane) tea.Cmd {
 
 // paneProxyState holds state for both live preview and shell-in-preview.
 type paneProxyState struct {
-	pane    tmuxPane
+	pane    tmux.Pane
 	sessID  string // non-empty for live Claude preview, empty for shell
 	isShell bool   // true = we spawned this pane, must kill on close
 }
@@ -119,7 +121,7 @@ type App struct {
 	sessions       []session.Session
 	currentSess    session.Session
 	selectedSet    map[string]bool // multi-select: session ID → selected
-	liveInputPanes []tmuxPane      // bulk input: multiple target panes
+	liveInputPanes []tmux.Pane      // bulk input: multiple target panes
 
 	// List models
 	sessionList list.Model
@@ -194,6 +196,20 @@ type App struct {
 	actionsSess session.Session
 	editChoices []editChoice // available files to edit
 
+	// URL menu (u key in actions)
+	urlMenu        bool
+	urlAllItems    []extract.Item       // unfiltered full list
+	urlItems       []extract.Item       // filtered (displayed) list
+	urlCursor      int
+	urlSelected    map[string]bool // selected URLs for multi-open/copy
+	urlSearching   bool            // typing in search input
+	urlSearchInput textinput.Model
+	urlSearchTerm  string
+	urlScope       string          // context label: "session", "message", "block"
+
+	// Conversation/message-full actions menu (x key)
+	convActionsMenu bool
+
 	// Views menu (V key)
 	viewsMenu bool
 
@@ -216,7 +232,7 @@ type App struct {
 
 	// Live input modal (I key)
 	liveInputActive  bool
-	liveInputPane    tmuxPane
+	liveInputPane    tmux.Pane
 	liveInputModal   inputModal
 	liveInputProjDir string // project path for $EDITOR cwd
 
@@ -375,12 +391,13 @@ type Config struct {
 	Keymap       *Keymap // nil = use defaults
 	GroupMode    string  // initial group mode (flat|proj|tree|chain|fork)
 	PreviewMode  string  // initial preview mode (conv|stats|mem|tasks)
+	ViewMode     string  // initial view (sessions|config|plugins|stats)
 }
 
 func NewApp(sessions []session.Session, cfg Config) *App {
 	if len(sessions) > 0 {
 		// Set IsLive by matching running Claude processes to sessions.
-		markLiveSessions(sessions)
+		tmux.MarkLiveSessions(sessions)
 	}
 
 	if cfg.WorktreeDir == "" {
@@ -424,9 +441,22 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 			a.sessSplit.Show = true
 		}
 	}
+	if cfg.ViewMode != "" {
+		modeMap := map[string]viewState{
+			"sessions": viewSessions, "config": viewConfig,
+			"plugins": viewPlugins, "stats": viewGlobalStats,
+		}
+		if m, ok := modeMap[cfg.ViewMode]; ok {
+			a.state = m
+		}
+	}
 
 	return a
 }
+
+// initViewMsg is sent after the first WindowSizeMsg to initialize the
+// starting view when launched with -view config/plugins/stats.
+type initViewMsg struct{}
 
 func (a *App) Init() tea.Cmd {
 	cmds := []tea.Cmd{tickCmd()}
@@ -446,10 +476,32 @@ func (a *App) Init() tea.Cmd {
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		first := a.width == 0 && a.height == 0
 		a.width = msg.Width
 		a.height = msg.Height
 		cmd := a.resizeAll()
+		// On first size, trigger deferred view init for -view flag
+		if first && a.state != viewSessions {
+			cmd = tea.Batch(cmd, func() tea.Msg { return initViewMsg{} })
+		}
 		return a, cmd
+
+	case initViewMsg:
+		switch a.state {
+		case viewConfig:
+			return a.openConfigExplorer()
+		case viewPlugins:
+			return a.openPluginExplorer()
+		case viewGlobalStats:
+			return a.openGlobalStats()
+		}
+		return a, nil
+
+	case openStatsPageMsg:
+		if a.state == viewGlobalStats && !a.globalStatsLoading {
+			return a.openStatsDetail(msg.page)
+		}
+		return a, nil
 
 	case editorDoneMsg:
 		if a.state == viewConfig {
@@ -559,7 +611,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		}
-		markLiveSessions(msg.sessions)
+		tmux.MarkLiveSessions(msg.sessions)
 
 		// Remember cursor position from phase 1
 		selectedID := ""
@@ -632,6 +684,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// URL menu: available from any view
+		if a.urlMenu {
+			return a.handleURLMenu(msg)
+		}
+
+		// Command mode: available from any view
+		if a.cmdMode {
+			return a.handleCmdMode(msg)
+		}
+		if msg.String() == a.keymap.Session.Command {
+			// Don't enter command mode when typing in text inputs
+			if !a.isInTextInput() {
+				a.startCmdMode()
+				return a, nil
+			}
+		}
+
 		switch a.state {
 		case viewSessions:
 			return a.handleSessionKeys(msg)
@@ -693,8 +762,6 @@ func (a *App) View() string {
 			help = "  " + a.worktreeInput.View() + helpStyle.Render("  enter:create esc:cancel")
 		} else if a.sessConvSearching {
 			help = "  " + a.sessConvSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
-		} else if a.cmdMode {
-			help = "  " + a.cmdInput.View() + helpStyle.Render("  tab:complete ↵:run esc:cancel")
 		} else {
 			// Pane proxy focused: show proxy-specific help with indicator
 			if a.sessSplit.Focus && a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive {
@@ -717,7 +784,7 @@ func (a *App) View() string {
 				} else {
 					h += " tab:group →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 				}
-				if a.config.TmuxEnabled && inTmux() {
+				if a.config.TmuxEnabled && tmux.InTmux() {
 					h += " " + fmtKey(sk.Live, "live")
 				}
 				help = formatHelp(h + " " + fmtKey(sk.Search, "search") + " " + fmtKey(sk.Help, "help") + " " + fmtKey(sk.Quit, "quit"))
@@ -757,8 +824,8 @@ func (a *App) View() string {
 		if a.conv.blockFiltering {
 			help = "  " + a.conv.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
 		} else {
-			h := "↵:open e:edit L:live R:refresh"
-			if a.config.TmuxEnabled && inTmux() && a.currentSess.IsLive {
+			h := "↵:open e:edit x:actions L:live R:refresh"
+			if a.config.TmuxEnabled && tmux.InTmux() && a.currentSess.IsLive {
 				h += " I:input J:jump"
 			}
 			if sp.Show {
@@ -799,7 +866,7 @@ func (a *App) View() string {
 			if a.copyModeActive {
 				help = formatHelp("all messages  ↑↓:move v/sp:sel y/↵:copy home/end esc:cancel")
 			} else {
-				sh := "all messages  ↑↓:scroll v:copy y:all /:search"
+				sh := "all messages  ↑↓:scroll v:copy y:all x:actions /:search"
 				if a.msgFull.searchTerm != "" {
 					sh += fmt.Sprintf(" [%d/%d] n/N:match", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
 				}
@@ -811,7 +878,7 @@ func (a *App) View() string {
 				help = formatHelp(pos + "  ↑↓:move v/sp:sel y/↵:copy home/end esc:cancel")
 			} else {
 				selCount := len(a.msgFull.folds.Selected)
-				sh := pos + "  ↑↓:blocks ←→:fold sp:select n/N:msg f/F:all v:copy y:all /:filter"
+				sh := pos + "  ↑↓:blocks ←→:fold sp:select n/N:msg f/F:all v:copy y:all x:actions /:filter"
 				if selCount > 0 {
 					sh = pos + fmt.Sprintf("  [%d sel] ↑↓:blocks sp:select y:copy esc:clear", selCount)
 				} else if a.msgFull.searchTerm != "" {
@@ -900,6 +967,31 @@ func (a *App) View() string {
 		}
 	}
 
+	// Command mode help — overrides view-specific help in any view
+	if a.cmdMode {
+		help = "  " + a.cmdInput.View() + helpStyle.Render("  tab:complete ↵:run esc:cancel")
+	}
+
+	// URL menu hint box
+	if a.urlMenu {
+		hintBox := a.renderURLMenu()
+		if hintBox != "" {
+			content = placeHintBox(content, hintBox)
+		}
+		if a.urlSearching {
+			help = "  " + a.urlSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
+		} else {
+			help = formatHelp("↑↓:nav ↵:open y:copy /:search esc:close")
+		}
+	}
+
+	// Conversation/message-full actions menu hint box
+	if a.convActionsMenu && (a.state == viewConversation || a.state == viewMessageFull) {
+		hintBox := renderConvActionsHintBox()
+		content = placeHintBox(content, hintBox)
+		help = formatHelp("x:actions — pick an action")
+	}
+
 	// Actions menu hint box floating above help line
 	if a.actionsMenu && a.state == viewSessions {
 		hintBox := a.renderActionsHintBox()
@@ -972,7 +1064,7 @@ func (a *App) View() string {
 	}
 
 	// Command mode hint box floating above help line
-	if a.cmdMode && a.state == viewSessions {
+	if a.cmdMode {
 		hintBox := a.renderCmdHintBox()
 		if hintBox != "" {
 			content = placeHintBox(content, hintBox)
@@ -1082,11 +1174,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleEditMenu(key)
 	}
 
-	// Command mode: text input for : commands
-	if a.cmdMode {
-		return a.handleCmdMode(msg)
-	}
-
 	// While conv search is active, route all keys to it
 	if a.sessConvSearching {
 		return a.handleConvSearch(msg)
@@ -1110,7 +1197,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
 		case "ctrl+g":
 			// Jump to the actual tmux pane
-			if err := switchToTmuxPane(a.paneProxy.pane); err != nil {
+			if err := tmux.SwitchToPane(a.paneProxy.pane); err != nil {
 				a.copiedMsg = "Switch failed"
 			}
 			return a, nil
@@ -1213,9 +1300,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case km.Session.Views:
 		a.viewsMenu = true
-		return a, nil
-	case km.Session.Command:
-		a.startCmdMode()
 		return a, nil
 	case km.Session.Help:
 		a.showHelp = true
@@ -1335,8 +1419,8 @@ func (a *App) liveNewlineCmd() tea.Cmd {
 		exec.Command("tmux", "send-keys", "-l", "-t", target, "\\").Run()
 		exec.Command("tmux", "send-keys", "-t", target, "Enter").Run()
 		time.Sleep(30 * time.Millisecond)
-		content, err := tmuxCapturePane(pane)
-		if err != nil || !hasClaude(pane.PID) {
+		content, err := tmux.CapturePane(pane)
+		if err != nil || !tmux.HasClaude(pane.PID) {
 			return liveCaptureMsg{failed: true}
 		}
 		return liveCaptureMsg{content: content}
@@ -1616,7 +1700,7 @@ func (a *App) openLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 		a.copiedMsg = "not a live session"
 		return a, nil
 	}
-	pane, found := findTmuxPane(sess.ProjectPath, sess.ID)
+	pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
 	if !found {
 		a.copiedMsg = "tmux pane not found"
 		return a, nil
@@ -1632,7 +1716,7 @@ func (a *App) refreshLivePreview() {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(no pane)"))
 		return
 	}
-	content, err := tmuxCapturePane(a.paneProxy.pane)
+	content, err := tmux.CapturePane(a.paneProxy.pane)
 	if err != nil {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(capture failed)"))
 		return
@@ -1670,7 +1754,7 @@ func (a *App) closePaneProxy() {
 		return
 	}
 	if a.paneProxy.isShell {
-		tmuxKillWindow(a.paneProxy.pane)
+		tmux.KillWindow(a.paneProxy.pane)
 	}
 	a.paneProxy = nil
 }
@@ -1683,9 +1767,9 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 
 	if sess.IsLive {
 		// Live session: jump to existing pane
-		pane, found := findTmuxPane(sess.ProjectPath, sess.ID)
+		pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
 		if found {
-			if err := switchToTmuxPane(pane); err != nil {
+			if err := tmux.SwitchToPane(pane); err != nil {
 				a.copiedMsg = "Switch failed"
 			}
 			return a, nil
@@ -1699,12 +1783,12 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 	}
 
 	// Non-live session in tmux: spawn a new tmux window
-	if inTmux() {
+	if tmux.InTmux() {
 		windowName := sess.ProjectName
 		if windowName == "" {
 			windowName = "claude"
 		}
-		if err := tmuxNewWindowClaude(windowName, dir, sess.ID); err != nil {
+		if err := tmux.NewWindowClaude(windowName, dir, sess.ID); err != nil {
 			a.copiedMsg = "Spawn failed"
 		} else {
 			a.copiedMsg = "Resumed in new window"
@@ -1754,17 +1838,72 @@ func editableFiles(sess session.Session) []editChoice {
 func (a *App) openEditMenu(sess session.Session) (tea.Model, tea.Cmd) {
 	a.editMenu = true
 	a.editSess = sess
-	a.editChoices = []editChoice{
-		{"s", "session", sess.FilePath},
-		{"t", "text", ""}, // sentinel: text export
+	a.editChoices = nil
+
+	// When inside a subagent, the primary file is the agent's JSONL
+	if a.conv.agent.FilePath != "" {
+		a.editChoices = append(a.editChoices,
+			editChoice{"s", "agent", a.conv.agent.FilePath},
+			editChoice{"p", "parent", sess.FilePath},
+		)
+	} else {
+		a.editChoices = append(a.editChoices,
+			editChoice{"s", "session", sess.FilePath},
+		)
 	}
+
+	// If cursor is on a subagent item, offer its file
+	if a.state == viewConversation {
+		if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convAgent && item.groupTag == "" {
+			a.editChoices = append(a.editChoices,
+				editChoice{"a", "agent:" + item.agent.ShortID, item.agent.FilePath},
+			)
+		}
+	}
+
+	// Offer images from the current message (extracted from cache or JSONL base64)
+	if a.state == viewConversation || a.state == viewMessageFull {
+		var entry session.Entry
+		if a.state == viewConversation {
+			// Try folds first, then fall back to selected list item
+			if a.conv.split.Folds != nil {
+				entry = a.conv.split.Folds.Entry
+			}
+			if len(entry.Content) == 0 {
+				if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
+					entry = item.merged.entry
+				}
+			}
+		} else {
+			entry = a.msgFull.folds.Entry
+		}
+		imgCount := 0
+		for _, block := range entry.Content {
+			if block.Type == "image" && block.ImagePasteID > 0 {
+				if p := a.resolveImagePath(block.ImagePasteID); p != "" {
+					key := "i"
+					if imgCount > 0 {
+						key = fmt.Sprintf("%d", imgCount)
+					}
+					a.editChoices = append(a.editChoices,
+						editChoice{key, fmt.Sprintf("image #%d", block.ImagePasteID), p},
+					)
+					imgCount++
+				}
+			}
+		}
+	}
+
+	a.editChoices = append(a.editChoices, editChoice{"t", "text", ""})
 	return a, nil
 }
 
 func (a *App) handleEditMenu(key string) (tea.Model, tea.Cmd) {
 	a.editMenu = false
-	if key == "s" {
-		return a.openInEditor(a.editSess.FilePath)
+	for _, c := range a.editChoices {
+		if c.key == key && c.path != "" {
+			return a.openInEditor(c.path)
+		}
 	}
 	if key == "t" {
 		return a.openConvAsText()
@@ -1920,6 +2059,10 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		ti.Focus()
 		a.worktreeInput = ti
 		return a, ti.Cursor.BlinkCmd()
+	case akm.URLs:
+		return a.openURLMenuFromItems(extract.SessionURLs(sess.FilePath), "session")
+	case akm.Files:
+		return a.openURLMenuFromItems(extract.SessionFilePaths(sess.FilePath), "session files")
 	}
 	return a, nil
 }
@@ -1987,7 +2130,7 @@ func (a *App) bulkDelete(selected []session.Session) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
-	if !inTmux() {
+	if !tmux.InTmux() {
 		a.copiedMsg = "Requires tmux"
 		return a, nil
 	}
@@ -2004,7 +2147,7 @@ func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 		if name == "" {
 			name = s.ShortID
 		}
-		if err := tmuxNewWindowClaude(name, dir, s.ID); err == nil {
+		if err := tmux.NewWindowClaude(name, dir, s.ID); err == nil {
 			count++
 		}
 	}
@@ -2019,7 +2162,7 @@ func (a *App) bulkKill(selected []session.Session) (tea.Model, tea.Cmd) {
 		if !s.IsLive {
 			continue
 		}
-		pane, found := findTmuxPane(s.ProjectPath, s.ID)
+		pane, found := tmux.FindPane(s.ProjectPath, s.ID)
 		if !found {
 			continue
 		}
@@ -2040,17 +2183,17 @@ func (a *App) bulkKill(selected []session.Session) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
-	if !inTmux() {
+	if !tmux.InTmux() {
 		a.copiedMsg = "Requires tmux"
 		return a, nil
 	}
-	var panes []tmuxPane
+	var panes []tmux.Pane
 	for _, s := range selected {
 		if !s.IsLive {
 			continue
 		}
-		pane, found := findTmuxPane(s.ProjectPath, s.ID)
-		if !found || !hasClaude(pane.PID) {
+		pane, found := tmux.FindPane(s.ProjectPath, s.ID)
+		if !found || !tmux.HasClaude(pane.PID) {
 			continue
 		}
 		panes = append(panes, pane)
@@ -2069,10 +2212,10 @@ func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
 
 // killLiveSession sends SIGHUP to the Claude process in the session's tmux pane.
 func (a *App) killLiveSession(sess session.Session) (tea.Model, tea.Cmd) {
-	pane, found := findTmuxPane(sess.ProjectPath, sess.ID)
+	pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
 	if !found {
 		// Fallback: try to find any Claude process for this path
-		pane, found = findTmuxPane(sess.ProjectPath)
+		pane, found = tmux.FindPane(sess.ProjectPath)
 		if !found {
 			a.copiedMsg = "No tmux pane found"
 			return a, nil
@@ -2090,6 +2233,73 @@ func (a *App) killLiveSession(sess session.Session) (tea.Model, tea.Cmd) {
 		a.sessSplit.Focus = false
 	}
 	a.copiedMsg = "Killed"
+	return a, nil
+}
+
+func (a *App) resolveImagePath(pasteID int) string {
+	home, _ := os.UserHomeDir()
+	p, err := session.ExtractImageToTemp(home, a.currentSess.FilePath, a.currentSess.ID, pasteID)
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// openMessageImage finds the first image in the current message and opens it.
+// Works from conversation view (split preview) and detail view.
+func (a *App) openMessageImage() (tea.Model, tea.Cmd) {
+	var entry session.Entry
+	switch a.state {
+	case viewConversation:
+		if a.conv.split.Folds != nil {
+			entry = a.conv.split.Folds.Entry
+		}
+		if len(entry.Content) == 0 {
+			if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
+				entry = item.merged.entry
+			}
+		}
+	case viewMessageFull:
+		entry = a.msgFull.folds.Entry
+	}
+
+	// If block cursor is on an image, open that one
+	var folds *FoldState
+	if a.state == viewConversation && a.conv.split.Folds != nil {
+		folds = a.conv.split.Folds
+	} else if a.state == viewMessageFull {
+		folds = &a.msgFull.folds
+	}
+	if folds != nil {
+		bc := folds.BlockCursor
+		if bc >= 0 && bc < len(entry.Content) && entry.Content[bc].Type == "image" && entry.Content[bc].ImagePasteID > 0 {
+			return a.openCachedImage(entry.Content[bc].ImagePasteID)
+		}
+	}
+
+	// Otherwise open the first image in the message
+	for _, block := range entry.Content {
+		if block.Type == "image" && block.ImagePasteID > 0 {
+			return a.openCachedImage(block.ImagePasteID)
+		}
+	}
+
+	a.copiedMsg = "No image in this message"
+	return a, nil
+}
+
+func (a *App) openCachedImage(pasteID int) (tea.Model, tea.Cmd) {
+	p := a.resolveImagePath(pasteID)
+	if p == "" {
+		a.copiedMsg = "Image not found"
+		return a, nil
+	}
+	c := exec.Command("open", p)
+	if err := c.Start(); err != nil {
+		a.copiedMsg = "Error: " + err.Error()
+		return a, nil
+	}
+	a.copiedMsg = "Opened image #" + fmt.Sprintf("%d", pasteID)
 	return a, nil
 }
 
@@ -2276,12 +2486,12 @@ func (a *App) executeWorktree(sess session.Session, name string) (tea.Model, tea
 }
 
 func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
-	pane, found := findTmuxPane(projectPath, sessionID...)
+	pane, found := tmux.FindPane(projectPath, sessionID...)
 	if !found {
 		a.copiedMsg = "No tmux pane found"
 		return a, nil
 	}
-	if err := switchToTmuxPane(pane); err != nil {
+	if err := tmux.SwitchToPane(pane); err != nil {
 		a.copiedMsg = "Switch failed"
 		return a, nil
 	}
@@ -2292,12 +2502,12 @@ func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model
 type liveInputSentMsg struct{ err error }
 
 func (a *App) openLiveInput(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
-	if !inTmux() {
+	if !tmux.InTmux() {
 		a.copiedMsg = "Requires tmux"
 		return a, nil
 	}
-	pane, found := findTmuxPane(projectPath, sessionID...)
-	if !found || !hasClaude(pane.PID) {
+	pane, found := tmux.FindPane(projectPath, sessionID...)
+	if !found || !tmux.HasClaude(pane.PID) {
 		a.copiedMsg = "No live Claude pane"
 		return a, nil
 	}
@@ -2326,7 +2536,7 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 			return a, func() tea.Msg {
 				var lastErr error
 				for _, p := range panes {
-					if err := tmuxSendKeys(p, text); err != nil {
+					if err := tmux.SendKeys(p, text); err != nil {
 						lastErr = err
 					}
 				}
@@ -2335,7 +2545,7 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 		}
 		pane := a.liveInputPane
 		return a, func() tea.Msg {
-			err := tmuxSendKeys(pane, text)
+			err := tmux.SendKeys(pane, text)
 			return liveInputSentMsg{err: err}
 		}
 	case "editor":
@@ -2370,13 +2580,13 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 			if len(panes) > 0 {
 				var lastErr error
 				for _, p := range panes {
-					if err := tmuxSendKeys(p, sendText); err != nil {
+					if err := tmux.SendKeys(p, sendText); err != nil {
 						lastErr = err
 					}
 				}
 				return liveInputSentMsg{err: lastErr}
 			}
-			return liveInputSentMsg{err: tmuxSendKeys(pane, sendText)}
+			return liveInputSentMsg{err: tmux.SendKeys(pane, sendText)}
 		}
 	case "cancel":
 		a.liveInputActive = false
@@ -2447,7 +2657,7 @@ func (a *App) doRefresh() tea.Cmd {
 		fresh, err := session.ScanSessions(a.config.ClaudeDir)
 		if err == nil && len(fresh) > 0 {
 			// Preserve live state detection
-			markLiveSessions(fresh)
+			tmux.MarkLiveSessions(fresh)
 
 			// Remember cursor position
 			selectedID := ""
@@ -2491,7 +2701,7 @@ func (a *App) doRefresh() tea.Cmd {
 				a.sessions[i].IsLive = false
 				a.sessions[i].IsResponding = false
 			}
-			markLiveSessions(a.sessions)
+			tmux.MarkLiveSessions(a.sessions)
 			for i := range a.sessions {
 				if a.sessions[i].IsLive != oldLive[i].live {
 					needsSort = true
@@ -2754,7 +2964,7 @@ func (a *App) cycleSessionPreviewModeReverse() {
 
 // liveFindMsg carries the result of an async findTmuxPane lookup.
 type liveFindMsg struct {
-	pane   tmuxPane
+	pane   tmux.Pane
 	found  bool
 	sessID string
 }
@@ -2798,7 +3008,7 @@ func (a *App) updateSessionPreview() tea.Cmd {
 			projectPath := sess.ProjectPath
 			sessID := sess.ID
 			return func() tea.Msg {
-				pane, found := findTmuxPane(projectPath, sessID)
+				pane, found := tmux.FindPane(projectPath, sessID)
 				return liveFindMsg{pane: pane, found: found, sessID: sessID}
 			}
 		}
@@ -3494,7 +3704,7 @@ func (a *App) renderActionsHintBox() string {
 	} else {
 		sess := a.actionsSess
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
-		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree"))
+		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree")+sp+hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files"))
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
 		}
@@ -3555,6 +3765,14 @@ func (a *App) renderSearchHintBox() string {
 func (a *App) syncAllFilterVisibility() {
 	syncFilterVisibility(&a.sessionList)
 	syncFilterVisibility(&a.convList)
+}
+
+// isInTextInput returns true when the user is typing in any text input
+// (search, move, worktree, live input, etc.) where ':' should be literal.
+func (a *App) isInTextInput() bool {
+	return a.isFiltering() || a.moveMode || a.worktreeMode ||
+		a.sessConvSearching || a.liveInputActive || a.cfgSearching || a.cfgNaming ||
+		a.urlSearching
 }
 
 func (a *App) isFiltering() bool {
@@ -3772,7 +3990,7 @@ func (a *App) updateActiveComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
 // one (sessions are sorted by ModTime descending, so first match wins).
 // If the matched session is live, auto-enters it with live tail enabled.
 func (a *App) autoSelectSession() tea.Cmd {
-	for _, projPath := range currentTmuxWindowClaudes() {
+	for _, projPath := range tmux.CurrentWindowClaudes() {
 		absProj, _ := filepath.Abs(projPath)
 		if absProj == "" {
 			absProj = projPath

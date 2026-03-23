@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lipgloss.Style, filterTerm string) {
@@ -55,7 +55,16 @@ func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lip
 		}
 	}
 
-	line := fmt.Sprintf("%s%s  %s  %s%s", cursor, role, ts, idxStr, preview)
+	// Image badge
+	imgBadge := ""
+	for _, block := range e.Content {
+		if block.Type == "image" {
+			imgBadge = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#87CEEB")).Render("🖼")
+			break
+		}
+	}
+
+	line := fmt.Sprintf("%s%s  %s  %s%s%s", cursor, role, ts, idxStr, imgBadge, preview)
 	fmt.Fprint(w, clamp.Render(line))
 }
 
@@ -145,10 +154,27 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, style.Render(subj))
 		}
 	case convAgent:
+		// Group header for unattached agents
+		if ci.groupTag != "" {
+			fold := "▸"
+			if !ci.folded {
+				fold = "▾"
+			}
+			label := fmt.Sprintf("%s Agents [%d]", fold, ci.count)
+			style := dimStyle
+			if selected {
+				style = selectedStyle
+			}
+			line = fmt.Sprintf("%s%s %s", indent, cursor, style.Render(label))
+			break
+		}
 		a := ci.agent
 		badge := agentBadgeStyle.Render("⊕")
 		typeStr := ""
-		if a.AgentType != "" {
+		if a.AgentType == "aside_question" {
+			badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render("?")
+			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render(":btw")
+		} else if a.AgentType != "" {
 			typeStr = dimStyle.Render(":" + a.AgentType)
 		}
 		msgs := dimStyle.Render(fmt.Sprintf("(%dm)", a.MsgCount))
@@ -230,7 +256,7 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 				continue
 			}
 			for _, block := range m.entry.Content {
-				if block.Type == "tool_use" && (block.ToolName == "TaskCreate" || block.ToolName == "TaskUpdate" || block.ToolName == "TodoWrite") {
+				if block.Type == "tool_use" && isTaskTool(block.ToolName) {
 					taskMsgIndices = append(taskMsgIndices, i)
 					break
 				}
@@ -256,8 +282,36 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 		tasksByID[t.ID] = t
 	}
 
+	// Pre-assign each agent to the last assistant message that precedes its timestamp.
+	// This places agents chronologically at the right position in the conversation.
+	agentsByMsg := make(map[int][]session.Subagent) // message index → agents
+	for _, a := range agents {
+		if a.Timestamp.IsZero() || isSystemAgent(a) {
+			continue
+		}
+		bestIdx := -1
+		for mi, m := range merged {
+			if m.entry.Role != "assistant" || m.entry.Timestamp.IsZero() {
+				continue
+			}
+			if !a.Timestamp.Before(m.entry.Timestamp) {
+				bestIdx = mi
+			}
+		}
+		if bestIdx >= 0 {
+			agentsByMsg[bestIdx] = append(agentsByMsg[bestIdx], a)
+		} else {
+			// Agent predates all messages — attach to first assistant message
+			for mi, m := range merged {
+				if m.entry.Role == "assistant" {
+					agentsByMsg[mi] = append(agentsByMsg[mi], a)
+					break
+				}
+			}
+		}
+	}
+
 	var items []convItem
-	assignedAgents := make(map[string]bool) // track agents already placed
 
 	for mi, m := range merged {
 		parentIdx := len(items)
@@ -271,24 +325,8 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 			continue
 		}
 
-		// Find agents spawned during this message range (skip already-assigned and system agents)
-		var msgAgents []session.Subagent
-		for _, a := range agents {
-			if a.Timestamp.IsZero() || assignedAgents[a.ID] || isSystemAgent(a) {
-				continue
-			}
-			// Agent timestamp should fall within the message time range
-			if !m.entry.Timestamp.IsZero() {
-				diff := a.Timestamp.Sub(m.entry.Timestamp).Seconds()
-				if diff >= -5 && diff < 120 {
-					msgAgents = append(msgAgents, a)
-				}
-			}
-		}
-
-		// Add agent sub-items
-		for _, a := range msgAgents {
-			assignedAgents[a.ID] = true
+		// Add agent sub-items assigned to this message
+		for _, a := range agentsByMsg[mi] {
 			items = append(items, convItem{
 				kind:      convAgent,
 				agent:     a,
@@ -466,6 +504,38 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 			}
 			compactParts = append(compactParts, compactLabel)
 			detailLines = append(detailLines, detailLabel)
+		case "TaskOutput":
+			var input struct {
+				TaskID string `json:"task_id"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			label := "⏳ waiting #" + input.TaskID
+			if len(input.TaskID) > 8 {
+				label = "⏳ waiting #" + input.TaskID[:8]
+			}
+			compactParts = append(compactParts, label)
+			detailLines = append(detailLines, "⏳ Waiting for agent output: "+input.TaskID)
+		case "TaskGet":
+			var input struct {
+				TaskID string `json:"taskId"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			compactParts = append(compactParts, "get #"+input.TaskID)
+			detailLines = append(detailLines, "📋 Read task #"+input.TaskID)
+		case "TaskStop":
+			var input struct {
+				TaskID string `json:"task_id"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			label := "⏹ stop #" + input.TaskID
+			if len(input.TaskID) > 8 {
+				label = "⏹ stop #" + input.TaskID[:8]
+			}
+			compactParts = append(compactParts, label)
+			detailLines = append(detailLines, "⏹ Stopped agent: "+input.TaskID)
+		case "TaskList":
+			compactParts = append(compactParts, "list")
+			detailLines = append(detailLines, "📋 Listed tasks")
 		case "TodoWrite":
 			compactParts = append(compactParts, "todo updated")
 			detailLines = append(detailLines, "Todo list updated")
@@ -475,6 +545,14 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 		compact:  strings.Join(compactParts, ", "),
 		detailed: strings.Join(detailLines, "\n"),
 	}
+}
+
+func isTaskTool(name string) bool {
+	switch name {
+	case "TaskCreate", "TaskUpdate", "TaskGet", "TaskOutput", "TaskStop", "TaskList", "TodoWrite":
+		return true
+	}
+	return false
 }
 
 // visibleConvItems returns only the items that should be displayed,

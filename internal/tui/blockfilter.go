@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 // applyBlockFilter computes per-block visibility for the given filter expression.

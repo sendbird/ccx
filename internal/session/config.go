@@ -176,12 +176,12 @@ func ScanConfig(claudeDir, projectPath string) (*ConfigTree, error) {
 	// MCP servers come from:
 	// 1. ~/.claude/settings.json → mcpServers key (user-level)
 	// 2. .mcp.json at project root (project-level)
-	// 3. ~/.claude.json → per-project mcpServers (project-level, keyed by project path)
+	// 3. ~/.claude.json → user-level mcpServers (top-level) and per-project (keyed by path)
 	// 4. --mcp-config flags on live Claude processes
 	scanMCPFromJSON(tree, filepath.Join(claudeDir, "settings.json"), "settings.json")
+	scanMCPFromClaudeJSON(tree, filepath.Join(home, ".claude.json"), projectPath)
 	if projectPath != "" {
 		scanMCPFromJSON(tree, filepath.Join(projectPath, ".mcp.json"), ".mcp.json")
-		scanMCPFromClaudeJSON(tree, filepath.Join(home, ".claude.json"), projectPath)
 	}
 	scanMCPFromLiveProcesses(tree)
 
@@ -301,7 +301,7 @@ func scanHooksFromSettings(tree *ConfigTree, settingsPath string) {
 				if cmd == "" {
 					continue
 				}
-				scriptPath := extractScriptPath(cmd, home)
+				scriptPath := ExtractScriptPath(cmd, home)
 				key := event + ":" + scriptPath
 				if scriptPath == "" || seen[key] {
 					continue
@@ -321,6 +321,7 @@ func scanHooksFromSettings(tree *ConfigTree, settingsPath string) {
 					Path:        scriptPath,
 					Description: desc,
 					Group:       event,
+					RefBy:       settingsPath,
 				}
 				if err == nil {
 					item.ModTime = info.ModTime()
@@ -332,9 +333,9 @@ func scanHooksFromSettings(tree *ConfigTree, settingsPath string) {
 	}
 }
 
-// extractScriptPath extracts the script file path from a hook command string.
+// ExtractScriptPath extracts the script file path from a hook command string.
 // Handles patterns like "python3 ~/.claude/hooks/foo.py", "uv run ~/.claude/hooks/bar.py".
-func extractScriptPath(cmd string, home string) string {
+func ExtractScriptPath(cmd string, home string) string {
 	parts := strings.Fields(cmd)
 	// Find the first argument that looks like a file path
 	for _, p := range parts {
@@ -400,8 +401,8 @@ type fileRef struct {
 	keywords string // e.g. "bash, command, output" — empty if no keyword line
 }
 
-// extractFileReferences parses a file for @path references and returns resolved absolute paths.
-func extractFileReferences(filePath string) []string {
+// ExtractFileReferences parses a file for @path references and returns resolved absolute paths.
+func ExtractFileReferences(filePath string) []string {
 	refs := extractFileRefsWithContext(filePath)
 	paths := make([]string, len(refs))
 	for i, r := range refs {
@@ -582,8 +583,30 @@ func scanMCPFromClaudeJSON(tree *ConfigTree, claudeJSONPath, projectPath string)
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return
 	}
+	info, _ := os.Stat(claudeJSONPath)
 
-	// Look for project key matching projectPath
+	// Top-level mcpServers (user-level)
+	if raw, ok := obj["mcpServers"]; ok {
+		var servers map[string]json.RawMessage
+		if json.Unmarshal(raw, &servers) == nil && len(servers) > 0 {
+			item := ConfigItem{
+				Category:    ConfigMCP,
+				Name:        ".claude.json (user)",
+				Path:        claudeJSONPath,
+				Description: strings.Join(mapKeys(servers), ", "),
+			}
+			if info != nil {
+				item.ModTime = info.ModTime()
+				item.Size = info.Size()
+			}
+			tree.Items = append(tree.Items, item)
+		}
+	}
+
+	// Project-scoped mcpServers (keyed by project path)
+	if projectPath == "" {
+		return
+	}
 	for key, raw := range obj {
 		if key != projectPath {
 			continue
@@ -594,7 +617,6 @@ func scanMCPFromClaudeJSON(tree *ConfigTree, claudeJSONPath, projectPath string)
 		if err := json.Unmarshal(raw, &proj); err != nil || len(proj.MCPServers) == 0 {
 			continue
 		}
-		info, _ := os.Stat(claudeJSONPath)
 		item := ConfigItem{
 			Category:    ConfigMCP,
 			Name:        ".claude.json (project)",

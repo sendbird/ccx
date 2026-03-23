@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/sendbird/ccx/internal/session"
-	"github.com/sendbird/ccx/internal/tui"
+	"github.com/keyolk/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/tmux"
+	"github.com/keyolk/ccx/internal/tui"
 )
 
 var version = "dev"
@@ -23,6 +24,7 @@ func main() {
 		searchQuery  string
 		groupMode    string
 		previewMode  string
+		viewMode     string
 	)
 
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
@@ -34,6 +36,7 @@ func main() {
 	flag.StringVar(&searchQuery, "search", "", "start with session list filtered by search query")
 	flag.StringVar(&groupMode, "group", "", "initial group mode (flat|proj|tree|chain|fork)")
 	flag.StringVar(&previewMode, "preview", "", "initial preview mode (conv|stats|mem|tasks)")
+	flag.StringVar(&viewMode, "view", "", "initial view (sessions|config|plugins|stats)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "ccx — Claude Code Explorer\n\n")
 		fmt.Fprintf(os.Stderr, "Usage: ccx [flags]\n\n")
@@ -77,7 +80,7 @@ func main() {
 	// Full scan happens asynchronously inside the TUI.
 	initialSessions := session.LoadCachedSessions(claudeDir)
 	if len(initialSessions) == 0 {
-		livePaths := tui.DetectLiveProjectPaths()
+		livePaths := tmux.DetectLiveProjectPaths()
 		initialSessions, _ = session.ScanSessionsForPaths(claudeDir, livePaths)
 	}
 
@@ -90,6 +93,7 @@ func main() {
 		Keymap:       km,
 		GroupMode:    groupMode,
 		PreviewMode:  previewMode,
+		ViewMode:     viewMode,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

@@ -14,7 +14,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/tmux"
 )
 
 // --- Plugin list item ---
@@ -1643,7 +1644,7 @@ func (a *App) launchPluginTest() (tea.Model, tea.Cmd) {
 		a.copiedMsg = "No plugins selected (space to select)"
 		return a, nil
 	}
-	if !inTmux() {
+	if !tmux.InTmux() {
 		a.copiedMsg = "Requires tmux"
 		return a, nil
 	}
@@ -1666,8 +1667,8 @@ func (a *App) launchPluginTest() (tea.Model, tea.Cmd) {
 
 // buildPluginTestEnv creates an isolated environment for plugin testing.
 // Symlinks real plugin data so Claude can load selected plugins.
-func buildPluginTestEnv(plugins []session.Plugin) (*isolatedEnv, error) {
-	env, err := newIsolatedEnv("ccx-plgtest-")
+func buildPluginTestEnv(plugins []session.Plugin) (*tmux.IsolatedEnv, error) {
+	env, err := tmux.NewIsolatedEnv("ccx-plgtest-")
 	if err != nil {
 		return nil, err
 	}

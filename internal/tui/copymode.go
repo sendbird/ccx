@@ -62,7 +62,12 @@ func (a *App) handleCopyModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	switch msg.String() {
+	key := msg.String()
+	if nav, _ := a.keymap.TranslateNav(key, msg); nav != "" {
+		key = nav
+	}
+
+	switch key {
 	case "esc":
 		a.exitCopyMode()
 		return a, nil

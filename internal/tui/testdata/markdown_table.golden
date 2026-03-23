@@ -1,0 +1,13 @@
+ASSISTANT  2025-06-01 12:00:00
+────────────────────────────────────────────────────────────────────────────────
+
+Here's the summary:
+
+| State            | Ctrl+/ does     | Esc does          |
+| ---------------- | --------------- | ----------------- |
+| **Panel open**   | → Chat mode   | (goes to Claude)  |
+| **Chat mode**    | → Close panel | → Back to focus |
+| **Panel closed** | → Open panel  | (goes to Claude)  |
+
+No more conflicts.
+

@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 // navFrame stores state for navigating back from an agent drill-down.
@@ -95,6 +95,11 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		msg = navMsg
 	}
 
+	// Actions menu
+	if a.convActionsMenu {
+		return a.handleConvActionsMenu(key)
+	}
+
 	switch key {
 	case "q":
 		return a, tea.Quit
@@ -129,6 +134,9 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			a.startMsgFullBlockFilter()
 		}
+		return a, nil
+	case "x":
+		a.convActionsMenu = true
 		return a, nil
 	}
 
@@ -167,10 +175,13 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case "enter":
-		// On Agent block: recursive drill-down
+		// On actionable blocks: image open, agent drill-down
 		fs := &a.msgFull.folds
 		if fs.BlockCursor >= 0 && fs.BlockCursor < len(fs.Entry.Content) {
 			block := fs.Entry.Content[fs.BlockCursor]
+			if block.Type == "image" && block.ImagePasteID > 0 {
+				return a.openCachedImage(block.ImagePasteID)
+			}
 			if block.Type == "tool_use" && block.ToolName == "Task" {
 				if agent, found := a.findAgentInMsgFull(fs.Entry); found {
 					a.pushMsgFullFrame()
@@ -179,6 +190,8 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return a, nil
+	case "i":
+		return a.openMessageImage()
 	}
 
 	// Fold navigation

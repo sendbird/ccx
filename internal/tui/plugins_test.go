@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 func testPlugin(name, marketplace string, installed, blocked bool, compTypes ...string) session.Plugin {

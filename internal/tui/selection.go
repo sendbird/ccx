@@ -226,7 +226,7 @@ func copyToClipboard(text string) error {
 
 func openInPager(styledContent string) tea.Cmd {
 	plain := stripANSI(styledContent)
-	tmpFile, err := os.CreateTemp("", "csb-*.txt")
+	tmpFile, err := os.CreateTemp("", "ccx-*.txt")
 	if err != nil {
 		return nil
 	}

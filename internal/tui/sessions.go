@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 // Group mode constants
@@ -90,6 +90,9 @@ func (s sessionItem) FilterValue() string {
 		s.sess.GitBranch,
 		s.sess.ShortID,
 		s.sess.FirstPrompt,
+	}
+	if s.sess.TmuxWindowName != "" {
+		parts = append(parts, "win:"+s.sess.TmuxWindowName, s.sess.TmuxWindowName)
 	}
 	if s.sess.IsLive {
 		parts = append(parts, "is:live")

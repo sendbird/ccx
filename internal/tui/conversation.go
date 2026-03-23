@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -11,17 +12,21 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 var debugLog *log.Logger
 
 func init() {
-	f, err := os.OpenFile("/tmp/ccx-debug.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		debugLog = log.New(os.Stderr, "", 0)
+	if os.Getenv("CCX_DEBUG") != "" {
+		f, err := os.OpenFile("/tmp/ccx-debug.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		if err != nil {
+			debugLog = log.New(os.Stderr, "ccx: ", log.Ltime|log.Lmicroseconds)
+		} else {
+			debugLog = log.New(f, "", log.Ltime|log.Lmicroseconds)
+		}
 	} else {
-		debugLog = log.New(f, "", log.Ltime|log.Lmicroseconds)
+		debugLog = log.New(io.Discard, "", 0)
 	}
 }
 
@@ -109,6 +114,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleEditMenu(key)
 	}
 
+	// Actions menu
+	if a.convActionsMenu {
+		return a.handleConvActionsMenu(key)
+	}
+
 	switch key {
 	case "q":
 		return a, tea.Quit
@@ -141,7 +151,14 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		switch item.kind {
 		case convTask:
-			// Drill into task — show conversation entries related to this task
+			// If this task has a corresponding agent (via TaskOutput), jump to it
+			if item.groupTag == "" {
+				if agents := a.findTaskAgents(); len(agents) == 1 {
+					a.pushNavFrame()
+					return a.openAgentConversation(agents[0])
+				}
+			}
+			// Otherwise drill into task — show conversation entries related to this task
 			a.pushNavFrame()
 			return a.openTaskConversation(item.task)
 		case convAgent:
@@ -149,12 +166,17 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.pushNavFrame()
 			return a.openAgentConversation(item.agent)
 		case convMsg:
-			// If preview focused on a Task block, jump to the agent
+			// If preview focused on a block, check for actionable types
 			if sp.Focus && sp.Folds != nil {
 				bc := sp.Folds.BlockCursor
 				entry := sp.Folds.Entry
 				if bc >= 0 && bc < len(entry.Content) {
 					block := entry.Content[bc]
+					// Open cached image
+					if block.Type == "image" && block.ImagePasteID > 0 {
+						return a.openCachedImage(block.ImagePasteID)
+					}
+					// Jump to agent for Task blocks
 					if block.Type == "tool_use" && block.ToolName == "Task" {
 						if agent, found := a.findAgentForConv(entry); found {
 							a.pushNavFrame()
@@ -176,6 +198,8 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case "e":
 		return a.openEditMenu(a.currentSess)
+	case "i":
+		return a.openMessageImage()
 	case "I":
 		if !a.config.TmuxEnabled {
 			return a, nil
@@ -186,6 +210,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
+	case "x":
+		a.convActionsMenu = true
+		return a, nil
 	}
 
 	// Tab/shift+tab cycles preview mode when preview is open: text → tool → hook
@@ -488,6 +515,11 @@ func buildAgentPreviewEntry(agent session.Subagent) session.Entry {
 		}
 	}
 
+	entries = filterAgentContextEntries(entries)
+	if agent.AgentType == "aside_question" {
+		entries = filterSideQuestionContext(entries)
+	}
+
 	// Header block
 	header := fmt.Sprintf("Agent: %s", agent.ShortID)
 	if agent.AgentType != "" {
@@ -564,6 +596,42 @@ func renderTaskSummary(task session.TaskItem, width int) string {
 }
 
 // findAgentForConv finds the agent matching a message entry in the conversation.
+// findTaskAgents returns all subagents referenced by TaskOutput tool_use blocks
+// in the conversation. TaskOutput.task_id is the agent ID.
+func (a *App) findTaskAgents() []session.Subagent {
+	agents := a.conv.agents
+	if len(agents) == 0 {
+		return nil
+	}
+
+	agentByID := make(map[string]session.Subagent, len(agents))
+	for _, ag := range agents {
+		agentByID[ag.ID] = ag
+	}
+
+	seen := make(map[string]bool)
+	var result []session.Subagent
+	for _, e := range a.conv.messages {
+		for _, b := range e.Content {
+			if b.Type != "tool_use" || b.ToolName != "TaskOutput" {
+				continue
+			}
+			var input struct {
+				TaskID string `json:"task_id"`
+			}
+			json.Unmarshal([]byte(b.ToolInput), &input)
+			if input.TaskID == "" || seen[input.TaskID] {
+				continue
+			}
+			seen[input.TaskID] = true
+			if ag, ok := agentByID[input.TaskID]; ok {
+				result = append(result, ag)
+			}
+		}
+	}
+	return result
+}
+
 func (a *App) findAgentForConv(entry session.Entry) (session.Subagent, bool) {
 	agents := a.conv.agents
 	if len(agents) == 0 {
@@ -785,7 +853,7 @@ func extractTaskEntries(entries []session.Entry, taskID string) []session.Entry 
 
 	for i, e := range entries {
 		for _, b := range e.Content {
-			if b.Type != "tool_use" || (b.ToolName != "TaskUpdate" && b.ToolName != "TaskCreate") {
+			if b.Type != "tool_use" || !isTaskTool(b.ToolName) {
 				continue
 			}
 			var input struct {
@@ -878,6 +946,15 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	if err != nil || len(entries) == 0 {
 		a.copiedMsg = "No agent messages"
 		return a, nil
+	}
+
+	// For aside/subagents, skip the injected context summary (first user message
+	// that starts with "This session is being continued...").
+	entries = filterAgentContextEntries(entries)
+
+	// For side-question agents, collapse the parent session context
+	if agent.AgentType == "aside_question" {
+		entries = filterSideQuestionContext(entries)
 	}
 
 	merged := filterConversation(mergeConversationTurns(entries))

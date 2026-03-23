@@ -13,7 +13,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/tmux"
 )
 
 // --- Config list item ---
@@ -789,14 +790,14 @@ func extractRelConfigPath(path, claudeDir string) string {
 
 // buildTestConfigDir creates a temp directory with symlinks to selected config files
 // in the correct structure for Claude Code to discover them.
-func buildConfigTestEnv(items []session.ConfigItem) (*isolatedEnv, error) {
+func buildConfigTestEnv(items []session.ConfigItem) (*tmux.IsolatedEnv, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("home dir: %w", err)
 	}
 	claudeDir := filepath.Join(home, ".claude")
 
-	env, err := newIsolatedEnv("ccx-cfgtest-")
+	env, err := tmux.NewIsolatedEnv("ccx-cfgtest-")
 	if err != nil {
 		return nil, err
 	}
@@ -862,9 +863,77 @@ func buildConfigTestEnv(items []session.ConfigItem) (*isolatedEnv, error) {
 		injectHooksConfig(filepath.Join(claudeDir, "settings.json"), env.SettingsPath())
 	}
 
+	// Ensure Claude discovers memory files in the test env.
+	// Two modes:
+	//   1. Root CLAUDE.md selected → symlink it + all its @referenced files
+	//   2. Only referenced files selected → generate a CLAUDE.md referencing them
+	ensureTestMemory(env, items, claudeDir)
+
 	return env, nil
 }
 
+// ensureTestMemory handles memory file discovery in the test env.
+func ensureTestMemory(env *tmux.IsolatedEnv, items []session.ConfigItem, claudeDir string) {
+	rootCLAUDE := filepath.Join(claudeDir, "CLAUDE.md")
+	claudeMdDst := filepath.Join(env.ConfigDir, "CLAUDE.md")
+
+	// Check if the root CLAUDE.md was selected
+	rootSelected := false
+	for _, item := range items {
+		if item.Path == rootCLAUDE {
+			rootSelected = true
+			break
+		}
+	}
+
+	if rootSelected {
+		// Mode 1: root CLAUDE.md selected → symlink it and ALL its referenced files.
+		// The symlink for CLAUDE.md itself was already created in the main loop.
+		// Now symlink every file it references so the @refs resolve.
+		allRefs := session.ExtractFileReferences(rootCLAUDE)
+		for _, refPath := range allRefs {
+			rel := extractRelConfigPath(refPath, claudeDir)
+			if rel == "" || rel == "CLAUDE.md" {
+				continue
+			}
+			dst := filepath.Join(env.ConfigDir, rel)
+			// Skip if already symlinked (user also selected this file)
+			if _, err := os.Lstat(dst); err == nil {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				continue
+			}
+			os.Symlink(refPath, dst)
+		}
+		return
+	}
+
+	// Mode 2: only referenced memory files selected → generate a minimal CLAUDE.md
+	var refs []string
+	for _, item := range items {
+		rel := extractRelConfigPath(item.Path, claudeDir)
+		if rel == "" || rel == "CLAUDE.md" {
+			continue
+		}
+		if !strings.HasSuffix(rel, ".md") && !strings.HasSuffix(rel, ".yaml") {
+			continue
+		}
+		refs = append(refs, rel)
+	}
+	if len(refs) == 0 {
+		return
+	}
+
+	var buf strings.Builder
+	buf.WriteString("# Test Environment\n\nSelected configs:\n\n")
+	for _, rel := range refs {
+		buf.WriteString("@~/.claude/" + rel + "\n")
+	}
+
+	os.Remove(claudeMdDst)
+	os.WriteFile(claudeMdDst, []byte(buf.String()), 0o644)
+}
 
 // injectHooksConfig copies the "hooks" key from srcSettings into dstSettings.
 // If dstSettings already has content (e.g. from being selected as MCP config),
@@ -904,7 +973,7 @@ func (a *App) launchConfigTest() (tea.Model, tea.Cmd) {
 		a.copiedMsg = "No configs selected (space to select)"
 		return a, nil
 	}
-	if !inTmux() {
+	if !tmux.InTmux() {
 		a.copiedMsg = "Requires tmux"
 		return a, nil
 	}
@@ -1374,9 +1443,11 @@ func (a *App) createDraftConfig(name string, cat session.ConfigCategory) (tea.Mo
 
 // cfgTrashEntry stores a deleted item for undo.
 type cfgTrashEntry struct {
-	origPath string // original file path
-	tmpPath  string // temp backup path
-	isDir    bool   // true for skill directories
+	origPath     string // original file path
+	tmpPath      string // temp backup path
+	isDir        bool   // true for skill directories
+	hookSettings string // settings.json path (non-empty if hook entry was removed)
+	hookBackup   []byte // original settings.json content for undo
 }
 
 // cfgDeletableCategories lists categories where files can be deleted.
@@ -1453,6 +1524,16 @@ func (a *App) executeCfgDelete() (tea.Model, tea.Cmd) {
 		if err != nil {
 			continue
 		}
+		// For hooks, also remove the entry from settings.json
+		if item.Category == session.ConfigHook && item.RefBy != "" {
+			backup, err := os.ReadFile(item.RefBy)
+			if err == nil {
+				if removeHookFromSettings(item.RefBy, item.Path, item.Group) == nil {
+					entry.hookSettings = item.RefBy
+					entry.hookBackup = backup
+				}
+			}
+		}
 		a.cfgTrash = append(a.cfgTrash, entry)
 		trashed++
 	}
@@ -1489,6 +1570,78 @@ func trashCfgItem(item session.ConfigItem) (cfgTrashEntry, error) {
 	return cfgTrashEntry{origPath: srcPath, tmpPath: tmpPath, isDir: isDir}, nil
 }
 
+// removeHookFromSettings removes a hook command referencing scriptPath
+// from the given event type in settings.json. Cleans up empty matchers/events.
+func removeHookFromSettings(settingsPath, scriptPath, eventType string) error {
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	hooksRaw, ok := obj["hooks"]
+	if !ok {
+		return fmt.Errorf("no hooks key")
+	}
+
+	type hookCmd struct {
+		Type    string `json:"type,omitempty"`
+		Command string `json:"command"`
+	}
+	type matcherEntry struct {
+		Matcher string    `json:"matcher"`
+		Hooks   []hookCmd `json:"hooks"`
+	}
+	var hooks map[string][]matcherEntry
+	if err := json.Unmarshal(hooksRaw, &hooks); err != nil {
+		return err
+	}
+
+	home, _ := os.UserHomeDir()
+	matchers := hooks[eventType]
+	changed := false
+	var kept []matcherEntry
+	for _, m := range matchers {
+		var keptHooks []hookCmd
+		for _, h := range m.Hooks {
+			resolved := session.ExtractScriptPath(h.Command, home)
+			if resolved == scriptPath {
+				changed = true
+				continue // remove this hook
+			}
+			keptHooks = append(keptHooks, h)
+		}
+		if len(keptHooks) > 0 {
+			m.Hooks = keptHooks
+			kept = append(kept, m)
+		}
+	}
+	if !changed {
+		return fmt.Errorf("hook not found in settings")
+	}
+
+	if len(kept) == 0 {
+		delete(hooks, eventType)
+	} else {
+		hooks[eventType] = kept
+	}
+
+	// Write back — preserve other top-level keys
+	if len(hooks) == 0 {
+		delete(obj, "hooks")
+	} else {
+		raw, _ := json.Marshal(hooks)
+		obj["hooks"] = raw
+	}
+	out, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, out, 0o644)
+}
+
 func (a *App) undoCfgDelete() (tea.Model, tea.Cmd) {
 	if len(a.cfgTrash) == 0 {
 		a.copiedMsg = "Nothing to undo"
@@ -1507,6 +1660,11 @@ func (a *App) undoCfgDelete() (tea.Model, tea.Cmd) {
 	}
 	// Clean up empty temp dir
 	os.Remove(filepath.Dir(entry.tmpPath))
+
+	// Restore settings.json if hook entry was removed
+	if entry.hookSettings != "" && entry.hookBackup != nil {
+		os.WriteFile(entry.hookSettings, entry.hookBackup, 0o644)
+	}
 
 	a.refreshConfigExplorer()
 	a.copiedMsg = "Restored " + filepath.Base(entry.origPath)

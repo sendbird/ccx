@@ -49,6 +49,8 @@ type Session struct {
 	HasCompaction bool
 	HasSkills     bool
 	HasMCP        bool
+
+	TmuxWindowName string // tmux window name (set if pane CWD matches ProjectPath)
 }
 
 type Entry struct {
@@ -81,6 +83,8 @@ type ContentBlock struct {
 	IsError   bool
 	ID        string     // tool_use block ID (e.g., "toolu_01...")
 	Hooks     []HookInfo // hooks that ran for this tool_use block
+	TagName      string     // for system_tag blocks: the XML tag name (e.g., "system-reminder")
+	ImagePasteID int        // for image blocks: the paste ID for cache lookup (0 = not set)
 }
 
 type Subagent struct {

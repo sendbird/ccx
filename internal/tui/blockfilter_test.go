@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/sendbird/ccx/internal/session"
+	"github.com/keyolk/ccx/internal/session"
 )
 
 func TestApplyBlockFilterEmpty(t *testing.T) {

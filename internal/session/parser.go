@@ -11,21 +11,106 @@ import (
 var ansiRegex = regexp.MustCompile(`(?:\x1b|\\u001b)\[[0-9;]*m`)
 var xmlTagRegex = regexp.MustCompile(`</?[a-zA-Z][a-zA-Z0-9_-]*>`)
 
+// xmlOpenTagRegex matches opening XML-like tags: <tag-name>
+var xmlOpenTagRegex = regexp.MustCompile(`<([a-zA-Z][a-zA-Z0-9_-]*)>`)
+
+// systemTagNames lists XML tag names whose content should be treated as
+// foldable system blocks rather than user-visible text.
+var systemTagNames = map[string]bool{
+	"system-reminder":          true,
+	"task-notification":        true,
+	"analysis":                 true,
+	"command-name":             true,
+	"command-message":          true,
+	"command-args":             true,
+	"local-command-caveat":     true,
+	"local-command-stdout":     true,
+	"available-deferred-tools": true,
+}
+
 // StripXMLTags removes XML-like tags such as <command-name>, </local-command-stdout>, etc.
 func StripXMLTags(s string) string {
 	return xmlTagRegex.ReplaceAllString(s, "")
 }
 
+// splitSystemTags splits a text block containing system XML tags into separate
+// ContentBlocks. Tagged sections become type="system_tag" with TagName set;
+// remaining text stays type="text". Returns nil if no splitting occurred.
+func splitSystemTags(text string) []ContentBlock {
+	// Find all opening tags, then locate matching closing tags
+	type tagMatch struct {
+		name       string
+		outerStart int // start of <tag>
+		innerStart int // start of content after <tag>
+		innerEnd   int // end of content before </tag>
+		outerEnd   int // end of </tag>
+	}
+
+	openMatches := xmlOpenTagRegex.FindAllStringSubmatchIndex(text, -1)
+	if len(openMatches) == 0 {
+		return nil
+	}
+
+	var matches []tagMatch
+	for _, m := range openMatches {
+		tagName := text[m[2]:m[3]]
+		if !systemTagNames[tagName] {
+			continue
+		}
+		closeTag := "</" + tagName + ">"
+		closeIdx := strings.Index(text[m[1]:], closeTag)
+		if closeIdx < 0 {
+			continue
+		}
+		matches = append(matches, tagMatch{
+			name:       tagName,
+			outerStart: m[0],
+			innerStart: m[1],
+			innerEnd:   m[1] + closeIdx,
+			outerEnd:   m[1] + closeIdx + len(closeTag),
+		})
+	}
+
+	if len(matches) == 0 {
+		return nil
+	}
+
+	var blocks []ContentBlock
+	cursor := 0
+	for _, m := range matches {
+		if m.outerStart < cursor {
+			continue // overlapping, skip
+		}
+		before := strings.TrimSpace(text[cursor:m.outerStart])
+		if before != "" {
+			blocks = append(blocks, ContentBlock{Type: "text", Text: before})
+		}
+		inner := text[m.innerStart:m.innerEnd]
+		blocks = append(blocks, ContentBlock{Type: "system_tag", Text: inner, TagName: m.name})
+		cursor = m.outerEnd
+	}
+	after := strings.TrimSpace(text[cursor:])
+	if after != "" {
+		blocks = append(blocks, ContentBlock{Type: "text", Text: after})
+	}
+
+	if len(blocks) == 0 {
+		return nil
+	}
+	return blocks
+}
+
 type rawEntry struct {
-	Type      string          `json:"type"`
-	Timestamp string          `json:"timestamp"`
-	IsMeta    bool            `json:"isMeta"`
-	Message   json.RawMessage `json:"message"`
-	UUID      string          `json:"uuid"`
-	ParentID  string          `json:"parentUuid"`
-	AgentID   string          `json:"agentId"`
-	CWD       string          `json:"cwd"`
-	GitBranch string          `json:"gitBranch"`
+	Type          string          `json:"type"`
+	Timestamp     string          `json:"timestamp"`
+	IsMeta        bool            `json:"isMeta"`
+	Message       json.RawMessage `json:"message"`
+	UUID          string          `json:"uuid"`
+	ParentID      string          `json:"parentUuid"`
+	AgentID       string          `json:"agentId"`
+	CWD           string          `json:"cwd"`
+	GitBranch     string          `json:"gitBranch"`
+	ImagePasteIDs []int           `json:"imagePasteIds"`
 }
 
 type rawMessage struct {
@@ -82,6 +167,17 @@ func ParseEntry(line string) (Entry, error) {
 		}
 	}
 
+	// Assign image paste IDs to image content blocks
+	if len(raw.ImagePasteIDs) > 0 {
+		imgIdx := 0
+		for i := range entry.Content {
+			if entry.Content[i].Type == "image" && imgIdx < len(raw.ImagePasteIDs) {
+				entry.Content[i].ImagePasteID = raw.ImagePasteIDs[imgIdx]
+				imgIdx++
+			}
+		}
+	}
+
 	return entry, nil
 }
 
@@ -92,6 +188,9 @@ func parseContentBlocks(raw json.RawMessage) []ContentBlock {
 
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil && s != "" {
+		if split := splitSystemTags(s); split != nil {
+			return split
+		}
 		return []ContentBlock{{Type: "text", Text: s}}
 	}
 
@@ -105,6 +204,11 @@ func parseContentBlocks(raw json.RawMessage) []ContentBlock {
 		cb := ContentBlock{Type: b.Type, IsError: b.IsError}
 		switch b.Type {
 		case "text":
+			// Split text blocks containing system XML tags
+			if split := splitSystemTags(b.Text); split != nil {
+				result = append(result, split...)
+				continue
+			}
 			cb.Text = b.Text
 		case "tool_use":
 			cb.ID = b.ID
