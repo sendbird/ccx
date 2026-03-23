@@ -211,6 +211,10 @@ func buildCmdRegistry() []cmdEntry {
 		// Global
 		{name: "keymap:edit", aliases: []string{"km:edit"}, desc: "edit keymap config",
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.bootstrapAndEditKeymap() }},
+
+		// Search
+		{name: "search", aliases: []string{"find", "grep"}, desc: "search across all sessions",
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterSearchMode(); return a, nil }},
 	}
 }
 

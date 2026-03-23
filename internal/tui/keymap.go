@@ -19,6 +19,7 @@ type SessionKeymap struct {
 	Group        string `yaml:"group"`
 	Help         string `yaml:"help"`
 	Search       string `yaml:"search"`
+	GlobalSearch string `yaml:"global_search"`
 	Live         string `yaml:"live"`
 	Select       string `yaml:"select"`
 	Preview      string `yaml:"preview"`
@@ -86,6 +87,7 @@ func DefaultKeymap() Keymap {
 			Group:        "",
 			Help:         "?",
 			Search:       "/",
+			GlobalSearch: "ctrl+s",
 			Live:         "L",
 			Select:       " ",
 			Preview:      "tab",
@@ -179,6 +181,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Session.Search != "" {
 		dst.Session.Search = src.Session.Search
+	}
+	if src.Session.GlobalSearch != "" {
+		dst.Session.GlobalSearch = src.Session.GlobalSearch
 	}
 	if src.Session.Live != "" {
 		dst.Session.Live = src.Session.Live

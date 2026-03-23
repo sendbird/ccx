@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -341,6 +342,15 @@ type App struct {
 	cmdRegistry    []cmdEntry
 	cmdSuggestions []cmdEntry
 	cmdSuggIdx     int // -1 = none selected
+
+	// Cross-session search (Ctrl+F)
+	searchActive     bool
+	searchInput      textinput.Model
+	searchQuery      string
+	searchResults    []session.SearchResult
+	searchResultList list.Model
+	searchLoading    bool
+	searchCancel     context.CancelFunc
 }
 
 // selectedSession returns the currently selected session from the session list.
@@ -653,6 +663,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.state = viewGlobalStats
 		return a, nil
 
+	case searchBatchMsg:
+		a.updateSearchResults(msg.results)
+		return a, nil
+
 	case tea.MouseMsg:
 		return a.handleMouse(msg)
 
@@ -682,6 +696,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.resetActiveFilter()
 			a.syncAllFilterVisibility()
 			return a, nil
+		}
+
+		// Cross-session search: overlay from any view
+		if a.searchActive {
+			return a.handleSearchKey(msg)
 		}
 
 		// URL menu: available from any view
@@ -1116,6 +1135,11 @@ func (a *App) View() string {
 		screen = a.liveInputModal.render(screen, a.width, a.height)
 	}
 
+	// Cross-session search overlays everything
+	if a.searchActive {
+		screen = a.renderSearchView()
+	}
+
 	return screen
 }
 
@@ -1300,6 +1324,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case km.Session.Views:
 		a.viewsMenu = true
+		return a, nil
+	case km.Session.GlobalSearch:
+		a.enterSearchMode()
 		return a, nil
 	case km.Session.Help:
 		a.showHelp = true
