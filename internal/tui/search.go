@@ -168,6 +168,23 @@ func (a *App) openSearchResult(result session.SearchResult) {
 			a.sessionList.Select(i)
 			a.currentSess = sess
 			a.openConversation(sess)
+
+			// Jump to the message containing the search result
+			targetUUID := result.Entry.UUID
+			for idx, item := range a.conv.items {
+				if item.kind != convMsg {
+					continue
+				}
+
+				// Check all entries in the merged range
+				for j := item.merged.startIdx; j <= item.merged.endIdx; j++ {
+					if j < len(a.conv.messages) && a.conv.messages[j].UUID == targetUUID {
+						a.convList.Select(idx)
+						a.updateConvPreview()
+						return
+					}
+				}
+			}
 			return
 		}
 	}
