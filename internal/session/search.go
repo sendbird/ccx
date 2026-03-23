@@ -10,10 +10,11 @@ import (
 )
 
 type SearchQuery struct {
-	Terms   []string // AND-matched terms (lowercased)
-	Phrases []string // Exact phrases (lowercased)
-	Exclude []string // Negated terms (lowercased)
-	Role    string   // "user" or "assistant"
+	Terms    []string // AND-matched terms (lowercased)
+	Phrases  []string // Exact phrases (lowercased)
+	Exclude  []string // Negated terms (lowercased)
+	ToolName string   // Filter by tool name
+	Role     string   // "user" or "assistant"
 }
 
 type SearchResult struct {
@@ -44,6 +45,11 @@ func ParseSearchQuery(input string) SearchQuery {
 
 		if strings.HasPrefix(lower, "-") && len(lower) > 1 {
 			q.Exclude = append(q.Exclude, lower[1:])
+			return
+		}
+
+		if strings.HasPrefix(lower, "tool:") {
+			q.ToolName = lower[5:]
 			return
 		}
 
@@ -92,7 +98,7 @@ func ParseSearchQuery(input string) SearchQuery {
 }
 
 func (q SearchQuery) IsEmpty() bool {
-	return len(q.Terms) == 0 && len(q.Phrases) == 0 && len(q.Exclude) == 0 && q.Role == ""
+	return len(q.Terms) == 0 && len(q.Phrases) == 0 && len(q.Exclude) == 0 && q.ToolName == "" && q.Role == ""
 }
 
 func SearchSessions(sessions []*Session, query SearchQuery, ctx context.Context) <-chan SearchResult {
@@ -194,6 +200,13 @@ func searchSession(sess *Session, query SearchQuery, ctx context.Context, result
 		// Search through content blocks
 		for i := range entry.Content {
 			block := &entry.Content[i]
+
+			// Tool filter
+			if query.ToolName != "" {
+				if block.Type != "tool_use" || !strings.EqualFold(block.ToolName, query.ToolName) {
+					continue
+				}
+			}
 
 			searchText := blockSearchText(block)
 			searchLower := strings.ToLower(searchText)

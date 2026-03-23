@@ -228,6 +228,7 @@ func (a *App) renderSearchView() string {
 		sb.WriteString("  " + ruler + "\n")
 		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("user:          "), descStyle.Render("only user messages")))
 		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("assistant:     "), descStyle.Render("only assistant responses")))
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("tool:          "), descStyle.Render("only tool usage")))
 	}
 
 	// Help line at bottom
