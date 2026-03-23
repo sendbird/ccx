@@ -14,8 +14,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/keyolk/ccx/internal/session"
-	"github.com/keyolk/ccx/internal/tmux"
+	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tmux"
 )
 
 // --- Plugin list item ---

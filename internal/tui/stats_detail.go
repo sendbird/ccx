@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keyolk/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 // statsDetailMode represents which drill-down detail view is active.

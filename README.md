@@ -4,42 +4,20 @@ A terminal UI for browsing, inspecting, and managing [Claude Code](https://docs.
 
 Browse sessions, read conversations, inspect tool calls, view agent hierarchies, explore configs/plugins, and get aggregated stats — all from your terminal.
 
-## Demo
+![ccx demo](docs/gifs/01-browse.gif)
 
-**Session browsing** — navigate sessions, preview conversations, cycle group modes
-
-![Session browsing](docs/gifs/01-browse.gif)
-
-**Conversation drill-down** — fold/unfold tool blocks, switch preview modes
-
-![Conversation](docs/gifs/02-conversation.gif)
-
-**Command mode** — vim-style `:` commands with context-aware suggestions
-
-![Command mode](docs/gifs/03-command.gif)
-
-**Views tour** — stats, config explorer, plugin browser
-
-![Views](docs/gifs/04-views.gif)
-
-**URL and file extraction** — search, multi-select, open in browser/editor
-
-![Actions](docs/gifs/05-actions.gif)
-
-**Config/plugin sandbox** — select configs and test in isolated Claude session
-
-![Sandbox](docs/gifs/06-sandbox.gif)
+> More demos: [conversation](docs/DEMOS.md#conversation), [command mode](docs/DEMOS.md#command-mode), [views](docs/DEMOS.md#views), [URL/file actions](docs/DEMOS.md#actions), [sandbox testing](docs/DEMOS.md#sandbox)
 
 ## Install
 
 ```bash
-go install github.com/keyolk/ccx@latest
+go install github.com/sendbird/ccx@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/keyolk/ccx.git
+git clone https://github.com/sendbird/ccx.git
 cd ccx
 make build      # -> bin/ccx
 make install    # -> ~/.local/bin/ccx

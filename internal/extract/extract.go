@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/keyolk/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 // Item represents a URL or file path extracted from a session.

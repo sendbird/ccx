@@ -15,9 +15,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/keyolk/ccx/internal/extract"
-	"github.com/keyolk/ccx/internal/session"
-	"github.com/keyolk/ccx/internal/tmux"
+	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tmux"
 )
 
 type tickMsg time.Time

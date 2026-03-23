@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/keyolk/ccx/internal/extract"
-	"github.com/keyolk/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 // --- Conversation/message-full actions menu ---

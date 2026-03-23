@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/keyolk/ccx/internal/session"
-	"github.com/keyolk/ccx/internal/tmux"
-	"github.com/keyolk/ccx/internal/tui"
+	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tmux"
+	"github.com/sendbird/ccx/internal/tui"
 )
 
 var version = "dev"

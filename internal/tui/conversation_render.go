@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/keyolk/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lipgloss.Style, filterTerm string) {

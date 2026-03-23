@@ -5,8 +5,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/keyolk/ccx/internal/session"
-	"github.com/keyolk/ccx/internal/tmux"
+	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tmux"
 )
 
 func newTestApp(sessions []session.Session) *App {
