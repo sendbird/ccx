@@ -112,7 +112,7 @@ func SearchSessions(sessions []*Session, query SearchQuery, ctx context.Context)
 		}
 
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 12) // max 12 concurrent file scans
+		sem := make(chan struct{}, 50) // max 50 concurrent file scans
 
 		for _, sess := range sessions {
 			select {
@@ -154,7 +154,7 @@ func searchSession(sess *Session, query SearchQuery, ctx context.Context, result
 	}
 
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 256*1024), 10*1024*1024)
+	sc.Buffer(make([]byte, 256*1024), 10*1024*1024) // starts at 256 KB and can grow upto 10 MB
 
 	for sc.Scan() {
 		select {
@@ -319,5 +319,88 @@ func buildSnippet(text string, terms, phrases []string) string {
 		snippet = snippet + "..."
 	}
 
+	// Highlight matched terms (bold + underline works across themes)
+	snippet = highlightMatches(snippet, terms, phrases)
+
 	return snippet
+}
+
+func highlightMatches(text string, terms, phrases []string) string {
+	// ANSI: bold + underline, reset
+	const hlStart = "\x1b[1;4m"
+	const hlEnd = "\x1b[0m"
+
+	textLower := strings.ToLower(text)
+
+	type span struct{ start, end int }
+	var spans []span
+
+	for _, term := range terms {
+		idx := 0
+		for {
+			pos := strings.Index(textLower[idx:], term)
+			if pos < 0 {
+				break
+			}
+			absPos := idx + pos
+			spans = append(spans, span{absPos, absPos + len(term)})
+			idx = absPos + len(term)
+		}
+	}
+	for _, phrase := range phrases {
+		idx := 0
+		for {
+			pos := strings.Index(textLower[idx:], phrase)
+			if pos < 0 {
+				break
+			}
+			absPos := idx + pos
+			spans = append(spans, span{absPos, absPos + len(phrase)})
+			idx = absPos + len(phrase)
+		}
+	}
+
+	if len(spans) == 0 {
+		return text
+	}
+
+	// Sort by start
+	for i := 0; i < len(spans)-1; i++ {
+		for j := i + 1; j < len(spans); j++ {
+			if spans[j].start < spans[i].start {
+				spans[i], spans[j] = spans[j], spans[i]
+			}
+		}
+	}
+
+	// Merge overlapping
+	merged := []span{spans[0]}
+	for i := 1; i < len(spans); i++ {
+		last := &merged[len(merged)-1]
+		if spans[i].start <= last.end {
+			if spans[i].end > last.end {
+				last.end = spans[i].end
+			}
+		} else {
+			merged = append(merged, spans[i])
+		}
+	}
+
+	// Build highlighted string
+	var out strings.Builder
+	cursor := 0
+	for _, s := range merged {
+		if s.start > cursor {
+			out.WriteString(text[cursor:s.start])
+		}
+		out.WriteString(hlStart)
+		out.WriteString(text[s.start:s.end])
+		out.WriteString(hlEnd)
+		cursor = s.end
+	}
+	if cursor < len(text) {
+		out.WriteString(text[cursor:])
+	}
+
+	return out.String()
 }
