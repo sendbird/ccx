@@ -213,13 +213,23 @@ func (a *App) renderSearchView() string {
 		a.searchResultList.SetSize(a.width-4, listHeight)
 		sb.WriteString(a.searchResultList.View())
 	} else if a.searchQuery == "" {
-		sb.WriteString("  " + dimStyle.Render("Type a query and press Enter to search") + "\n")
+		sb.WriteString("  " + dimStyle.Render("Type a query and press Enter to search") + "\n\n")
+
+		keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
+		descStyle := dimStyle
+
+		sb.WriteString("  " + titleStyle.Render("Syntax") + "\n")
+		sb.WriteString("  " + ruler + "\n")
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("word1 word2    "), descStyle.Render("AND match (both must appear)")))
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("\"exact phrase\" "), descStyle.Render("phrase match")))
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("-exclude       "), descStyle.Render("exclude term from results")))
 		sb.WriteString("\n")
-		sb.WriteString("  " + dimStyle.Render("Examples:") + "\n")
-		sb.WriteString("  " + dimStyle.Render("  database migration") + "\n")
-		sb.WriteString("  " + dimStyle.Render("  \"exact phrase\"") + "\n")
-		sb.WriteString("  " + dimStyle.Render("  tool:Edit auth") + "\n")
-		sb.WriteString("  " + dimStyle.Render("  user:help assistant:recommend") + "\n")
+		sb.WriteString("  " + titleStyle.Render("Filters") + "\n")
+		sb.WriteString("  " + ruler + "\n")
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("tool:Edit      "), descStyle.Render("only Edit tool calls")))
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("tool:Bash      "), descStyle.Render("only Bash tool calls")))
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("user:          "), descStyle.Render("only user messages")))
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("assistant:     "), descStyle.Render("only assistant responses")))
 	}
 
 	return sb.String()
