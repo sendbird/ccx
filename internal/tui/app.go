@@ -244,10 +244,11 @@ type App struct {
 	moveInput textinput.Model
 	moveSess  session.Session
 
-	// Worktree creation
-	worktreeMode  bool
-	worktreeInput textinput.Model
-	worktreeSess  session.Session
+	// Worktree creation (w = move session to worktree, n = new worktree + session)
+	worktreeMode    bool
+	worktreeInput   textinput.Model
+	worktreeSess    session.Session
+	worktreeNewMode bool // true = create new session, false = move existing
 
 	// Memory import from worktree
 	memImportActive bool
@@ -830,7 +831,11 @@ func (a *App) View() string {
 		} else if a.moveMode {
 			help = "  " + a.moveInput.View() + helpStyle.Render("  enter:move esc:cancel")
 		} else if a.worktreeMode {
-			help = "  " + a.worktreeInput.View() + helpStyle.Render("  enter:create esc:cancel")
+			hint := "  enter:create esc:cancel"
+			if a.worktreeNewMode {
+				hint = "  enter:new session (empty=main) esc:cancel"
+			}
+			help = "  " + a.worktreeInput.View() + helpStyle.Render(hint)
 		} else if a.sessConvSearching {
 			help = "  " + a.sessConvSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
 		} else {
@@ -2175,6 +2180,8 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.removeSessionMemory(sess)
 	case akm.Fork:
 		return a.forkSession(sess)
+	case akm.New:
+		return a.startNewSessionInProject(sess)
 	}
 	return a, nil
 }
@@ -2564,22 +2571,108 @@ func (a *App) executeMove(sess session.Session, newPath string) (tea.Model, tea.
 	return a, nil
 }
 
+// startNewSessionInProject opens the worktree name prompt in "new session" mode.
+// Empty name = new session in main project; non-empty = create worktree + new session.
+func (a *App) startNewSessionInProject(sess session.Session) (tea.Model, tea.Cmd) {
+	a.worktreeSess = sess
+	a.worktreeMode = true
+	a.worktreeNewMode = true
+	ti := textinput.New()
+	ti.Prompt = "Branch (empty=main): "
+	ti.Width = a.width - 20
+	ti.Focus()
+	a.worktreeInput = ti
+	return a, ti.Cursor.BlinkCmd()
+}
+
 func (a *App) handleWorktreeInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		name := strings.TrimSpace(a.worktreeInput.Value())
 		a.worktreeMode = false
+		isNew := a.worktreeNewMode
+		a.worktreeNewMode = false
+
+		if isNew {
+			// New session mode
+			if name == "" {
+				// No branch = new session in main project dir
+				return a.newSessionInDir(a.worktreeSess.ProjectPath, a.worktreeSess.ProjectName)
+			}
+			// Create worktree + new session
+			return a.executeNewWorktreeSession(a.worktreeSess, name)
+		}
+		// Move mode (original behavior)
 		if name == "" {
 			return a, nil
 		}
 		return a.executeWorktree(a.worktreeSess, name)
 	case "esc":
 		a.worktreeMode = false
+		a.worktreeNewMode = false
 		return a, nil
 	}
 	var cmd tea.Cmd
 	a.worktreeInput, cmd = a.worktreeInput.Update(msg)
 	return a, cmd
+}
+
+// newSessionInDir spawns a new Claude session in the given directory.
+func (a *App) newSessionInDir(dir, name string) (tea.Model, tea.Cmd) {
+	if dir == "" {
+		dir, _ = os.Getwd()
+	}
+	if name == "" {
+		name = filepath.Base(dir)
+	}
+	if tmux.InTmux() {
+		if err := tmux.NewWindowClaudeNew(name, dir); err != nil {
+			a.copiedMsg = "Spawn failed"
+		} else {
+			a.copiedMsg = "New session → " + name
+		}
+		return a, nil
+	}
+	c := exec.Command("claude")
+	c.Dir = dir
+	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+		return tea.QuitMsg{}
+	})
+}
+
+// executeNewWorktreeSession creates a git worktree and spawns a new Claude session in it.
+func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (tea.Model, tea.Cmd) {
+	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		a.copiedMsg = "Not a git repo"
+		return a, nil
+	}
+	repoRoot := strings.TrimSpace(string(out))
+	wtPath := filepath.Join(repoRoot, a.config.WorktreeDir, branch)
+
+	// Try adding worktree
+	if err := exec.Command("git", "-C", repoRoot, "worktree", "add", wtPath, branch).Run(); err != nil {
+		if err2 := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", branch, wtPath).Run(); err2 != nil {
+			a.copiedMsg = "Worktree failed: " + err2.Error()
+			return a, nil
+		}
+	}
+
+	// Spawn new Claude session in the worktree
+	name := filepath.Base(repoRoot) + "/" + branch
+	if tmux.InTmux() {
+		if err := tmux.NewWindowClaudeNew(name, wtPath); err != nil {
+			a.copiedMsg = "Spawn failed"
+		} else {
+			a.copiedMsg = fmt.Sprintf("New session → %s/%s", a.config.WorktreeDir, branch)
+		}
+		return a, nil
+	}
+	c := exec.Command("claude")
+	c.Dir = wtPath
+	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+		return tea.QuitMsg{}
+	})
 }
 
 func (a *App) executeWorktree(sess session.Session, name string) (tea.Model, tea.Cmd) {
@@ -2664,6 +2757,39 @@ func (a *App) newSession() (tea.Model, tea.Cmd) {
 	}
 
 	// Non-tmux: take over terminal
+	c := exec.Command("claude")
+	c.Dir = dir
+	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+		return tea.QuitMsg{}
+	})
+}
+
+// executeCmdNewSession handles "new <path>" — opens a new Claude session in the given directory.
+func (a *App) executeCmdNewSession(input string) (tea.Model, tea.Cmd) {
+	parts := strings.Fields(input)
+	if len(parts) < 2 {
+		return a.newSession() // no path, use selected session's project
+	}
+	dir := parts[len(parts)-1]
+	// Expand ~ to home
+	if strings.HasPrefix(dir, "~") {
+		home, _ := os.UserHomeDir()
+		dir = home + dir[1:]
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		a.copiedMsg = "Not a directory: " + dir
+		return a, nil
+	}
+	windowName := filepath.Base(dir)
+	if tmux.InTmux() {
+		if err := tmux.NewWindowClaudeNew(windowName, dir); err != nil {
+			a.copiedMsg = "Spawn failed"
+		} else {
+			a.copiedMsg = "New session → " + windowName
+		}
+		return a, nil
+	}
 	c := exec.Command("claude")
 	c.Dir = dir
 	return a, tea.ExecProcess(c, func(err error) tea.Msg {
@@ -3989,6 +4115,7 @@ func (a *App) renderActionsHintBox() string {
 			line2 += sp + hl.Render(displayKey(akm.ImportMem)) + d.Render(":import-mem")
 		}
 		line2 += sp + hl.Render(displayKey(akm.Fork)) + d.Render(":fork")
+		line2 += sp + hl.Render(displayKey(akm.New)) + d.Render(":new")
 		lines = append(lines, line2)
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))

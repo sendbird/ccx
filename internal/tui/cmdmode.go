@@ -481,6 +481,11 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 		return a.executeCmdSetWorktreeDir(input)
 	}
 
+	// Check new <path> (optional path argument)
+	if strings.HasPrefix(lower, "new ") || strings.HasPrefix(lower, "n ") {
+		return a.executeCmdNewSession(input)
+	}
+
 	// Check worktree:new <branch>
 	if strings.HasPrefix(lower, "worktree:new") || strings.HasPrefix(lower, "wt:new") {
 		return a.executeCmdWorktreeNew(input)
