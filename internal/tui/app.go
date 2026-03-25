@@ -258,6 +258,10 @@ type App struct {
 	memRemoveActive bool
 	memRemoveSrc    string // project path to remove from
 
+	// Worktree alignment
+	worktreeAlignActive bool
+	worktreeAlignRepo   string
+
 	// Live input modal (I key)
 	liveInputActive  bool
 	liveInputPane    tmux.Pane
@@ -1287,6 +1291,14 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+n":
 			// Send backslash + enter for multi-line input in Claude
 			return a, a.liveNewlineCmd()
+		case "left":
+			// Smart left: if cursor at column 0, escape to list; otherwise forward key
+			col, err := tmux.PaneCursorCol(a.paneProxy.pane)
+			if err == nil && col == 0 {
+				sp.Focus = false
+				return a, nil
+			}
+			return a, captureAfterKeyCmd(a.paneProxy.pane, "left")
 		}
 		return a.handlePaneProxyKey(key)
 	}
@@ -2626,6 +2638,91 @@ func (a *App) executeWorktree(sess session.Session, name string) (tea.Model, tea
 	a.rebuildSessionList()
 	a.copiedMsg = fmt.Sprintf("Worktree created → %s/%s", a.config.WorktreeDir, name)
 	return a, nil
+}
+
+// newSession opens a new Claude session (without --resume) in the selected
+// session's project directory, or CWD if no session is selected.
+func (a *App) newSession() (tea.Model, tea.Cmd) {
+	dir, _ := os.Getwd()
+	windowName := "claude"
+	if sess, ok := a.selectedSession(); ok {
+		if sess.ProjectPath != "" {
+			dir = sess.ProjectPath
+		}
+		if sess.ProjectName != "" {
+			windowName = sess.ProjectName
+		}
+	}
+
+	if tmux.InTmux() {
+		if err := tmux.NewWindowClaudeNew(windowName, dir); err != nil {
+			a.copiedMsg = "Spawn failed"
+		} else {
+			a.copiedMsg = "New session in new window"
+		}
+		return a, nil
+	}
+
+	// Non-tmux: take over terminal
+	c := exec.Command("claude")
+	c.Dir = dir
+	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+		return tea.QuitMsg{}
+	})
+}
+
+// executeCmdWorktreeNew handles "worktree:new <branch>" / "wt:new <branch>".
+// It creates a git worktree for the given branch and opens a new Claude session in it.
+func (a *App) executeCmdWorktreeNew(input string) (tea.Model, tea.Cmd) {
+	parts := strings.Fields(input)
+	if len(parts) < 2 {
+		a.copiedMsg = "Usage: worktree:new <branch>"
+		return a, nil
+	}
+	branch := parts[len(parts)-1]
+
+	sess, ok := a.selectedSession()
+	if !ok || sess.ProjectPath == "" {
+		a.copiedMsg = "No session with project selected"
+		return a, nil
+	}
+
+	// Get repo root
+	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		a.copiedMsg = "Not a git repo"
+		return a, nil
+	}
+	repoRoot := strings.TrimSpace(string(out))
+
+	wtPath := filepath.Join(repoRoot, a.config.WorktreeDir, branch)
+
+	// Try creating worktree: first on existing branch, then create new branch
+	if err := exec.Command("git", "-C", repoRoot, "worktree", "add", wtPath, branch).Run(); err != nil {
+		if err2 := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", branch, wtPath).Run(); err2 != nil {
+			a.copiedMsg = "Worktree failed: " + err2.Error()
+			return a, nil
+		}
+	}
+
+	// Open new Claude session in the worktree
+	windowName := branch
+	if tmux.InTmux() {
+		if err := tmux.NewWindowClaudeNew(windowName, wtPath); err != nil {
+			a.copiedMsg = "Worktree created but spawn failed"
+		} else {
+			a.copiedMsg = fmt.Sprintf("Worktree + session → %s/%s", a.config.WorktreeDir, branch)
+		}
+		return a, nil
+	}
+
+	// Non-tmux: take over terminal
+	c := exec.Command("claude")
+	c.Dir = wtPath
+	a.copiedMsg = fmt.Sprintf("Worktree created → %s/%s", a.config.WorktreeDir, branch)
+	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+		return tea.QuitMsg{}
+	})
 }
 
 func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {

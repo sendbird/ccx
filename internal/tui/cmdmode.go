@@ -251,6 +251,21 @@ func buildCmdRegistry() []cmdEntry {
 				a.copiedMsg = "Usage: badge:rm NAME"
 				return a, nil
 			}},
+
+		// New session
+		{name: "new", aliases: []string{"n"}, desc: "new Claude session", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.newSession() }},
+
+		// Worktree + new session
+		{name: "worktree:new", aliases: []string{"wt:new"}, desc: "new worktree + session",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.copiedMsg = "Usage: worktree:new <branch>"
+				return a, nil
+			}},
+
+		// Worktree align
+		{name: "worktree:align", aliases: []string{"wt:align"}, desc: "align worktree paths", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.startWorktreeAlign() }},
 	}
 }
 
@@ -464,6 +479,11 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 	// Check set:worktree-dir <name>
 	if strings.HasPrefix(lower, "set:worktree-dir") || strings.HasPrefix(lower, "wt:dir") {
 		return a.executeCmdSetWorktreeDir(input)
+	}
+
+	// Check worktree:new <branch>
+	if strings.HasPrefix(lower, "worktree:new") || strings.HasPrefix(lower, "wt:new") {
+		return a.executeCmdWorktreeNew(input)
 	}
 
 	// Split into parts for multi-command support

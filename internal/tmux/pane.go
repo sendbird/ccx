@@ -270,6 +270,25 @@ func NewWindowClaude(windowName, dir, sessionID string) error {
 		"-n", windowName, cmd).Run()
 }
 
+// NewWindowClaudeNew creates a new tmux window with the given name,
+// cd's to dir, and runs "claude" (without --resume, starting a fresh session).
+func NewWindowClaudeNew(windowName, dir string) error {
+	cmd := "cd " + ShellQuote(dir) + " && claude"
+	return exec.Command("tmux", "new-window", "-d",
+		"-n", windowName, cmd).Run()
+}
+
+// PaneCursorCol returns the cursor column position in the pane.
+func PaneCursorCol(p Pane) (int, error) {
+	target := p.Session + ":" + p.Window + "." + p.Pane
+	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{cursor_x}").Output()
+	if err != nil {
+		return -1, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n, err
+}
+
 // KillWindow kills the tmux window containing the given pane.
 func KillWindow(p Pane) error {
 	target := p.Session + ":" + p.Window
