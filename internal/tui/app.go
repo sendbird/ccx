@@ -564,6 +564,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case delayedRefreshMsg:
+		// Auto-refresh after spawning a new session
+		return a, a.doRefresh()
+
 	case configTestDoneMsg:
 		os.RemoveAll(msg.tmpDir)
 		a.clearCfgSelection()
@@ -2571,9 +2575,22 @@ func (a *App) executeMove(sess session.Session, newPath string) (tea.Model, tea.
 	return a, nil
 }
 
-// startNewSessionInProject opens the worktree name prompt in "new session" mode.
-// Empty name = new session in main project; non-empty = create worktree + new session.
+// startNewSessionInProject opens a new session in the same project.
+// For git repos: prompts for branch name (worktree-first workflow).
+// For non-git dirs: creates session directly.
 func (a *App) startNewSessionInProject(sess session.Session) (tea.Model, tea.Cmd) {
+	// Check if this is a git repo
+	dir := sess.ProjectPath
+	if dir == "" {
+		return a.newSessionInDir("", "")
+	}
+	gitPath := filepath.Join(dir, ".git")
+	if _, err := os.Stat(gitPath); err != nil {
+		// Not a git repo — create session directly
+		return a.newSessionInDir(dir, sess.ProjectName)
+	}
+
+	// Git repo — prompt for branch (worktree-first)
 	a.worktreeSess = sess
 	a.worktreeMode = true
 	a.worktreeNewMode = true
@@ -2628,10 +2645,10 @@ func (a *App) newSessionInDir(dir, name string) (tea.Model, tea.Cmd) {
 	if tmux.InTmux() {
 		if err := tmux.NewWindowClaudeNew(name, dir); err != nil {
 			a.copiedMsg = "Spawn failed"
-		} else {
-			a.copiedMsg = "New session → " + name
+			return a, nil
 		}
-		return a, nil
+		a.copiedMsg = "New session → " + name
+		return a, a.delayedRefreshCmd()
 	}
 	c := exec.Command("claude")
 	c.Dir = dir
@@ -2639,6 +2656,16 @@ func (a *App) newSessionInDir(dir, name string) (tea.Model, tea.Cmd) {
 		return tea.QuitMsg{}
 	})
 }
+
+// delayedRefreshCmd returns a command that waits briefly then triggers a refresh.
+func (a *App) delayedRefreshCmd() tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(2 * time.Second)
+		return delayedRefreshMsg{}
+	}
+}
+
+type delayedRefreshMsg struct{}
 
 // executeNewWorktreeSession creates a git worktree and spawns a new Claude session in it.
 func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (tea.Model, tea.Cmd) {
@@ -2663,10 +2690,10 @@ func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (te
 	if tmux.InTmux() {
 		if err := tmux.NewWindowClaudeNew(name, wtPath); err != nil {
 			a.copiedMsg = "Spawn failed"
-		} else {
-			a.copiedMsg = fmt.Sprintf("New session → %s/%s", a.config.WorktreeDir, branch)
+			return a, nil
 		}
-		return a, nil
+		a.copiedMsg = fmt.Sprintf("New session → %s/%s", a.config.WorktreeDir, branch)
+		return a, a.delayedRefreshCmd()
 	}
 	c := exec.Command("claude")
 	c.Dir = wtPath
