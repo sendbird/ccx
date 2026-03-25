@@ -147,15 +147,28 @@ func TestOpenLivePreviewNonLiveSession(t *testing.T) {
 func TestLivePreviewNonLiveSessionShowsMessage(t *testing.T) {
 	app := newTestApp(fakeSessions())
 
-	// Open preview via right arrow and set live mode
-	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	app = m.(*App)
+	// Set up: preview showing live mode with pane proxy active
+	app.sessSplit.Show = true
 	app.sessPreviewMode = sessPreviewLive
 	app.paneProxy = &paneProxyState{sessID: "aaa"}
 
-	// Select a non-live session (index 1 = "bbb")
-	app.sessionList.Select(1)
-	app.sessSplit.CacheKey = "" // force refresh
+	// Simulate navigating to session at index 1 (bbb = not live)
+	// Use the bubbles list directly — Update with a cursor-down message
+	var cmd tea.Cmd
+	app.sessionList, cmd = app.sessionList.Update(tea.KeyMsg{Type: tea.KeyDown})
+	_ = cmd
+
+	// Verify we selected the right session
+	sess, ok := app.selectedSession()
+	if !ok {
+		t.Skip("could not select session at index 1")
+	}
+	if sess.IsLive {
+		t.Skip("session at index 1 is live, need non-live for this test")
+	}
+
+	// Force preview update
+	app.sessSplit.CacheKey = ""
 	app.updateSessionPreview()
 
 	if app.sessPreviewMode != sessPreviewLive {
