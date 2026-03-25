@@ -144,9 +144,10 @@ func (s sessionItem) FilterValue() string {
 }
 
 type sessionDelegate struct {
-	timeW       int             // max width of time-ago column
-	msgW        int             // max width of message count column
-	selectedSet map[string]bool // shared reference to App.selectedSet
+	timeW        int             // max width of time-ago column
+	msgW         int             // max width of message count column
+	selectedSet  map[string]bool // shared reference to App.selectedSet
+	hiddenBadges map[string]bool // shared reference to App.hiddenBadges
 }
 
 func (d sessionDelegate) Height() int                             { return 2 }
@@ -214,7 +215,8 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	// Build badges first to know their width
 	badges := ""
 	badgesW := 0
-	if s.IsLive {
+	hide := d.hiddenBadges
+	if s.IsLive && !hide["LIVE"] {
 		if s.IsResponding {
 			badges += " " + busyBadge.Render("[BUSY]")
 		} else {
@@ -222,43 +224,43 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		}
 		badgesW += 7
 	}
-	if s.HasMemory {
+	if s.HasMemory && !hide["M"] {
 		badges += " " + memoryBadge.Render("[M]")
 		badgesW += 4
 	}
-	if s.IsWorktree {
+	if s.IsWorktree && !hide["W"] {
 		badges += " " + worktreeBadge.Render("[W]")
 		badgesW += 4
 	}
-	if s.HasTodos {
+	if s.HasTodos && !hide["T"] {
 		badges += " " + todoBadge.Render("[T]")
 		badgesW += 4
 	}
-	if s.HasTasks {
+	if s.HasTasks && !hide["K"] {
 		badges += " " + taskBadge.Render("[K]")
 		badgesW += 4
 	}
-	if s.HasPlan {
+	if s.HasPlan && !hide["P"] {
 		badges += " " + planBadge.Render("[P]")
 		badgesW += 4
 	}
-	if s.HasAgents {
+	if s.HasAgents && !hide["A"] {
 		badges += " " + agentBadgeStyle.Render("[A]")
 		badgesW += 4
 	}
-	if s.HasCompaction {
+	if s.HasCompaction && !hide["C"] {
 		badges += " " + compactBadgeStyle.Render("[C]")
 		badgesW += 4
 	}
-	if s.HasSkills {
+	if s.HasSkills && !hide["S"] {
 		badges += " " + todoBadge.Render("[S]")
 		badgesW += 4
 	}
-	if s.HasMCP {
+	if s.HasMCP && !hide["X"] {
 		badges += " " + mcpBadgeStyle.Render("[X]")
 		badgesW += 4
 	}
-	if s.ParentSessionID != "" {
+	if s.ParentSessionID != "" && !hide["F"] {
 		badges += " " + forkBadge.Render("[F]")
 		badgesW += 4
 	}
@@ -367,12 +369,12 @@ func computeSessionColWidths(sessions []session.Session) (timeW, msgW int) {
 	return
 }
 
-func newSessionList(sessions []session.Session, width, height int, groupMode int, selectedSet map[string]bool) list.Model {
+func newSessionList(sessions []session.Session, width, height int, groupMode int, selectedSet map[string]bool, hiddenBadges map[string]bool) list.Model {
 	items := buildGroupedItems(sessions, groupMode)
 
 	timeW, msgW := computeSessionColWidths(sessions)
 
-	l := list.New(items, sessionDelegate{timeW: timeW, msgW: msgW, selectedSet: selectedSet}, width, height)
+	l := list.New(items, sessionDelegate{timeW: timeW, msgW: msgW, selectedSet: selectedSet, hiddenBadges: hiddenBadges}, width, height)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowFilter(false)
@@ -771,7 +773,7 @@ func timeAgo(t time.Time) string {
 }
 
 // renderHelpModal renders a centered bordered modal with help content overlaid on bg.
-func renderHelpModal(bg string, screenW, screenH int, km Keymap) string {
+func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint string) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	d := dimStyle
@@ -803,10 +805,10 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap) string {
 	// Render badges in pairs (two per line)
 	for i := 0; i < len(allBadges); i += 2 {
 		b := allBadges[i]
-		left := fmt.Sprintf(" %s %s", b.style.Render(fmt.Sprintf("%-6s", b.badge)), d.Render(fmt.Sprintf("%-15s", b.desc)))
+		left := fmt.Sprintf(" %s %-16s", b.style.Render(fmt.Sprintf("%-6s", b.badge)), d.Render(b.desc))
 		if i+1 < len(allBadges) {
 			b2 := allBadges[i+1]
-			right := fmt.Sprintf(" %s %s", b2.style.Render(fmt.Sprintf("%-6s", b2.badge)), d.Render(b2.desc))
+			right := fmt.Sprintf("  %s %s", b2.style.Render(fmt.Sprintf("%-6s", b2.badge)), d.Render(b2.desc))
 			sb.WriteString(left + right + "\n")
 		} else {
 			sb.WriteString(left + "\n")
@@ -866,11 +868,17 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap) string {
 		sb.WriteString(fmt.Sprintf(" %-12s %s\n", k.key, d.Render(k.desc)))
 	}
 
+	// Number key shortcuts for current view
+	if shortcutHint != "" {
+		sb.WriteString("\n" + headerStyle.Render(" Shortcuts") + "\n")
+		sb.WriteString(" " + d.Render(shortcutHint) + "\n")
+	}
+
 	body := strings.TrimRight(sb.String(), "\n")
 	bodyLines := strings.Split(body, "\n")
 
 	// Modal dimensions: fit content with padding, capped to screen
-	modalW := 60
+	modalW := 72
 	if modalW > screenW-4 {
 		modalW = screenW - 4
 	}

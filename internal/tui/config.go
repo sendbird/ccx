@@ -211,7 +211,7 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "q":
-		return a, tea.Quit
+		return a.quit()
 	case "esc":
 		if a.cfgHasSelection() {
 			a.clearCfgSelection()

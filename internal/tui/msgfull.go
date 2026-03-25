@@ -102,7 +102,7 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "q":
-		return a, tea.Quit
+		return a.quit()
 	case "esc":
 		// Clear block selection first
 		if len(a.msgFull.folds.Selected) > 0 {

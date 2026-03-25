@@ -33,17 +33,19 @@ type SessionKeymap struct {
 
 // ActionsKeymap defines configurable keybindings for the actions menu.
 type ActionsKeymap struct {
-	Delete   string `yaml:"delete"`
-	Move     string `yaml:"move"`
-	Resume   string `yaml:"resume"`
-	CopyPath string `yaml:"copy_path"`
-	Worktree string `yaml:"worktree"`
-	Kill     string `yaml:"kill"`
-	Input    string `yaml:"input"`
-	Jump     string `yaml:"jump"`
-	URLs     string `yaml:"urls"`
-	Files    string `yaml:"files"`
-	Tags     string `yaml:"tags"`
+	Delete    string `yaml:"delete"`
+	Move      string `yaml:"move"`
+	Resume    string `yaml:"resume"`
+	CopyPath  string `yaml:"copy_path"`
+	Worktree  string `yaml:"worktree"`
+	Kill      string `yaml:"kill"`
+	Input     string `yaml:"input"`
+	Jump      string `yaml:"jump"`
+	URLs      string `yaml:"urls"`
+	Files     string `yaml:"files"`
+	Tags      string `yaml:"tags"`
+	ImportMem string `yaml:"import_mem"`
+	RemoveMem string `yaml:"remove_mem"`
 }
 
 // ViewsKeymap defines configurable keybindings for the views menu.
@@ -100,17 +102,19 @@ func DefaultKeymap() Keymap {
 			Command:      ":",
 		},
 		Actions: ActionsKeymap{
-			Delete:   "d",
-			Move:     "m",
-			Resume:   "r",
-			CopyPath: "y",
-			Worktree: "w",
-			Kill:     "k",
-			Input:    "i",
-			Jump:     "j",
-			URLs:     "u",
-			Files:    "f",
-			Tags:     "t",
+			Delete:    "d",
+			Move:      "m",
+			Resume:    "r",
+			CopyPath:  "y",
+			Worktree:  "w",
+			Kill:      "k",
+			Input:     "i",
+			Jump:      "j",
+			URLs:      "u",
+			Files:     "f",
+			Tags:      "t",
+			ImportMem: "M",
+			RemoveMem: "X",
 		},
 		Views: ViewsKeymap{
 			Stats:   "s",
@@ -239,6 +243,18 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Actions.Jump != "" {
 		dst.Actions.Jump = src.Actions.Jump
+	}
+	if src.Actions.URLs != "" {
+		dst.Actions.URLs = src.Actions.URLs
+	}
+	if src.Actions.Files != "" {
+		dst.Actions.Files = src.Actions.Files
+	}
+	if src.Actions.ImportMem != "" {
+		dst.Actions.ImportMem = src.Actions.ImportMem
+	}
+	if src.Actions.RemoveMem != "" {
+		dst.Actions.RemoveMem = src.Actions.RemoveMem
 	}
 
 	// Views

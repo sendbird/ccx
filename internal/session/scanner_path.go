@@ -197,10 +197,11 @@ func ListProjects(claudeDir string) []string {
 func isGitWorktree(projectPath string) bool {
 	gitPath := filepath.Join(projectPath, ".git")
 	info, err := os.Lstat(gitPath)
-	if err != nil {
-		return false
+	if err == nil {
+		return !info.IsDir()
 	}
-	return !info.IsDir()
+	// Fallback: detect by path pattern (worktree dir may no longer exist on disk)
+	return strings.Contains(projectPath, "/.worktree/")
 }
 
 func hasProjectMemory(projectPath, home string) bool {

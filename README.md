@@ -317,9 +317,10 @@ Available from any view. Suggestions are context-aware — only relevant command
 | `page:tools\|errors\|overview` | Stats | Switch stats page |
 | `refresh` | Sessions | Reload sessions |
 | `search` | All | Cross-session content search |
-| `keymap:edit` | All | Edit keymap config |
+| `config:edit` | All | Edit config file |
+| `detail:text\|tool\|hook` | Conversation | Set detail level |
 
-Short aliases: `g:flat`, `v:stats`, `p:hooks`, `km:edit`. Multi-command: `view:config page:hooks`.
+Short aliases: `g:flat`, `v:stats`, `p:hooks`, `cfg:edit`. Multi-command: `view:config page:hooks`.
 
 ### Conversation / Detail
 
@@ -337,7 +338,74 @@ Short aliases: `g:flat`, `v:stats`, `p:hooks`, `km:edit`. Multi-command: `view:c
 
 ## Configuration
 
-Keymap config: `~/.config/ccx/config.yaml` (bootstrap with `:keymap:edit`)
+Config file: `~/.config/ccx/config.yaml` (bootstrap with `:config:edit`)
+
+The config file contains three sections:
+
+### Keybindings
+
+```yaml
+session:
+  quit: q
+  open: enter
+  actions: x
+  # ... see :config:edit for all options
+actions:
+  delete: d
+  import_mem: M
+  remove_mem: X
+```
+
+### Preferences (auto-saved on quit)
+
+```yaml
+preferences:
+  group_mode: flat          # flat|proj|tree|chain|fork
+  preview_mode: stats       # conv|stats|mem|tasks|live
+  view_mode: sessions       # sessions|config|plugins|stats
+  conv_detail_level: 1      # 0=text, 1=tool, 2=hook
+  split_ratio: 35           # 15-85
+  worktree_dir: .worktree   # git worktree subdirectory name
+```
+
+### Number Key Shortcuts
+
+Number keys `1-9` trigger commands based on the active view and split focus side.
+Configure in the `shortcuts` section:
+
+```yaml
+shortcuts:
+  sessions:
+    left:                     # session list focused
+      "1": "preview:conv"
+      "2": "preview:stats"
+      "3": "preview:mem"
+      "4": "preview:tasks"
+      "5": "preview:live"
+    right:                    # preview pane focused
+      "1": "some:command"
+  conversation:
+    left:                     # message list focused
+      "1": "detail:text"
+      "2": "detail:tool"
+      "3": "detail:hook"
+  config:
+    left:
+      "1": "page:overview"
+      "2": "page:memory"
+      "3": "page:project"
+      "4": "page:skills"
+      "5": "page:hooks"
+      "6": "page:mcp"
+  stats:
+    left:
+      "1": "page:overview"
+      "2": "page:tools"
+      "3": "page:errors"
+```
+
+Values are command names from the command registry (`:` command mode).
+User config merges over defaults — override specific keys or add new views.
 
 ## Development
 

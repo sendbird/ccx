@@ -136,6 +136,12 @@ type App struct {
 	// Split pane ratio (list width as % of terminal width)
 	splitRatio int
 
+	// Number key shortcuts (view + focus scoped)
+	shortcuts Shortcuts
+
+	// Badge visibility
+	hiddenBadges map[string]bool
+
 	// Content for clipboard/pager
 	copiedMsg string
 
@@ -239,6 +245,15 @@ type App struct {
 	worktreeMode  bool
 	worktreeInput textinput.Model
 	worktreeSess  session.Session
+
+	// Memory import from worktree
+	memImportActive bool
+	memImportSrc    string // worktree project path
+	memImportDst    string // main project path
+
+	// Memory removal
+	memRemoveActive bool
+	memRemoveSrc    string // project path to remove from
 
 	// Live input modal (I key)
 	liveInputActive  bool
@@ -436,7 +451,13 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		keymap:          km,
 		splitRatio:      35,
 		selectedSet:     make(map[string]bool),
+		hiddenBadges:    make(map[string]bool),
 	}
+
+	// Restore persisted view state (CLI flags override in the apply block below)
+	_, prefs, sc := LoadCCXConfig(configPath())
+	a.applyPreferences(prefs)
+	a.shortcuts = sc
 	a.sessSplit = SplitPane{List: &a.sessionList, ItemHeight: 2}
 	a.conv.split = SplitPane{List: &a.convList, Show: true, Folds: &FoldState{}, ItemHeight: 1}
 	a.cfgSplit = SplitPane{List: &a.cfgList, ItemHeight: 1}
@@ -452,26 +473,26 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	a.tagInput.Placeholder = "badge-name"
 	a.tagInput.CharLimit = 20
 
-	// Apply CLI flags for initial group/preview mode
-	if cfg.GroupMode != "" {
+	// Apply group/preview/view mode from CLI flags or restored preferences
+	if a.config.GroupMode != "" {
 		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork}
-		if m, ok := modeMap[cfg.GroupMode]; ok {
+		if m, ok := modeMap[a.config.GroupMode]; ok {
 			a.sessGroupMode = m
 		}
 	}
-	if cfg.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan}
-		if m, ok := modeMap[cfg.PreviewMode]; ok {
+	if a.config.PreviewMode != "" {
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "live": sessPreviewLive}
+		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
 		}
 	}
-	if cfg.ViewMode != "" {
+	if a.config.ViewMode != "" {
 		modeMap := map[string]viewState{
 			"sessions": viewSessions, "config": viewConfig,
 			"plugins": viewPlugins, "stats": viewGlobalStats,
 		}
-		if m, ok := modeMap[cfg.ViewMode]; ok {
+		if m, ok := modeMap[a.config.ViewMode]; ok {
 			a.state = m
 		}
 	}
@@ -648,7 +669,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.width > 0 && a.height > 0 {
 			contentH := a.height - 3
 			sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet)
+			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges)
 			a.sessSplit.CacheKey = ""
 			if a.config.SearchQuery != "" {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
@@ -691,7 +712,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, captureAfterKeyCmd(a.paneProxy.pane, "ctrl+c")
 		}
 		if msg.String() == "ctrl+c" {
-			return a, tea.Quit
+			return a.quit()
 		}
 
 		// Live input modal intercepts all keys
@@ -731,6 +752,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !a.isInTextInput() {
 				a.startCmdMode()
 				return a, nil
+			}
+		}
+
+		// Number key shortcuts (1-9): view + focus scoped
+		if key := msg.String(); !a.isInTextInput() && !a.isInOverlay() &&
+			len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+			if m, cmd, handled := a.handleShortcutKey(key); handled {
+				return m, cmd
 			}
 		}
 
@@ -787,7 +816,7 @@ func (a *App) View() string {
 			content = renderFullTextModal(content, a.sessConvFullText, a.sessConvFullScroll, a.width, ContentHeight(a.height))
 			help = formatHelp("↑↓:scroll pgup/pgdn:page esc/c:close")
 		} else if a.showHelp {
-			content = renderHelpModal(content, a.width, ContentHeight(a.height), a.keymap)
+			content = renderHelpModal(content, a.width, ContentHeight(a.height), a.keymap, a.shortcutHint())
 			help = formatHelp("press any key to close")
 		} else if a.tagMenu {
 			help = "" // Tag menu has its own help text inside the modal
@@ -1171,7 +1200,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// While loading with no sessions yet, only allow quit
 	if a.sessionsLoading && len(a.sessions) == 0 {
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
-			return a, tea.Quit
+			return a.quit()
 		}
 		return a, nil
 	}
@@ -1263,7 +1292,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	km := a.keymap
 	switch key {
 	case km.Session.Quit:
-		return a, tea.Quit
+		return a.quit()
 	case km.Session.Escape:
 		if a.hasMultiSelection() {
 			a.clearMultiSelection()
@@ -1656,7 +1685,7 @@ func (a *App) handleGlobalStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.statsDetail != statsDetailNone {
 		switch key {
 		case "q":
-			return a, tea.Quit
+			return a.quit()
 		case "esc":
 			a.statsDetail = statsDetailNone
 			return a, nil
@@ -1678,7 +1707,7 @@ func (a *App) handleGlobalStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "q":
-		return a, tea.Quit
+		return a.quit()
 	case "esc":
 		return a, nil
 	case a.keymap.Session.Views:
@@ -2125,6 +2154,10 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		a.tagInput.SetValue("")
 		a.tagInput.Focus()
 		return a, a.tagInput.Cursor.BlinkCmd()
+	case akm.ImportMem:
+		return a.importWorktreeMemory(sess)
+	case akm.RemoveMem:
+		return a.removeSessionMemory(sess)
 	}
 	return a, nil
 }
@@ -2945,7 +2978,12 @@ func (a *App) renderSessionSplit() string {
 		a.sessionList.Select(idx)
 	}
 
-	_ = a.updateSessionPreview() // cmd handled by liveTickMsg for live sessions
+	// Don't call updateSessionPreview for live mode from render path — the
+	// returned async cmd would be discarded. Live mode is initialized from
+	// Update paths (resizeAll, key handlers) where cmds are dispatched.
+	if a.sessPreviewMode != sessPreviewLive {
+		_ = a.updateSessionPreview()
+	}
 
 	if a.sessSplit.Preview.Width != previewW || a.sessSplit.Preview.Height != contentH {
 		oldOffset := a.sessSplit.Preview.YOffset
@@ -2955,9 +2993,9 @@ func (a *App) renderSessionSplit() string {
 		// Re-render at new size without reloading data or resetting cursor
 		if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 			a.refreshConvPreview()
-		} else {
+		} else if a.sessPreviewMode != sessPreviewLive {
 			a.sessSplit.CacheKey = ""
-			_ = a.updateSessionPreview() // cmd handled by liveTickMsg
+			_ = a.updateSessionPreview()
 			if a.sessPreviewMode == sessPreviewLive {
 				a.sessSplit.Preview.GotoBottom()
 			} else {
@@ -3781,7 +3819,14 @@ func (a *App) renderActionsHintBox() string {
 	} else {
 		sess := a.actionsSess
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
-		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree")+sp+hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
+		line2 := hl.Render(displayKey(akm.Worktree)) + d.Render(":worktree") + sp + hl.Render(displayKey(akm.URLs)) + d.Render(":urls") + sp + hl.Render(displayKey(akm.Files)) + d.Render(":files") + sp + hl.Render(displayKey(akm.Tags)) + d.Render(":tags")
+		if sess.HasMemory {
+			line2 += sp + hl.Render(displayKey(akm.RemoveMem)) + d.Render(":rm-mem")
+		}
+		if sess.IsWorktree && sess.HasMemory {
+			line2 += sp + hl.Render(displayKey(akm.ImportMem)) + d.Render(":import-mem")
+		}
+		lines = append(lines, line2)
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
 		}
@@ -3813,8 +3858,8 @@ func (a *App) renderSearchHintBox() string {
 		}
 	case viewConversation:
 		lines = []string{
-			h.Render("role=") + d.Render("user") + sp + h.Render("role=") + d.Render("asst"),
-			h.Render("tool=") + d.Render("Bash Read Edit Write"),
+			h.Render("role:") + d.Render("user") + sp + h.Render("role:") + d.Render("asst"),
+			h.Render("tool:") + d.Render("Bash Read Edit Write"),
 		}
 	case viewConfig:
 		lines = []string{
@@ -3846,11 +3891,12 @@ func (a *App) syncAllFilterVisibility() {
 }
 
 // isInTextInput returns true when the user is typing in any text input
-// (search, move, worktree, live input, etc.) where ':' should be literal.
+// (search, move, worktree, live input, block filter, etc.) where ':' should be literal.
 func (a *App) isInTextInput() bool {
 	return a.isFiltering() || a.moveMode || a.worktreeMode ||
 		a.sessConvSearching || a.liveInputActive || a.cfgSearching || a.cfgNaming ||
-		a.urlSearching
+		a.urlSearching || a.conv.blockFiltering || a.msgFull.blockFiltering ||
+		a.msgFull.searching
 }
 
 func (a *App) isFiltering() bool {
@@ -4100,12 +4146,18 @@ func (a *App) resizeAll() tea.Cmd {
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
 	if a.sessionList.Width() == 0 {
 		if len(a.sessions) > 0 {
-			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet)
+			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges)
 			a.sessSplit.CacheKey = ""
 			if a.config.SearchQuery != "" {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
 			}
 			cmd = a.autoSelectSession()
+			// Trigger live preview lookup if restored from preferences
+			if a.sessSplit.Show && a.sessPreviewMode == sessPreviewLive {
+				if liveCmd := a.updateSessionPreview(); liveCmd != nil {
+					cmd = tea.Batch(cmd, liveCmd)
+				}
+			}
 		}
 	} else if a.state == viewSessions {
 		idx := a.sessionList.Index()
@@ -4191,7 +4243,7 @@ func (a *App) rebuildSessionList() {
 
 	contentH := max(a.height-3, 1)
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet)
+	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges)
 	a.sessSplit.CacheKey = ""
 
 	// Restore cursor to previously selected session

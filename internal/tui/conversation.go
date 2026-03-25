@@ -121,7 +121,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "q":
-		return a, tea.Quit
+		return a.quit()
 	case "esc":
 		// Clear block filter first
 		if sp.Folds != nil && sp.Folds.BlockFilter != "" {
@@ -215,8 +215,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Tab/shift+tab cycles preview mode when preview is open: text → tool → hook
+	// Tab/shift+tab cycles detail level when preview is open: text → tool → hook
 	if (key == "tab" || key == "shift+tab") && sp.Show {
+
 		if key == "shift+tab" {
 			a.conv.previewMode = (a.conv.previewMode + 2) % 3
 		} else {

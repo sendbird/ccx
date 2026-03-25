@@ -330,7 +330,7 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case a.keymap.Session.Quit:
-		return a, tea.Quit
+		return a.quit()
 	case "esc":
 		if a.plgHasSelection() {
 			a.clearPlgSelection()
@@ -910,7 +910,7 @@ func (a *App) handlePluginDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case a.keymap.Session.Quit:
-		return a, tea.Quit
+		return a.quit()
 	case "esc":
 		if a.plgCompHasSelection() {
 			a.clearPlgCompSelection()

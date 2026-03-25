@@ -68,12 +68,7 @@ func main() {
 	}
 
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
-	km, err := tui.LoadKeymap(configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: keymap config: %v\n", err)
-		def := tui.DefaultKeymap()
-		km = &def
-	}
+	km, _, _ := tui.LoadCCXConfig(configPath)
 
 	// Load cached sessions for instant first paint (~5ms).
 	// Falls back to live-only scan (~40ms) if no cache exists.

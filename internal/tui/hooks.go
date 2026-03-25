@@ -46,7 +46,7 @@ func (a *App) handleHooksKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q":
-		return a, tea.Quit
+		return a.quit()
 	case "esc":
 		a.state = viewSessions
 		return a, nil

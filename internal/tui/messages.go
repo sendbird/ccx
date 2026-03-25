@@ -487,20 +487,30 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				buf.WriteString(renderHookBadges(block.Hooks))
 			}
 			if folded {
-				summary := session.StripXMLTags(stripANSI(block.ToolInput))
-				if len(summary) > 60 {
-					summary = summary[:57] + "..."
+				// Use diff-aware folded summaries for Edit/Write
+				if summary := toolFoldedSummary(block); summary != "" {
+					buf.WriteString("  " + summary + "\n")
+				} else {
+					summary := session.StripXMLTags(stripANSI(block.ToolInput))
+					if len(summary) > 60 {
+						summary = summary[:57] + "..."
+					}
+					buf.WriteString("  " + dimStyle.Render(summary) + "\n")
 				}
-				buf.WriteString("  " + dimStyle.Render(summary) + "\n")
 			} else {
 				buf.WriteString("\n")
 				if block.ToolInput != "" {
-					input := session.StripXMLTags(stripANSI(block.ToolInput))
-					if formatted {
-						input = tryFormatJSON(input)
+					// Use diff rendering for Edit/Write tools
+					if diffOut := toolDiffOutput(block, w); diffOut != "" {
+						buf.WriteString(diffOut)
+					} else {
+						input := session.StripXMLTags(stripANSI(block.ToolInput))
+						if formatted {
+							input = tryFormatJSON(input)
+						}
+						wrapped := wrapText(input, w)
+						buf.WriteString(dimStyle.Render(wrapped) + "\n")
 					}
-					wrapped := wrapText(input, w)
-					buf.WriteString(dimStyle.Render(wrapped) + "\n")
 				}
 				// Show hook details when unfolded (unless hidden)
 				if len(block.Hooks) > 0 && !opts.hideHooks {
