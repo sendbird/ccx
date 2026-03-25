@@ -25,6 +25,8 @@ const (
 	ConfigMCP
 	ConfigHook
 	ConfigEnterprise // managed enterprise settings
+	ConfigKeymap     // keybindings from config.yaml
+	ConfigShortcut   // number key shortcuts
 	configCategoryCount // must be last
 )
 
@@ -49,6 +51,10 @@ func CategoryLabel(cat ConfigCategory) string {
 		return "HOOKS"
 	case ConfigEnterprise:
 		return "ENTERPRISE"
+	case ConfigKeymap:
+		return "KEYMAPS"
+	case ConfigShortcut:
+		return "SHORTCUTS"
 	default:
 		return "ALL"
 	}

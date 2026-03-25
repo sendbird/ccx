@@ -53,6 +53,8 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupChain; a.rebuildSessionList(); return a, nil }},
 		{name: "group:fork", aliases: []string{"g:fork"}, desc: "fork groups", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupFork; a.rebuildSessionList(); return a, nil }},
+		{name: "group:repo", aliases: []string{"g:repo"}, desc: "base repo groups", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupBaseProject; a.rebuildSessionList(); return a, nil }},
 
 		// Conversation detail levels
 		{name: "detail:text", aliases: []string{"d:text"}, desc: "text only", views: cmdConv,
@@ -187,6 +189,10 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigMCP); a.rebuildCfgList(); return a, nil }},
 		{name: "page:hooks", aliases: []string{"p:hooks"}, desc: "filter to hooks", views: cmdConfig,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigHook); a.rebuildCfgList(); return a, nil }},
+		{name: "page:keymaps", aliases: []string{"p:keymaps", "p:km"}, desc: "filter to keymaps", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigKeymap); a.rebuildCfgList(); return a, nil }},
+		{name: "page:shortcuts", aliases: []string{"p:shortcuts", "p:sc"}, desc: "filter to shortcuts", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigShortcut); a.rebuildCfgList(); return a, nil }},
 
 		// Stats page filters
 		{name: "page:tools", aliases: []string{"p:tools"}, desc: "stats → tools", views: cmdStats,
@@ -382,7 +388,7 @@ func (a *App) updateCmdSuggestions() {
 		switch a.state {
 		case viewSessions:
 			a.cmdSuggestions = append(a.cmdSuggestions,
-				cmdEntry{name: "group:", desc: "flat proj tree chain fork"},
+				cmdEntry{name: "group:", desc: "flat proj tree chain fork repo"},
 				cmdEntry{name: "preview:", desc: "conv stats mem tasks live"},
 				cmdEntry{name: "set:ratio", desc: "N  (15-85)"},
 				cmdEntry{name: "refresh", desc: "reload sessions"})

@@ -151,6 +151,10 @@ func (a *App) openConfigExplorer() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	// Append keymap and shortcut items to config tree
+	tree.Items = append(tree.Items, a.keymapConfigItems()...)
+	tree.Items = append(tree.Items, a.shortcutConfigItems()...)
+
 	a.cfgTree = tree
 	a.cfgSelectedSet = make(map[string]bool)
 	items := buildConfigItemsFiltered(tree, a.cfgFilterCat, a.cfgSearchTerm)
@@ -163,6 +167,77 @@ func (a *App) openConfigExplorer() (tea.Model, tea.Cmd) {
 	a.state = viewConfig
 	a.updateConfigPreview()
 	return a, nil
+}
+
+// keymapConfigItems creates synthetic config items for current keybindings.
+func (a *App) keymapConfigItems() []session.ConfigItem {
+	km := a.keymap
+	type kv struct{ key, val string }
+	sections := []struct {
+		name  string
+		binds []kv
+	}{
+		{"session", []kv{
+			{"quit", km.Session.Quit}, {"open", km.Session.Open}, {"edit", km.Session.Edit},
+			{"actions", km.Session.Actions}, {"views", km.Session.Views}, {"refresh", km.Session.Refresh},
+			{"search", km.Session.Search}, {"global_search", km.Session.GlobalSearch},
+			{"live", km.Session.Live}, {"select", km.Session.Select},
+			{"preview", km.Session.Preview}, {"preview_back", km.Session.PreviewBack},
+			{"command", km.Session.Command}, {"help", km.Session.Help},
+		}},
+		{"actions", []kv{
+			{"delete", km.Actions.Delete}, {"move", km.Actions.Move}, {"resume", km.Actions.Resume},
+			{"copy_path", km.Actions.CopyPath}, {"worktree", km.Actions.Worktree},
+			{"kill", km.Actions.Kill}, {"input", km.Actions.Input}, {"jump", km.Actions.Jump},
+			{"urls", km.Actions.URLs}, {"files", km.Actions.Files},
+			{"import_mem", km.Actions.ImportMem}, {"remove_mem", km.Actions.RemoveMem},
+		}},
+		{"views", []kv{
+			{"stats", km.Views.Stats}, {"config", km.Views.Config}, {"plugins", km.Views.Plugins},
+		}},
+	}
+	var items []session.ConfigItem
+	for _, sec := range sections {
+		for _, b := range sec.binds {
+			if b.val == "" {
+				continue
+			}
+			items = append(items, session.ConfigItem{
+				Category:    session.ConfigKeymap,
+				Name:        b.key + " = " + b.val,
+				Description: sec.name + " keymap",
+				Group:       sec.name,
+			})
+		}
+	}
+	return items
+}
+
+// shortcutConfigItems creates synthetic config items for number shortcuts.
+func (a *App) shortcutConfigItems() []session.ConfigItem {
+	var items []session.ConfigItem
+	for viewName, vs := range a.shortcuts {
+		addSide := func(side string, sm ShortcutMap) {
+			for i := '1'; i <= '9'; i++ {
+				k := string(i)
+				if cmd, ok := sm[k]; ok {
+					items = append(items, session.ConfigItem{
+						Category:    session.ConfigShortcut,
+						Name:        k + " → " + cmd,
+						Description: viewName + " " + side,
+						Group:       viewName + ":" + side,
+					})
+				}
+			}
+		}
+		if len(vs.Left) > 0 {
+			addSide("left", vs.Left)
+		}
+		if len(vs.Right) > 0 {
+			addSide("right", vs.Right)
+		}
+	}
+	return items
 }
 
 func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

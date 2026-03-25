@@ -5,3 +5,4 @@ vendor/
 *.prof
 .DS_Store
 dist/
+.worktree

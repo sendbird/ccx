@@ -252,7 +252,8 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `←` | Close/unfocus preview |
 | `[` / `]` | Adjust split ratio |
 | `Space` | Multi-select toggle |
-| `x` | Actions menu (delete, move, resume, URLs, files, ...) |
+| `1-9` | Number key shortcuts (configurable) |
+| `x` | Actions menu (delete, move, resume, fork, URLs, files, ...) |
 | `v` | Views menu (stats/config/plugins) |
 | `:` | Command mode |
 | `Ctrl+S` | Cross-session search |
@@ -313,12 +314,13 @@ Available from any view. Suggestions are context-aware — only relevant command
 | `group:flat\|proj\|tree\|chain\|fork` | Sessions | Change grouping mode |
 | `preview:conv\|stats\|mem\|tasks\|live` | Sessions | Change preview mode |
 | `set:ratio N` | Sessions | Set split pane ratio (15-85) |
-| `page:memory\|hooks\|mcp\|skills\|...` | Config | Filter config category |
+| `page:memory\|hooks\|mcp\|skills\|keymaps\|shortcuts\|...` | Config | Filter config category |
 | `page:tools\|errors\|overview` | Stats | Switch stats page |
 | `refresh` | Sessions | Reload sessions |
 | `search` | All | Cross-session content search |
 | `config:edit` | All | Edit config file |
 | `detail:text\|tool\|hook` | Conversation | Set detail level |
+| `badge:toggle <KEY>` | Sessions | Toggle badge visibility (M,W,T,K,P,A,C,S,X,F,LIVE) |
 
 Short aliases: `g:flat`, `v:stats`, `p:hooks`, `cfg:edit`. Multi-command: `view:config page:hooks`.
 
@@ -366,6 +368,9 @@ preferences:
   conv_detail_level: 1      # 0=text, 1=tool, 2=hook
   split_ratio: 35           # 15-85
   worktree_dir: .worktree   # git worktree subdirectory name
+  hidden_badges: [C, S, X]  # hide specific badges
+  filter_term: "is:live"    # last applied session filter
+  editor_input: true        # prefer $EDITOR for live input (ctrl+e to toggle)
 ```
 
 ### Number Key Shortcuts
@@ -406,6 +411,43 @@ shortcuts:
 
 Values are command names from the command registry (`:` command mode).
 User config merges over defaults — override specific keys or add new views.
+
+### Config Explorer
+
+The config explorer (`:view:config` or `v` → `c`) shows all Claude Code configuration organized by category. Use `:page:<category>` to filter. Categories include:
+
+| Category | Content |
+|----------|---------|
+| MEMORY | Global CLAUDE.md, memory files, contexts, rules |
+| PROJECT | Project-level CLAUDE.md and memory |
+| LOCAL | Parent CLAUDE.md files up the directory tree |
+| SKILLS | User-defined skills |
+| AGENTS | User-defined agents |
+| COMMANDS | User-defined slash commands |
+| HOOKS | Hooks from settings.json |
+| MCP | MCP server configurations |
+| KEYMAPS | Current keybindings (from config.yaml or defaults) |
+| SHORTCUTS | Number key shortcuts per view and focus side |
+
+### Actions Menu
+
+The actions menu (`x` key) provides session-specific operations:
+
+| Key | Action | Condition |
+|-----|--------|-----------|
+| `d` | Delete session | Always |
+| `m` | Move/rename project | Always |
+| `r` | Resume session | Always |
+| `y` | Copy project path | Always |
+| `w` | Create git worktree | Always |
+| `u` | Extract URLs | Always |
+| `f` | Extract file paths | Always |
+| `F` | Fork session | Always |
+| `X` | Remove memory files | Has memory |
+| `M` | Import memory from worktree | Is worktree |
+| `k` | Kill live session | Live + tmux |
+| `i` | Send input | Live + tmux |
+| `j` | Jump to tmux pane | Live + tmux |
 
 ## Development
 

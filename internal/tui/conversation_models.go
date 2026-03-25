@@ -33,7 +33,7 @@ type convItem struct {
 func (c convItem) FilterValue() string {
 	switch c.kind {
 	case convMsg:
-		return entryFullText(c.merged.entry) + " " + c.merged.entry.Role
+		return entryFilterText(c.merged.entry)
 	case convTask:
 		return c.task.Subject + " " + c.task.Status
 	case convAgent:

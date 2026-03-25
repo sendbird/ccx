@@ -15,15 +15,17 @@ import (
 
 // Group mode constants
 const (
-	groupFlat    = 0
-	groupProject = 1
-	groupTree    = 2
-	groupChain   = 3
-	groupFork    = 4
+	groupFlat        = 0
+	groupProject     = 1
+	groupTree        = 2
+	groupChain       = 3
+	groupFork        = 4
+	groupBaseProject = 5
+	numGroupModes    = 6
 )
 
 // buildGroupedItems returns list items for the given group mode.
-func buildGroupedItems(sessions []session.Session, groupMode int) []list.Item {
+func buildGroupedItems(sessions []session.Session, groupMode int, worktreeDir ...string) []list.Item {
 	switch groupMode {
 	case groupProject:
 		return buildProjectGroupItems(sessions)
@@ -33,6 +35,8 @@ func buildGroupedItems(sessions []session.Session, groupMode int) []list.Item {
 		return buildChainGroupItems(sessions)
 	case groupFork:
 		return buildForkGroupItems(sessions)
+	case groupBaseProject:
+		return buildBaseProjectGroupItems(sessions, worktreeDir...)
 	default:
 		items := make([]list.Item, len(sessions))
 		for i, s := range sessions {
@@ -90,6 +94,9 @@ func (s sessionItem) FilterValue() string {
 		s.sess.GitBranch,
 		s.sess.ShortID,
 		s.sess.FirstPrompt,
+	}
+	if s.sess.ProjectName != "" {
+		parts = append(parts, "proj:"+s.sess.ProjectName)
 	}
 	if s.sess.TmuxWindowName != "" {
 		parts = append(parts, "win:"+s.sess.TmuxWindowName, s.sess.TmuxWindowName)
@@ -369,8 +376,8 @@ func computeSessionColWidths(sessions []session.Session) (timeW, msgW int) {
 	return
 }
 
-func newSessionList(sessions []session.Session, width, height int, groupMode int, selectedSet map[string]bool, hiddenBadges map[string]bool) list.Model {
-	items := buildGroupedItems(sessions, groupMode)
+func newSessionList(sessions []session.Session, width, height int, groupMode int, selectedSet map[string]bool, hiddenBadges map[string]bool, worktreeDir ...string) list.Model {
+	items := buildGroupedItems(sessions, groupMode, worktreeDir...)
 
 	timeW, msgW := computeSessionColWidths(sessions)
 
@@ -381,11 +388,83 @@ func newSessionList(sessions []session.Session, width, height int, groupMode int
 	l.SetShowPagination(false)
 	l.SetFilteringEnabled(true)
 	l.SetShowHelp(false)
-	l.Filter = substringFilter
+
+	// Use chain-aware filter for grouped modes so children stay visible
+	// when their parent matches (and vice versa).
+	if groupMode == groupChain || groupMode == groupFork || groupMode == groupTree || groupMode == groupBaseProject {
+		l.Filter = buildChainAwareFilter(items)
+	} else {
+		l.Filter = substringFilter
+	}
+
 	l.DisableQuitKeybindings()
 	configureListSearch(&l)
 	l.SetSize(width, height) // re-compute pagination after hiding bars
 	return l
+}
+
+// buildChainAwareFilter returns a filter function that preserves parent-child
+// relationships. When a depth=0 parent matches, all its depth=1 children stay
+// visible. When a depth=1 child matches, its parent also stays visible.
+func buildChainAwareFilter(items []list.Item) list.FilterFunc {
+	// Pre-compute parent-child relationships.
+	parentOf := make(map[int]int)   // child index → parent index
+	childrenOf := make(map[int][]int) // parent index → child indices
+	lastParent := -1
+	for i, item := range items {
+		si, ok := item.(sessionItem)
+		if !ok {
+			continue
+		}
+		if si.treeDepth == 0 {
+			lastParent = i
+		} else if lastParent >= 0 {
+			parentOf[i] = lastParent
+			childrenOf[lastParent] = append(childrenOf[lastParent], i)
+		}
+	}
+
+	return func(term string, targets []string) []list.Rank {
+		// Run normal substring match on all items.
+		baseRanks := substringFilter(term, targets)
+		if len(baseRanks) == 0 {
+			return baseRanks
+		}
+
+		matchSet := make(map[int]list.Rank, len(baseRanks))
+		for _, r := range baseRanks {
+			matchSet[r.Index] = r
+		}
+
+		// Expand: parent match includes children; child match includes parent.
+		expanded := make(map[int]bool)
+		for idx := range matchSet {
+			expanded[idx] = true
+			// If this is a parent, include all children
+			for _, childIdx := range childrenOf[idx] {
+				expanded[childIdx] = true
+			}
+			// If this is a child, include parent
+			if pIdx, ok := parentOf[idx]; ok {
+				expanded[pIdx] = true
+			}
+		}
+
+		// Build result preserving original order.
+		var result []list.Rank
+		for i := range items {
+			if !expanded[i] {
+				continue
+			}
+			if r, ok := matchSet[i]; ok {
+				result = append(result, r)
+			} else {
+				// Included by relationship, no highlight
+				result = append(result, list.Rank{Index: i})
+			}
+		}
+		return result
+	}
 }
 
 // buildTreeItems groups sessions by team, placing leaders at depth=0 and
@@ -753,6 +832,72 @@ func buildProjectGroupItems(sessions []session.Session) []list.Item {
 	return items
 }
 
+// buildBaseProjectGroupItems groups sessions by base repository, resolving
+// worktrees to their main repo using git info (.git file) or path patterns.
+// Sessions from the same base repo (main + worktrees) appear under one group.
+func buildBaseProjectGroupItems(sessions []session.Session, worktreeDirs ...string) []list.Item {
+	type baseGroup struct {
+		basePath string
+		sessions []session.Session
+		bestTime time.Time
+	}
+
+	groups := make(map[string]*baseGroup)
+	for i := range sessions {
+		s := &sessions[i]
+		basePath := session.ResolveBaseRepo(s.ProjectPath, worktreeDirs...)
+		g, ok := groups[basePath]
+		if !ok {
+			g = &baseGroup{basePath: basePath}
+			groups[basePath] = g
+		}
+		g.sessions = append(g.sessions, *s)
+		if s.ModTime.After(g.bestTime) {
+			g.bestTime = s.ModTime
+		}
+	}
+
+	// Sort each group: main-repo sessions first, then worktrees, both by ModTime desc
+	for _, g := range groups {
+		sort.Slice(g.sessions, func(i, j int) bool {
+			iIsWT := g.sessions[i].IsWorktree || g.sessions[i].ProjectPath != g.basePath
+			jIsWT := g.sessions[j].IsWorktree || g.sessions[j].ProjectPath != g.basePath
+			if iIsWT != jIsWT {
+				return !iIsWT // main repo sessions first
+			}
+			return g.sessions[i].ModTime.After(g.sessions[j].ModTime)
+		})
+	}
+
+	// Sort groups by bestTime desc
+	groupList := make([]*baseGroup, 0, len(groups))
+	for _, g := range groups {
+		groupList = append(groupList, g)
+	}
+	sort.Slice(groupList, func(i, j int) bool {
+		return groupList[i].bestTime.After(groupList[j].bestTime)
+	})
+
+	var items []list.Item
+	for _, g := range groupList {
+		if len(g.sessions) == 1 {
+			items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
+			continue
+		}
+		items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
+		children := g.sessions[1:]
+		for ci, ch := range children {
+			items = append(items, sessionItem{
+				sess:      ch,
+				treeDepth: 1,
+				treeLast:  ci == len(children)-1,
+			})
+		}
+	}
+
+	return items
+}
+
 func timeAgo(t time.Time) string {
 	if t.IsZero() {
 		return "unknown"
@@ -831,6 +976,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{"has:compact", "With compaction"},
 		{"has:skill", "With skills"},
 		{"has:mcp", "With MCP tools"},
+		{"proj:<name>", "By project name"},
 		{"team:<name>", "By team name"},
 		{"is:fork", "Forked sessions"},
 	}

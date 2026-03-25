@@ -142,6 +142,9 @@ type App struct {
 	// Badge visibility
 	hiddenBadges map[string]bool
 
+	// Live input: prefer $EDITOR mode
+	editorInput bool
+
 	// Content for clipboard/pager
 	copiedMsg string
 
@@ -475,7 +478,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 
 	// Apply group/preview/view mode from CLI flags or restored preferences
 	if a.config.GroupMode != "" {
-		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork}
+		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork, "repo": groupBaseProject}
 		if m, ok := modeMap[a.config.GroupMode]; ok {
 			a.sessGroupMode = m
 		}
@@ -669,7 +672,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.width > 0 && a.height > 0 {
 			contentH := a.height - 3
 			sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges)
+			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.config.WorktreeDir)
 			a.sessSplit.CacheKey = ""
 			if a.config.SearchQuery != "" {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
@@ -1371,7 +1374,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a.openEditMenu(sess)
 	case km.Session.Group:
-		a.sessGroupMode = (a.sessGroupMode + 1) % 5
+		a.sessGroupMode = (a.sessGroupMode + 1) % numGroupModes
 		a.rebuildSessionList()
 		return a, nil
 	case km.Session.Refresh:
@@ -1393,7 +1396,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Focus && sp.Show {
 			a.cycleSessionPreviewMode()
 		} else {
-			a.sessGroupMode = (a.sessGroupMode + 1) % 5
+			a.sessGroupMode = (a.sessGroupMode + 1) % numGroupModes
 			a.rebuildSessionList()
 		}
 		return a, nil
@@ -1401,7 +1404,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Focus && sp.Show {
 			a.cycleSessionPreviewModeReverse()
 		} else {
-			a.sessGroupMode = (a.sessGroupMode - 1 + 5) % 5
+			a.sessGroupMode = (a.sessGroupMode - 1 + numGroupModes) % numGroupModes
 			a.rebuildSessionList()
 		}
 		return a, nil
@@ -2158,8 +2161,39 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.importWorktreeMemory(sess)
 	case akm.RemoveMem:
 		return a.removeSessionMemory(sess)
+	case akm.Fork:
+		return a.forkSession(sess)
 	}
 	return a, nil
+}
+
+// forkSession resumes a session in a new tmux window, creating a fork.
+func (a *App) forkSession(sess session.Session) (tea.Model, tea.Cmd) {
+	dir := sess.ProjectPath
+	if dir == "" {
+		dir, _ = os.UserHomeDir()
+	}
+
+	if tmux.InTmux() {
+		windowName := sess.ProjectName
+		if windowName == "" {
+			windowName = "claude"
+		}
+		windowName += "-fork"
+		if err := tmux.NewWindowClaude(windowName, dir, sess.ID); err != nil {
+			a.copiedMsg = "Fork failed: " + err.Error()
+		} else {
+			a.copiedMsg = "Forked → " + windowName
+		}
+		return a, nil
+	}
+
+	// Non-tmux: take over terminal
+	c := exec.Command("claude", "--resume", sess.ID)
+	c.Dir = dir
+	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+		return editorDoneMsg{}
+	})
 }
 
 func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
@@ -2621,9 +2655,36 @@ func (a *App) openLiveInput(projectPath string, sessionID ...string) (tea.Model,
 		return a, nil
 	}
 	a.liveInputPane = pane
+	a.liveInputProjDir = projectPath
+
+	// If user prefers $EDITOR, skip inline modal and open editor directly
+	if a.editorInput {
+		return a, func() tea.Msg {
+			tmpFile, err := os.CreateTemp("", "ccx-input-*.md")
+			if err != nil {
+				return liveInputSentMsg{err: err}
+			}
+			tmpFile.Close()
+			defer os.Remove(tmpFile.Name())
+
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = "vim"
+			}
+			cmd := fmt.Sprintf("cd %s && %s %s", shellescape(projectPath), editor, tmpFile.Name())
+			exec.Command("tmux", "display-popup", "-E", "-w", "80%", "-h", "70%", cmd).Run()
+
+			content, readErr := os.ReadFile(tmpFile.Name())
+			if readErr != nil || len(strings.TrimSpace(string(content))) == 0 {
+				return liveInputSentMsg{err: fmt.Errorf("empty")}
+			}
+			sendText := strings.TrimRight(string(content), "\n")
+			return liveInputSentMsg{err: tmux.SendKeys(pane, sendText)}
+		}
+	}
+
 	a.liveInputModal = newInputModal()
 	a.liveInputActive = true
-	a.liveInputProjDir = projectPath
 	return a, nil
 }
 
@@ -2632,6 +2693,8 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 
 	switch action {
 	case "send":
+		// Remember inline preference
+		a.editorInput = false
 		text := strings.TrimRight(a.liveInputModal.Text(), "\n")
 		if strings.TrimSpace(text) == "" {
 			a.liveInputActive = false
@@ -2658,6 +2721,8 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 			return liveInputSentMsg{err: err}
 		}
 	case "editor":
+		// Remember editor preference for next time
+		a.editorInput = true
 		// Write current text to temp file, open $EDITOR in tmux popup
 		a.liveInputActive = false
 		panes := a.liveInputPanes
@@ -3823,9 +3888,10 @@ func (a *App) renderActionsHintBox() string {
 		if sess.HasMemory {
 			line2 += sp + hl.Render(displayKey(akm.RemoveMem)) + d.Render(":rm-mem")
 		}
-		if sess.IsWorktree && sess.HasMemory {
+		if sess.IsWorktree {
 			line2 += sp + hl.Render(displayKey(akm.ImportMem)) + d.Render(":import-mem")
 		}
+		line2 += sp + hl.Render(displayKey(akm.Fork)) + d.Render(":fork")
 		lines = append(lines, line2)
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
@@ -3950,9 +4016,32 @@ func (a *App) activeFilterValue() string {
 func (a *App) resetActiveFilter() {
 	switch a.state {
 	case viewSessions:
+		// Remember selected session before reset
+		var selID string
+		if sess, ok := a.selectedSession(); ok {
+			selID = sess.ID
+		}
 		a.sessionList.ResetFilter()
+		// Re-select the same session
+		if selID != "" {
+			for i, item := range a.sessionList.Items() {
+				if si, ok := item.(sessionItem); ok && si.sess.ID == selID {
+					a.sessionList.Select(i)
+					break
+				}
+			}
+		}
 	case viewConversation:
+		idx := a.convList.Index()
 		a.convList.ResetFilter()
+		// Re-select same index (clamped)
+		total := len(a.convList.Items())
+		if idx >= total {
+			idx = total - 1
+		}
+		if idx >= 0 {
+			a.convList.Select(idx)
+		}
 	case viewConfig:
 		a.clearCfgSearch()
 	case viewPlugins:
@@ -4146,7 +4235,7 @@ func (a *App) resizeAll() tea.Cmd {
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
 	if a.sessionList.Width() == 0 {
 		if len(a.sessions) > 0 {
-			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges)
+			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.config.WorktreeDir)
 			a.sessSplit.CacheKey = ""
 			if a.config.SearchQuery != "" {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
@@ -4243,7 +4332,7 @@ func (a *App) rebuildSessionList() {
 
 	contentH := max(a.height-3, 1)
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges)
+	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.config.WorktreeDir)
 	a.sessSplit.CacheKey = ""
 
 	// Restore cursor to previously selected session
@@ -4469,7 +4558,7 @@ func (a *App) breadcrumbRightStatus() string {
 
 	// Session group mode badge (styled)
 	if a.state == viewSessions {
-		modeLabels := []string{"FLAT", "PROJ", "TREE", "CHAIN", "FORK"}
+		modeLabels := []string{"FLAT", "PROJ", "TREE", "CHAIN", "FORK", "REPO"}
 		modeColors := []lipgloss.Color{"#9CA3AF", "#3B82F6", "#10B981", "#F59E0B", "#EC4899"}
 		ml := modeLabels[a.sessGroupMode]
 		mc := modeColors[a.sessGroupMode]

@@ -195,6 +195,29 @@ func entryFullText(e session.Entry) string {
 	return strings.Join(parts, "\n")
 }
 
+// entryFilterText returns a searchable string for filtering conversation items.
+// Includes text content, tool names, and role for comprehensive matching.
+func entryFilterText(e session.Entry) string {
+	var parts []string
+	parts = append(parts, e.Role)
+	for _, b := range e.Content {
+		switch b.Type {
+		case "text":
+			text := strings.TrimSpace(session.StripXMLTags(b.Text))
+			if text != "" {
+				parts = append(parts, text)
+			}
+		case "tool_use":
+			parts = append(parts, b.ToolName, "tool:"+b.ToolName)
+		case "tool_result":
+			if b.IsError {
+				parts = append(parts, "is:error")
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // isAutoCompacted returns true if the entry is a context auto-compaction summary.
 func isAutoCompacted(e session.Entry) bool {
 	for _, block := range e.Content {

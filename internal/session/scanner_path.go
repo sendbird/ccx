@@ -204,6 +204,35 @@ func isGitWorktree(projectPath string) bool {
 	return strings.Contains(projectPath, "/.worktree/")
 }
 
+// ResolveBaseRepo returns the main repository root for a project path.
+// For git worktrees, it reads the .git file to find the main repo's
+// .git/worktrees/<name> pointer and resolves back to the repo root.
+// For normal repos it returns the path unchanged.
+// Falls back to path-based detection if git info isn't available.
+func ResolveBaseRepo(projectPath string, worktreeDirs ...string) string {
+	// Try git-based detection first: .git file in worktrees contains
+	// "gitdir: /path/to/main-repo/.git/worktrees/<name>"
+	gitPath := filepath.Join(projectPath, ".git")
+	info, err := os.Lstat(gitPath)
+	if err == nil && !info.IsDir() {
+		data, err := os.ReadFile(gitPath)
+		if err == nil {
+			line := strings.TrimSpace(string(data))
+			if strings.HasPrefix(line, "gitdir: ") {
+				gitdir := line[len("gitdir: "):]
+				// gitdir looks like: /path/to/repo/.git/worktrees/<name>
+				// We want: /path/to/repo
+				if idx := strings.Index(gitdir, "/.git/worktrees/"); idx >= 0 {
+					return gitdir[:idx]
+				}
+			}
+		}
+	}
+
+	// Fallback: path-based resolution (strip worktree dir suffix)
+	return ResolveMainProjectPath(projectPath, worktreeDirs...)
+}
+
 func hasProjectMemory(projectPath, home string) bool {
 	encoded := EncodeProjectPath(projectPath)
 	memDir := filepath.Join(home, ".claude", "projects", encoded, "memory")
