@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type cachedSession struct {
 
 // sessionCache maps file path → cached session metadata.
 type sessionCache struct {
+	mu      sync.Mutex
 	path    string
 	entries map[string]cachedSession
 	dirty   bool
@@ -46,6 +48,8 @@ func loadCache(claudeDir string) *sessionCache {
 }
 
 func (sc *sessionCache) lookup(path string, modTime time.Time) (Session, bool) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 	cached, ok := sc.entries[path]
 	if !ok || !cached.ModTime.Equal(modTime) {
 		return Session{}, false
@@ -54,6 +58,8 @@ func (sc *sessionCache) lookup(path string, modTime time.Time) (Session, bool) {
 }
 
 func (sc *sessionCache) store(path string, modTime time.Time, sess Session) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 	sc.entries[path] = cachedSession{ModTime: modTime, Sess: sess}
 	sc.dirty = true
 }
