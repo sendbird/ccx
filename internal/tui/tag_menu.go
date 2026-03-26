@@ -146,18 +146,51 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	if key == "up" || key == "k" {
-		if a.tagCursor > 0 {
-			a.tagCursor--
+	// If input is focused, handle navigation specially
+	if a.tagInput.Focused() {
+		switch key {
+		case "up":
+			// Move focus to list
+			a.tagInput.Blur()
+			if len(a.tagList) > 0 {
+				a.tagCursor = len(a.tagList) - 1
+			}
+			return a, nil
+		case "enter":
+			// Handle enter below (creating badge)
+		default:
+			// Forward all other keys to input (allows typing j/k/h/l/etc)
+			var cmd tea.Cmd
+			a.tagInput, cmd = a.tagInput.Update(msg)
+			return a, cmd
 		}
-		return a, nil
-	}
-
-	if key == "down" || key == "j" {
-		if a.tagCursor < len(a.tagList)-1 {
-			a.tagCursor++
+	} else {
+		// List is focused - handle navigation
+		switch key {
+		case "up", "k":
+			if a.tagCursor > 0 {
+				a.tagCursor--
+			} else {
+				// Wrap to bottom
+				if len(a.tagList) > 0 {
+					a.tagCursor = len(a.tagList) - 1
+				}
+			}
+			return a, nil
+		case "down", "j":
+			if a.tagCursor < len(a.tagList)-1 {
+				a.tagCursor++
+			} else {
+				// Wrap to top
+				a.tagCursor = 0
+			}
+			return a, nil
+		case "enter":
+			// Handle enter below (toggling badge)
+		default:
+			// Other keys do nothing when list is focused
+			return a, nil
 		}
-		return a, nil
 	}
 
 	if key == "enter" {
@@ -276,10 +309,7 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Forward other keys to text input (for typing in the input field)
-	var cmd tea.Cmd
-	a.tagInput, cmd = a.tagInput.Update(msg)
-	return a, cmd
+	return a, nil
 }
 
 func (a *App) validateBadgeName(name string) bool {

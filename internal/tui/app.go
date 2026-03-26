@@ -789,6 +789,8 @@ func (a *App) View() string {
 		} else if a.showHelp {
 			content = renderHelpModal(content, a.width, ContentHeight(a.height), a.keymap)
 			help = formatHelp("press any key to close")
+		} else if a.tagMenu {
+			help = "" // Tag menu has its own help text inside the modal
 		} else if a.moveMode {
 			help = "  " + a.moveInput.View() + helpStyle.Render("  enter:move esc:cancel")
 		} else if a.worktreeMode {
