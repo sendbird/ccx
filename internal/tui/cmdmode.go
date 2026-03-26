@@ -266,6 +266,15 @@ func buildCmdRegistry() []cmdEntry {
 		// Worktree align
 		{name: "worktree:align", aliases: []string{"wt:align"}, desc: "align worktree paths", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.startWorktreeAlign() }},
+
+		// Remote execution
+		{name: "remote:start", aliases: []string{"r:start"}, desc: "start remote session",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.copiedMsg = "Usage: remote:start <context> <repo> [branch] [prompt]"
+				return a, nil
+			}},
+		{name: "remote:stop", aliases: []string{"r:stop"}, desc: "stop remote session",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.stopRemoteSession() }},
 	}
 }
 
@@ -491,6 +500,11 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 		return a.executeCmdWorktreeNew(input)
 	}
 
+	// Check remote:start <context> <repo> [branch] [prompt]
+	if strings.HasPrefix(lower, "remote:start") || strings.HasPrefix(lower, "r:start") {
+		return a.executeCmdRemoteStart(input)
+	}
+
 	// Split into parts for multi-command support
 	parts := strings.Fields(lower)
 	var cmds []tea.Cmd
@@ -680,11 +694,14 @@ func (a *App) bootstrapAndEditConfig() (tea.Model, tea.Cmd) {
 	// Create file with defaults if missing
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		os.MkdirAll(filepath.Dir(path), 0755)
+		km := DefaultKeymap()
 		cfg := CCXConfig{
-			Session:     DefaultKeymap().Session,
-			Actions:     DefaultKeymap().Actions,
-			Views:       DefaultKeymap().Views,
-			Navigation:  DefaultKeymap().Navigation,
+			Keymaps: KeymapsConfig{
+				Session:    km.Session,
+				Actions:    km.Actions,
+				Views:      km.Views,
+				Navigation: km.Navigation,
+			},
 			Preferences: a.capturePreferences(),
 		}
 		data, err := yaml.Marshal(cfg)

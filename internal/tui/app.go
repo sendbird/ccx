@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/remote"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
 )
@@ -258,6 +259,11 @@ type App struct {
 	// Memory removal
 	memRemoveActive bool
 	memRemoveSrc    string // project path to remove from
+
+	// Remote execution
+	remoteSession *remote.Session
+	remoteContent string // rendered stream content
+	remoteLines   int    // line count for status
 
 	// Worktree alignment
 	worktreeAlignActive bool
@@ -564,9 +570,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case remoteStartedMsg:
+		return a.handleRemoteStarted(msg)
+
+	case remoteStreamMsg:
+		return a.handleRemoteStream(msg)
+
 	case delayedRefreshMsg:
-		// Auto-refresh after spawning a new session
-		return a, a.doRefresh()
+		// Auto-refresh after spawning a new session; retry if session not found yet
+		oldCount := len(a.sessions)
+		cmd := a.doRefresh()
+		if len(a.sessions) == oldCount && msg.remaining > 0 {
+			// No new session found — retry after another delay
+			return a, tea.Batch(cmd, func() tea.Msg {
+				time.Sleep(3 * time.Second)
+				return delayedRefreshMsg{remaining: msg.remaining - 1}
+			})
+		}
+		return a, cmd
 
 	case configTestDoneMsg:
 		os.RemoveAll(msg.tmpDir)
@@ -1301,12 +1322,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Send backslash + enter for multi-line input in Claude
 			return a, a.liveNewlineCmd()
 		case "left":
-			// Smart left: if cursor at column 0, escape to list; otherwise forward key
-			col, err := tmux.PaneCursorCol(a.paneProxy.pane)
-			if err == nil && col == 0 {
-				sp.Focus = false
-				return a, nil
-			}
 			return a, captureAfterKeyCmd(a.paneProxy.pane, "left")
 		}
 		return a.handlePaneProxyKey(key)
@@ -2657,15 +2672,16 @@ func (a *App) newSessionInDir(dir, name string) (tea.Model, tea.Cmd) {
 	})
 }
 
-// delayedRefreshCmd returns a command that waits briefly then triggers a refresh.
+// delayedRefreshCmd returns a command that waits then triggers a refresh.
+// Retries a few times since Claude takes a moment to create its session file.
 func (a *App) delayedRefreshCmd() tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(2 * time.Second)
-		return delayedRefreshMsg{}
+		return delayedRefreshMsg{remaining: 3}
 	}
 }
 
-type delayedRefreshMsg struct{}
+type delayedRefreshMsg struct{ remaining int }
 
 // executeNewWorktreeSession creates a git worktree and spawns a new Claude session in it.
 func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (tea.Model, tea.Cmd) {

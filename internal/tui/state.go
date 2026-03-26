@@ -22,20 +22,20 @@ type Preferences struct {
 	EditorInput     bool     `yaml:"editor_input,omitempty"`      // true = open $EDITOR for live input
 }
 
-// CCXConfig is the unified config file containing keybindings + preferences.
-// Stored at ~/.config/ccx/config.yaml.
-type CCXConfig struct {
-	// Keybindings (top-level for backward compat)
+// KeymapsConfig groups all keybinding sections under one key.
+type KeymapsConfig struct {
 	Session    SessionKeymap    `yaml:"session,omitempty"`
 	Actions    ActionsKeymap    `yaml:"actions,omitempty"`
 	Views      ViewsKeymap      `yaml:"views,omitempty"`
 	Navigation NavigationKeymap `yaml:"navigation,omitempty"`
+}
 
-	// Preferences
-	Preferences Preferences `yaml:"preferences,omitempty"`
-
-	// Number key shortcuts (view + focus scoped)
-	Shortcuts Shortcuts `yaml:"shortcuts,omitempty"`
+// CCXConfig is the unified config file containing keybindings + preferences.
+// Stored at ~/.config/ccx/config.yaml.
+type CCXConfig struct {
+	Keymaps     KeymapsConfig `yaml:"keymaps,omitempty"`
+	Preferences Preferences   `yaml:"preferences,omitempty"`
+	Shortcuts   Shortcuts     `yaml:"shortcuts,omitempty"`
 }
 
 // configPath returns the path to the unified config file.
@@ -61,12 +61,12 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts) {
 		return &km, prefs, sc
 	}
 
-	// Merge keymap overrides
+	// Merge keymap overrides from keymaps section
 	override := Keymap{
-		Session:    cfg.Session,
-		Actions:    cfg.Actions,
-		Views:      cfg.Views,
-		Navigation: cfg.Navigation,
+		Session:    cfg.Keymaps.Session,
+		Actions:    cfg.Keymaps.Actions,
+		Views:      cfg.Keymaps.Views,
+		Navigation: cfg.Keymaps.Navigation,
 	}
 	mergeKeymap(&km, override)
 
@@ -105,7 +105,7 @@ func SavePreferences(prefs Preferences) {
 
 // fillKeymapDefaults fills empty keymap fields with default values.
 func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
-	s := &cfg.Session
+	s := &cfg.Keymaps.Session
 	if s.Quit == "" { s.Quit = d.Session.Quit }
 	if s.Escape == "" { s.Escape = d.Session.Escape }
 	if s.Open == "" { s.Open = d.Session.Open }
@@ -127,7 +127,7 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if s.ResizeGrow == "" { s.ResizeGrow = d.Session.ResizeGrow }
 	if s.Command == "" { s.Command = d.Session.Command }
 
-	a := &cfg.Actions
+	a := &cfg.Keymaps.Actions
 	if a.Delete == "" { a.Delete = d.Actions.Delete }
 	if a.Move == "" { a.Move = d.Actions.Move }
 	if a.Resume == "" { a.Resume = d.Actions.Resume }
@@ -141,8 +141,9 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if a.ImportMem == "" { a.ImportMem = d.Actions.ImportMem }
 	if a.RemoveMem == "" { a.RemoveMem = d.Actions.RemoveMem }
 	if a.Fork == "" { a.Fork = d.Actions.Fork }
+	if a.New == "" { a.New = d.Actions.New }
 
-	v := &cfg.Views
+	v := &cfg.Keymaps.Views
 	if v.Stats == "" { v.Stats = d.Views.Stats }
 	if v.Config == "" { v.Config = d.Views.Config }
 	if v.Plugins == "" { v.Plugins = d.Views.Plugins }
