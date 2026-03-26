@@ -28,12 +28,27 @@ func (a *App) renderTagMenu() string {
 		return ""
 	}
 
-	// Get current session badges
+	isMultiSelect := len(a.tagSessIDs) > 0
+
+	// Get current session badges (union of all selected sessions for multi-select)
 	var currentBadges map[string]bool
-	if sess, ok := a.sessionByID(a.tagSessID); ok {
+	if isMultiSelect {
+		// For multi-select, show all badges that ANY selected session has
 		currentBadges = make(map[string]bool)
-		for _, b := range sess.sess.CustomBadges {
-			currentBadges[b] = true
+		for _, sessID := range a.tagSessIDs {
+			if sess, ok := a.sessionByID(sessID); ok {
+				for _, b := range sess.sess.CustomBadges {
+					currentBadges[b] = true
+				}
+			}
+		}
+	} else {
+		// Single session
+		if sess, ok := a.sessionByID(a.tagSessID); ok {
+			currentBadges = make(map[string]bool)
+			for _, b := range sess.sess.CustomBadges {
+				currentBadges[b] = true
+			}
 		}
 	}
 
@@ -48,10 +63,14 @@ func (a *App) renderTagMenu() string {
 	}
 
 	// Title
+	titleText := "Manage Tags"
+	if isMultiSelect {
+		titleText = fmt.Sprintf("Manage Tags (%d sessions)", len(a.tagSessIDs))
+	}
 	title := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#7C3AED")).
 		Bold(true).
-		Render("Manage Tags")
+		Render(titleText)
 
 	// Render list
 	var lines []string
@@ -118,6 +137,12 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == "esc" {
 		a.tagMenu = false
 		a.tagInput.SetValue("")
+		// Clear multi-select state
+		if len(a.tagSessIDs) > 0 {
+			a.clearMultiSelection()
+			a.tagSessIDs = nil
+		}
+		a.tagSessID = ""
 		return a, nil
 	}
 
@@ -137,59 +162,64 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if key == "enter" {
 		inputVal := strings.TrimSpace(a.tagInput.Value())
+		isMultiSelect := len(a.tagSessIDs) > 0
+
+		// Get target session IDs
+		var targetSessIDs []string
+		if isMultiSelect {
+			targetSessIDs = a.tagSessIDs
+		} else {
+			targetSessIDs = []string{a.tagSessID}
+		}
 
 		// If input field has text, create new badge
 		if inputVal != "" {
 			if !a.validateBadgeName(inputVal) {
-				// Invalid name, ignore
 				return a, nil
 			}
 
-			// Get current session
-			sess, ok := a.sessionByID(a.tagSessID)
-			if !ok {
-				return a, nil
-			}
-
-			// Check if badge already exists on session
-			hasBadge := false
-			for _, b := range sess.sess.CustomBadges {
-				if b == inputVal {
-					hasBadge = true
-					break
+			// Apply to all target sessions
+			for _, sessID := range targetSessIDs {
+				sess, ok := a.sessionByID(sessID)
+				if !ok {
+					continue
 				}
-			}
 
-			if !hasBadge && len(sess.sess.CustomBadges) >= maxBadgesPerSession {
-				// Max badges reached, ignore
-				return a, nil
-			}
-
-			// Toggle badge
-			var updated []string
-			if hasBadge {
-				// Remove
+				// Check if badge already exists
+				hasBadge := false
 				for _, b := range sess.sess.CustomBadges {
-					if b != inputVal {
-						updated = append(updated, b)
+					if b == inputVal {
+						hasBadge = true
+						break
 					}
 				}
-			} else {
-				// Add
-				updated = append(sess.sess.CustomBadges, inputVal)
+
+				// Skip if max limit reached and badge doesn't exist
+				if !hasBadge && len(sess.sess.CustomBadges) >= maxBadgesPerSession {
+					continue
+				}
+
+				// Toggle badge
+				var updated []string
+				if hasBadge {
+					// Remove
+					for _, b := range sess.sess.CustomBadges {
+						if b != inputVal {
+							updated = append(updated, b)
+						}
+					}
+				} else {
+					// Add
+					updated = append(sess.sess.CustomBadges, inputVal)
+				}
+
+				// Sort and save
+				sort.Strings(updated)
+				a.badgeStore.Set(sessID, updated)
+				a.updateSessionBadges(sessID, updated)
 			}
 
-			// Sort badges
-			sort.Strings(updated)
-
-			// Save to store
-			a.badgeStore.Set(a.tagSessID, updated)
 			_ = a.badgeStore.Save()
-
-			// Update session in list
-			a.updateSessionBadges(a.tagSessID, updated)
-
-			// Refresh tag list
 			a.tagList = a.badgeStore.AllBadges()
 			a.tagInput.SetValue("")
 			a.tagCursor = 0
@@ -197,51 +227,50 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// Otherwise, toggle selected badge
+		// Otherwise, toggle selected badge from list
 		if a.tagCursor >= 0 && a.tagCursor < len(a.tagList) {
 			badgeName := a.tagList[a.tagCursor]
 
-			// Get current session
-			sess, ok := a.sessionByID(a.tagSessID)
-			if !ok {
-				return a, nil
-			}
-
-			// Check if session has this badge
-			hasBadge := false
-			for _, b := range sess.sess.CustomBadges {
-				if b == badgeName {
-					hasBadge = true
-					break
+			// Apply to all target sessions
+			for _, sessID := range targetSessIDs {
+				sess, ok := a.sessionByID(sessID)
+				if !ok {
+					continue
 				}
-			}
 
-			// Toggle
-			var updated []string
-			if hasBadge {
-				// Remove
+				// Check if session has this badge
+				hasBadge := false
 				for _, b := range sess.sess.CustomBadges {
-					if b != badgeName {
-						updated = append(updated, b)
+					if b == badgeName {
+						hasBadge = true
+						break
 					}
 				}
-			} else {
-				// Add (check limit)
-				if len(sess.sess.CustomBadges) >= maxBadgesPerSession {
-					return a, nil
+
+				// Toggle
+				var updated []string
+				if hasBadge {
+					// Remove
+					for _, b := range sess.sess.CustomBadges {
+						if b != badgeName {
+							updated = append(updated, b)
+						}
+					}
+				} else {
+					// Add (check limit)
+					if len(sess.sess.CustomBadges) >= maxBadgesPerSession {
+						continue
+					}
+					updated = append(sess.sess.CustomBadges, badgeName)
 				}
-				updated = append(sess.sess.CustomBadges, badgeName)
+
+				// Sort and save
+				sort.Strings(updated)
+				a.badgeStore.Set(sessID, updated)
+				a.updateSessionBadges(sessID, updated)
 			}
 
-			// Sort badges
-			sort.Strings(updated)
-
-			// Save to store
-			a.badgeStore.Set(a.tagSessID, updated)
 			_ = a.badgeStore.Save()
-
-			// Update session in list
-			a.updateSessionBadges(a.tagSessID, updated)
 		}
 
 		return a, nil

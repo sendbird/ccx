@@ -198,12 +198,13 @@ type App struct {
 	editChoices []editChoice // available files to edit
 
 	// Tag menu (t key in actions)
-	tagMenu    bool
-	tagSessID  string
-	tagCursor  int
-	tagInput   textinput.Model
-	tagList    []string
-	badgeStore *session.BadgeStore
+	tagMenu     bool
+	tagSessID   string   // single session ID
+	tagSessIDs  []string // multi-select session IDs
+	tagCursor   int
+	tagInput    textinput.Model
+	tagList     []string
+	badgeStore  *session.BadgeStore
 
 	// URL menu (u key in actions)
 	urlMenu        bool
@@ -2138,6 +2139,20 @@ func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.bulkKill(selected)
 	case akm.Input:
 		return a.bulkInput(selected)
+	case akm.Tags:
+		// Collect all selected session IDs
+		var sessIDs []string
+		for _, s := range selected {
+			sessIDs = append(sessIDs, s.ID)
+		}
+		a.tagMenu = true
+		a.tagSessIDs = sessIDs // Use plural for multi-select
+		a.tagSessID = ""       // Clear single session
+		a.tagList = a.badgeStore.AllBadges()
+		a.tagCursor = 0
+		a.tagInput.SetValue("")
+		a.tagInput.Focus()
+		return a, a.tagInput.Cursor.BlinkCmd()
 	}
 	return a, nil
 }
@@ -3760,6 +3775,7 @@ func (a *App) renderActionsHintBox() string {
 		header := fmt.Sprintf("%d selected", len(a.selectedSet))
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
+		lines = append(lines, hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
 	} else {
 		sess := a.actionsSess
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
