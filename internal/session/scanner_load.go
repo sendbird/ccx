@@ -168,6 +168,56 @@ func loadFileTodos(sessionID, home string) []TodoItem {
 	return todos
 }
 
+// LoadTasksFromEntries extracts the latest task states from parsed conversation entries.
+// This is used as a fallback when task files have been cleaned up from disk.
+func LoadTasksFromEntries(entries []Entry) []TaskItem {
+	tasks := make(map[string]*TaskItem)
+	for _, e := range entries {
+		for _, b := range e.Content {
+			if b.Type != "tool_use" {
+				continue
+			}
+			if b.ToolName != "TaskCreate" && b.ToolName != "TaskUpdate" {
+				continue
+			}
+			// Parse task data from tool input JSON
+			var input struct {
+				ID          string `json:"id"`
+				Subject     string `json:"subject"`
+				Status      string `json:"status"`
+				Description string `json:"description"`
+			}
+			if json.Unmarshal([]byte(b.ToolInput), &input) != nil || input.Subject == "" {
+				continue
+			}
+			if existing, ok := tasks[input.ID]; ok {
+				// Update existing task
+				if input.Status != "" {
+					existing.Status = input.Status
+				}
+				if input.Subject != "" {
+					existing.Subject = input.Subject
+				}
+				if input.Description != "" {
+					existing.Description = input.Description
+				}
+			} else {
+				tasks[input.ID] = &TaskItem{
+					ID:          input.ID,
+					Subject:     input.Subject,
+					Status:      input.Status,
+					Description: input.Description,
+				}
+			}
+		}
+	}
+	var result []TaskItem
+	for _, t := range tasks {
+		result = append(result, *t)
+	}
+	return result
+}
+
 func loadFileTasks(sessionID, home string) []TaskItem {
 	dir := filepath.Join(home, ".claude", "tasks", sessionID)
 	entries, err := os.ReadDir(dir)

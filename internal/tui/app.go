@@ -3876,16 +3876,30 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 	home, _ := os.UserHomeDir()
 	var sb strings.Builder
 
-	// Tasks
-	if len(sess.Tasks) > 0 {
+	// Tasks — try file-based tasks first, fall back to JSONL parsing
+	tasks := sess.Tasks
+	fromConv := false
+	if len(tasks) == 0 && sess.HasTasks {
+		// Task files cleaned up — parse from conversation entries
+		entries, err := session.LoadMessages(sess.FilePath)
+		if err == nil {
+			tasks = session.LoadTasksFromEntries(entries)
+			fromConv = true
+		}
+	}
+	if len(tasks) > 0 {
 		completed := 0
-		for _, t := range sess.Tasks {
+		for _, t := range tasks {
 			if t.Status == "completed" {
 				completed++
 			}
 		}
-		sb.WriteString(dimStyle.Render(fmt.Sprintf("── Tasks [%d/%d] ──", completed, len(sess.Tasks))) + "\n\n")
-		for _, t := range sess.Tasks {
+		label := fmt.Sprintf("── Tasks [%d/%d] ──", completed, len(tasks))
+		if fromConv {
+			label += " (from conversation)"
+		}
+		sb.WriteString(dimStyle.Render(label) + "\n\n")
+		for _, t := range tasks {
 			icon := "○"
 			style := dimStyle
 			switch t.Status {
