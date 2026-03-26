@@ -197,6 +197,14 @@ type App struct {
 	actionsSess session.Session
 	editChoices []editChoice // available files to edit
 
+	// Tag menu (t key in actions)
+	tagMenu      bool
+	tagSessID    string
+	tagCursor    int
+	tagInput     textinput.Model
+	tagList      []string
+	badgeStore   *session.BadgeStore
+
 	// URL menu (u key in actions)
 	urlMenu        bool
 	urlAllItems    []extract.Item       // unfiltered full list
@@ -436,6 +444,12 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	a.plgSelectedSet = make(map[string]bool)
 	a.plgCompSelectedSet = make(map[string]bool)
 	a.cmdRegistry = buildCmdRegistry()
+
+	// Initialize tag menu
+	a.badgeStore = session.LoadBadges(cfg.ClaudeDir)
+	a.tagInput = textinput.New()
+	a.tagInput.Placeholder = "badge-name"
+	a.tagInput.CharLimit = 20
 
 	// Apply CLI flags for initial group/preview mode
 	if cfg.GroupMode != "" {
@@ -1018,6 +1032,13 @@ func (a *App) View() string {
 		help = formatHelp("x:actions — pick an action")
 	}
 
+	// Tag menu floating modal
+	if a.tagMenu {
+		modal := a.renderTagMenu()
+		content = lipgloss.Place(a.width, ContentHeight(a.height), lipgloss.Left, lipgloss.Top, content)
+		content = lipgloss.Place(a.width, ContentHeight(a.height), lipgloss.Center, lipgloss.Center, modal, lipgloss.WithString(content))
+	}
+
 	// Config actions menu hint box
 	if a.cfgActionsMenu && a.state == viewConfig {
 		hintBox := a.renderCfgActionsHintBox()
@@ -1180,6 +1201,12 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "pgdown":
 			a.sessConvFullScroll += 10
 		}
+		return a, nil
+	}
+
+	// Tag menu: manage custom badges
+	if a.tagMenu {
+		a.handleTagMenuKey(key)
 		return a, nil
 	}
 
@@ -2090,6 +2117,14 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.openURLMenuFromItems(extract.SessionURLs(sess.FilePath), "session")
 	case akm.Files:
 		return a.openURLMenuFromItems(extract.SessionFilePaths(sess.FilePath), "session files")
+	case akm.Tags:
+		a.tagMenu = true
+		a.tagSessID = sess.ID
+		a.tagList = a.badgeStore.AllBadges()
+		a.tagCursor = 0
+		a.tagInput.SetValue("")
+		a.tagInput.Focus()
+		return a, a.tagInput.Cursor.BlinkCmd()
 	}
 	return a, nil
 }
@@ -3731,7 +3766,7 @@ func (a *App) renderActionsHintBox() string {
 	} else {
 		sess := a.actionsSess
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
-		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree")+sp+hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files"))
+		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree")+sp+hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
 		}
