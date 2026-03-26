@@ -29,7 +29,11 @@ Custom badges let you tag sessions with your own labels for better organization.
 1. Open tag menu (`x` → `t`)
 2. Navigate to badge with `↑`/`↓` or `j`/`k`
 3. Press `Enter` to toggle on/off
-4. `[✓]` = session has badge, `[ ]` = doesn't have it
+4. Single session: `[✓]` = has badge, `[ ]` = doesn't have it
+5. Multi-select (make-uniform behavior):
+   - `[✓]` = any session has badge → toggle removes from ALL
+   - `[ ]` = no sessions have badge → toggle adds to ALL
+   - Creates uniform state across selected sessions
 
 ### Filtering & Search
 
@@ -212,7 +216,7 @@ User types: tag:urgent
 4. **Max limits** - Silently capped
 5. **Concurrent saves** - Mutex protected
 6. **Badge deletion** - Only removes from sessions, badge name persists in AllBadges
-7. **Multi-select** - Union logic (checkmark if ANY session has badge)
+7. **Multi-select** - Make-uniform logic (checkmark if ANY has badge, toggle creates uniform state)
 8. **Built-in protection** - :badge:rm only affects custom badges
 
 ### Integration Points
@@ -245,4 +249,3 @@ User types: tag:urgent
 - Badge usage statistics view
 - Export/import badge mappings
 - Badge colors/icons customization
-- Partial checkmarks in multi-select ([~] for some have it)
