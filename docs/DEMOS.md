@@ -35,3 +35,9 @@ Extract URLs and file paths with search, multi-select, open in browser/editor.
 Select configs or plugins and test in an isolated Claude session.
 
 ![Sandbox](gifs/06-sandbox.gif)
+
+## Cross-session Search
+
+Search across all sessions with various filters
+
+![CS-Search](gifs/07-cross-session-search.gif)
