@@ -43,6 +43,7 @@ type ActionsKeymap struct {
 	Jump     string `yaml:"jump"`
 	URLs     string `yaml:"urls"`
 	Files    string `yaml:"files"`
+	Tags     string `yaml:"tags"`
 }
 
 // ViewsKeymap defines configurable keybindings for the views menu.
@@ -109,6 +110,7 @@ func DefaultKeymap() Keymap {
 			Jump:     "j",
 			URLs:     "u",
 			Files:    "f",
+			Tags:     "t",
 		},
 		Views: ViewsKeymap{
 			Stats:   "s",
