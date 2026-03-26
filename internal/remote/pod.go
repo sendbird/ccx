@@ -16,6 +16,16 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 	// The main container just sleeps — we exec into it for setup and Claude
 	// This ensures we can stream progress and attach interactively.
 
+	// Build tolerations
+	var tolerations []map[string]interface{}
+	for _, key := range cfg.Tolerations {
+		tolerations = append(tolerations, map[string]interface{}{
+			"key":      key,
+			"operator": "Exists",
+			"effect":   "NoSchedule",
+		})
+	}
+
 	// Build env vars list
 	envVars := []map[string]string{
 		{"name": "CLAUDE_CODE_OAUTH_TOKEN", "value": oauthToken},
@@ -32,37 +42,46 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 		}
 	}
 
+	// Build labels
+	labels := map[string]string{
+		"app":         "ccx-remote",
+		"ccx-session": podName,
+	}
+	for k, v := range cfg.Labels {
+		labels[k] = v
+	}
+
+	// Build spec
+	podSpecMap := map[string]interface{}{
+		"restartPolicy": "Never",
+		"containers": []map[string]interface{}{
+			{
+				"name":    "main",
+				"image":   cfg.Image,
+				"command": []string{"sleep", "infinity"},
+				"env":     envVars,
+				"resources": map[string]interface{}{
+					"limits": map[string]string{
+						"cpu":    cfg.CPULimit,
+						"memory": cfg.MemoryLimit,
+					},
+				},
+			},
+		},
+	}
+	if len(tolerations) > 0 {
+		podSpecMap["tolerations"] = tolerations
+	}
+
 	spec := map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "Pod",
 		"metadata": map[string]interface{}{
 			"name":      podName,
 			"namespace": cfg.Namespace,
-			"labels": map[string]string{
-				"app":         "ccx-remote",
-				"ccx-session": podName,
-			},
+			"labels":    labels,
 		},
-		"spec": map[string]interface{}{
-			"restartPolicy": "Never",
-			"nodeSelector": map[string]string{
-				"kubernetes.io/arch": cfg.Arch,
-			},
-			"containers": []map[string]interface{}{
-				{
-					"name":    "main",
-					"image":   cfg.Image,
-					"command": []string{"sleep", "infinity"},
-					"env":     envVars,
-					"resources": map[string]interface{}{
-						"limits": map[string]string{
-							"cpu":    cfg.CPULimit,
-							"memory": cfg.MemoryLimit,
-						},
-					},
-				},
-			},
-		},
+		"spec": podSpecMap,
 	}
 
 	return json.MarshalIndent(spec, "", "  ")

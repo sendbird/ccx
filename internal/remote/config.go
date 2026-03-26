@@ -31,6 +31,8 @@ type Config struct {
 	Arch        string            `yaml:"arch"`          // "amd64" or "arm64"
 	EnvVars     map[string]string `yaml:"env_vars"`      // extra env vars to inject into pod
 	MirrorEnv   []string          `yaml:"mirror_env"`    // local env var names to mirror to pod
+	Labels      map[string]string `yaml:"labels"`        // extra pod labels
+	Tolerations []string          `yaml:"tolerations"`   // toleration keys (e.g. "sendbird.com/system")
 	SessionID   string            `yaml:"-"`             // session ID to resume
 	SessionFile string            `yaml:"-"`             // local path to session JSONL
 }
