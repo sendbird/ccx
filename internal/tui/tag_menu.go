@@ -275,6 +275,26 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.tagCursor >= 0 && a.tagCursor < len(a.tagList) {
 			badgeName := a.tagList[a.tagCursor]
 
+			// Make-uniform: check if ALL sessions have this badge
+			allHave := true
+			for _, sessID := range targetSessIDs {
+				sess, ok := a.sessionByID(sessID)
+				if !ok {
+					continue
+				}
+				hasBadge := false
+				for _, b := range sess.sess.CustomBadges {
+					if b == badgeName {
+						hasBadge = true
+						break
+					}
+				}
+				if !hasBadge {
+					allHave = false
+					break
+				}
+			}
+
 			// Apply to all target sessions
 			for _, sessID := range targetSessIDs {
 				sess, ok := a.sessionByID(sessID)
@@ -291,21 +311,26 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-				// Toggle
 				var updated []string
-				if hasBadge {
-					// Remove
+				if allHave {
+					// All have it → remove from all
 					for _, b := range sess.sess.CustomBadges {
 						if b != badgeName {
 							updated = append(updated, b)
 						}
 					}
 				} else {
-					// Add (check limit)
-					if len(sess.sess.CustomBadges) >= maxBadgesPerSession {
-						continue
+					// Any lack it → add to those that lack it
+					if !hasBadge {
+						// Add (check limit)
+						if len(sess.sess.CustomBadges) >= maxBadgesPerSession {
+							continue
+						}
+						updated = append(sess.sess.CustomBadges, badgeName)
+					} else {
+						// Already has it, keep unchanged
+						updated = sess.sess.CustomBadges
 					}
-					updated = append(sess.sess.CustomBadges, badgeName)
 				}
 
 				// Sort and save
