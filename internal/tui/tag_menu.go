@@ -150,10 +150,17 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.tagInput.Focused() {
 		switch key {
 		case "up":
-			// Move focus to list
+			// Move focus to list (bottom item)
 			a.tagInput.Blur()
 			if len(a.tagList) > 0 {
 				a.tagCursor = len(a.tagList) - 1
+			}
+			return a, nil
+		case "down":
+			// Move focus to list (top item)
+			a.tagInput.Blur()
+			if len(a.tagList) > 0 {
+				a.tagCursor = 0
 			}
 			return a, nil
 		case "enter":
