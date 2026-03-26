@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -11,16 +12,43 @@ import (
 
 // podSpec generates a Kubernetes pod JSON spec.
 func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
-	initCmd := fmt.Sprintf(
-		"apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1 && "+
-			"npm install -g @anthropic-ai/claude-code > /dev/null 2>&1 && "+
+	// Build init command: install Claude Code, optionally clone repo
+	initParts := []string{
+		"apt-get update -qq && apt-get install -y -qq git rsync > /dev/null 2>&1",
+		"npm install -g @anthropic-ai/claude-code > /dev/null 2>&1",
+	}
+	if cfg.GitRepo != "" && cfg.LocalDir == "" {
+		// Git clone mode (fallback when no local dir)
+		initParts = append(initParts, fmt.Sprintf(
 			"git clone --branch %s --depth 1 %s %s",
-		cfg.GitBranch, cfg.GitRepo, cfg.WorkDir,
-	)
+			cfg.GitBranch, cfg.GitRepo, cfg.WorkDir))
+	} else {
+		// Workdir sync mode: just ensure the directory exists
+		initParts = append(initParts, "mkdir -p "+cfg.WorkDir)
+	}
+	initCmd := strings.Join(initParts, " && ")
 
 	mainCmd := "claude --output-format stream-json"
 	if cfg.Prompt != "" {
 		mainCmd += fmt.Sprintf(" -p %s", shellQuote(cfg.Prompt))
+	}
+
+	// Build env vars list
+	envVars := []map[string]string{
+		{"name": "CLAUDE_CODE_OAUTH_TOKEN", "value": oauthToken},
+		{"name": "HOME", "value": "/root"},
+	}
+
+	// Add configured env vars
+	for k, v := range cfg.EnvVars {
+		envVars = append(envVars, map[string]string{"name": k, "value": v})
+	}
+
+	// Mirror local env vars
+	for _, name := range cfg.MirrorEnv {
+		if val := os.Getenv(name); val != "" {
+			envVars = append(envVars, map[string]string{"name": name, "value": val})
+		}
 	}
 
 	spec := map[string]interface{}{
@@ -62,10 +90,7 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 					"image":      cfg.Image,
 					"command":    []string{"sh", "-c", mainCmd},
 					"workingDir": cfg.WorkDir,
-					"env": []map[string]string{
-						{"name": "CLAUDE_CODE_OAUTH_TOKEN", "value": oauthToken},
-						{"name": "HOME", "value": "/root"},
-					},
+					"env":        envVars,
 					"volumeMounts": []map[string]string{
 						{"name": "workspace", "mountPath": cfg.WorkDir},
 						{"name": "claude-home", "mountPath": "/root/.claude"},
@@ -102,7 +127,7 @@ func CreatePod(ctx context.Context, cfg Config, podName, oauthToken string) erro
 	cmd.Stdin = strings.NewReader(string(spec))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("kubectl apply: %s: %w", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("apply: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

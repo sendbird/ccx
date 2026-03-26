@@ -128,25 +128,29 @@ func (a *App) stopRemoteSession() (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// executeCmdRemoteStart handles "remote:start <context> <repo> [branch]".
+// executeCmdRemoteStart handles "remote:start <context> [prompt...]".
+// Uses selected session's project as local workdir to sync.
+// Falls back to git repo if no local dir.
 func (a *App) executeCmdRemoteStart(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
-	// remote:start <context> <repo> [branch] [prompt...]
-	if len(parts) < 3 {
-		a.copiedMsg = "Usage: remote:start <context> <repo> [branch]"
+	// remote:start <context> [prompt...]
+	if len(parts) < 2 {
+		a.copiedMsg = "Usage: remote:start <context> [prompt]"
 		return a, nil
 	}
 
 	cfg := remote.Config{
 		Context:   parts[1],
 		Namespace: "default",
-		GitRepo:   parts[2],
 	}
-	if len(parts) >= 4 {
-		cfg.GitBranch = parts[3]
+
+	// Use selected session's project as local workdir
+	if sess, ok := a.selectedSession(); ok && sess.ProjectPath != "" {
+		cfg.LocalDir = sess.ProjectPath
 	}
-	if len(parts) >= 5 {
-		cfg.Prompt = strings.Join(parts[4:], " ")
+
+	if len(parts) >= 3 {
+		cfg.Prompt = strings.Join(parts[2:], " ")
 	}
 
 	return a.startRemoteSession(cfg)

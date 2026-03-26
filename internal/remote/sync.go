@@ -13,47 +13,35 @@ import (
 	"strings"
 )
 
-// CreateConfigTarball creates a tar.gz archive of Claude config files.
+// CreateConfigTarball creates a tar.gz archive of the full Claude config.
+// Includes settings, memory, skills, agents, commands, hooks, and project config.
 func CreateConfigTarball(claudeDir, projectPath string) ([]byte, error) {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 
-	// Files to include from ~/.claude/
-	files := []string{
+	// Core config files
+	coreFiles := []string{
 		"CLAUDE.md",
 		"settings.json",
 		"settings.local.json",
 		".claude.json",
 	}
-	for _, name := range files {
-		path := filepath.Join(claudeDir, name)
-		if err := addFileToTar(tw, path, ".claude/"+name); err != nil {
-			continue // skip missing files
-		}
+	for _, name := range coreFiles {
+		addFileToTar(tw, filepath.Join(claudeDir, name), ".claude/"+name)
+	}
+
+	// Directories to mirror fully: skills, agents, commands, contexts, rules, memory
+	dirs := []string{"skills", "agents", "commands", "contexts", "rules", "memory"}
+	for _, dir := range dirs {
+		addDirToTar(tw, filepath.Join(claudeDir, dir), ".claude/"+dir)
 	}
 
 	// Project-specific config
 	if projectPath != "" {
 		encoded := encodeProjectPath(projectPath)
 		projDir := filepath.Join(claudeDir, "projects", encoded)
-
-		// Project CLAUDE.md
-		addFileToTar(tw, filepath.Join(projDir, "CLAUDE.md"), ".claude/projects/"+encoded+"/CLAUDE.md")
-
-		// Project memory files
-		memDir := filepath.Join(projDir, "memory")
-		entries, err := os.ReadDir(memDir)
-		if err == nil {
-			for _, e := range entries {
-				if e.IsDir() {
-					continue
-				}
-				src := filepath.Join(memDir, e.Name())
-				dst := ".claude/projects/" + encoded + "/memory/" + e.Name()
-				addFileToTar(tw, src, dst)
-			}
-		}
+		addDirToTar(tw, projDir, ".claude/projects/"+encoded)
 	}
 
 	tw.Close()
@@ -61,17 +49,45 @@ func CreateConfigTarball(claudeDir, projectPath string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// UploadConfig uploads the config tarball to the pod.
-func UploadConfig(ctx context.Context, cfg Config, podName string, tarball []byte) error {
+// CreateWorkdirTarball creates a tar.gz of the local working directory.
+// Respects .gitignore by using git ls-files if available, otherwise walks the dir.
+func CreateWorkdirTarball(localDir string) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Try git ls-files for .gitignore-aware listing
+	files, err := gitListFiles(localDir)
+	if err != nil {
+		// Fallback: walk directory (skip .git, node_modules, etc.)
+		files, err = walkDir(localDir)
+		if err != nil {
+			gw.Close()
+			return nil, err
+		}
+	}
+
+	for _, relPath := range files {
+		absPath := filepath.Join(localDir, relPath)
+		addFileToTar(tw, absPath, relPath)
+	}
+
+	tw.Close()
+	gw.Close()
+	return buf.Bytes(), nil
+}
+
+// UploadTarball extracts a tarball into a directory on the pod.
+func UploadTarball(ctx context.Context, cfg Config, podName, container, destDir string, tarball []byte) error {
 	cmd := exec.CommandContext(ctx, "kubectl",
 		"--context", cfg.Context,
 		"-n", cfg.Namespace,
-		"exec", "-i", podName, "-c", "main",
-		"--", "tar", "xzf", "-", "-C", "/root")
+		"exec", "-i", podName, "-c", container,
+		"--", "tar", "xzf", "-", "-C", destDir)
 	cmd.Stdin = bytes.NewReader(tarball)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("upload config: %s: %w", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("upload: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
@@ -87,6 +103,9 @@ func addFileToTar(tw *tar.Writer, srcPath, tarName string) error {
 	if err != nil {
 		return err
 	}
+	if info.IsDir() {
+		return nil
+	}
 
 	header, err := tar.FileInfoHeader(info, "")
 	if err != nil {
@@ -101,7 +120,60 @@ func addFileToTar(tw *tar.Writer, srcPath, tarName string) error {
 	return err
 }
 
-// encodeProjectPath matches session.EncodeProjectPath convention.
+func addDirToTar(tw *tar.Writer, srcDir, tarPrefix string) {
+	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(srcDir, path)
+		return addFileToTar(tw, path, tarPrefix+"/"+rel)
+	})
+}
+
+func gitListFiles(dir string) ([]string, error) {
+	cmd := exec.Command("git", "-C", dir, "ls-files", "-co", "--exclude-standard")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+var skipDirs = map[string]bool{
+	".git": true, "node_modules": true, "vendor": true,
+	".worktree": true, "tmp": true, "__pycache__": true,
+	".next": true, "dist": true, "build": true,
+}
+
+func walkDir(dir string) ([]string, error) {
+	var files []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if skipDirs[info.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		// Skip large files (>10MB)
+		if info.Size() > 10*1024*1024 {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		files = append(files, rel)
+		return nil
+	})
+	return files, err
+}
+
 func encodeProjectPath(path string) string {
 	s := strings.ReplaceAll(path, "/", "-")
 	s = strings.ReplaceAll(s, ".", "-")

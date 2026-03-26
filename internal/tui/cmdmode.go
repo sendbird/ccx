@@ -270,7 +270,7 @@ func buildCmdRegistry() []cmdEntry {
 		// Remote execution
 		{name: "remote:start", aliases: []string{"r:start"}, desc: "start remote session",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: remote:start <context> <repo> [branch] [prompt]"
+				a.copiedMsg = "Usage: remote:start <context> [prompt]"
 				return a, nil
 			}},
 		{name: "remote:stop", aliases: []string{"r:stop"}, desc: "stop remote session",

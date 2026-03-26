@@ -46,10 +46,18 @@ func Start(cfg Config, claudeDir, projectPath string) (*Session, error) {
 		return nil, fmt.Errorf("pod not ready: %w", err)
 	}
 
-	// Sync config
-	tarball, err := CreateConfigTarball(claudeDir, projectPath)
-	if err == nil && len(tarball) > 0 {
-		UploadConfig(ctx, cfg, podName, tarball) // best-effort
+	// Sync Claude config (settings, memory, skills, agents, hooks, etc.)
+	configTar, err := CreateConfigTarball(claudeDir, projectPath)
+	if err == nil && len(configTar) > 0 {
+		UploadTarball(ctx, cfg, podName, "main", "/root", configTar) // best-effort
+	}
+
+	// Sync local workdir if specified (replaces git clone)
+	if cfg.LocalDir != "" {
+		workdirTar, err := CreateWorkdirTarball(cfg.LocalDir)
+		if err == nil && len(workdirTar) > 0 {
+			UploadTarball(ctx, cfg, podName, "main", cfg.WorkDir, workdirTar)
+		}
 	}
 
 	// Start streaming
