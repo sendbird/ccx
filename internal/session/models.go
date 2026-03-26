@@ -53,6 +53,11 @@ type Session struct {
 	CustomBadges []string // user-created badge tags
 
 	TmuxWindowName string // tmux window name (set if pane CWD matches ProjectPath)
+
+	// Remote execution
+	IsRemote      bool   // virtual remote session
+	RemotePodName string // K8s pod name
+	RemoteStatus  string // setup progress / running / stopped
 }
 
 type Entry struct {

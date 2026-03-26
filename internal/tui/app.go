@@ -261,8 +261,9 @@ type App struct {
 	memRemoveSrc    string // project path to remove from
 
 	// Remote execution
-	remoteSession *remote.Session
-	remoteContent string // status/progress text
+	remoteSession    *remote.Session
+	remoteContent    string                      // status/progress text
+	remoteSetupSteps <-chan remote.SetupStep      // setup progress channel (nil after setup)
 
 	// Worktree alignment
 	worktreeAlignActive bool
