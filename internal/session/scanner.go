@@ -28,6 +28,9 @@ func ScanSessions(claudeDir string) ([]Session, error) {
 	// Derive home dir for path decoding (claudeDir is typically ~/.claude)
 	home := filepath.Dir(claudeDir)
 
+	// Load badge store
+	badgeStore := LoadBadges(claudeDir)
+
 	projectsDir := filepath.Join(claudeDir, "projects")
 	if _, statErr := os.Stat(projectsDir); os.IsNotExist(statErr) {
 		return nil, nil
@@ -70,6 +73,8 @@ func ScanSessions(claudeDir string) ([]Session, error) {
 		validPaths[f.path] = true
 		if cached, ok := cache.lookup(f.path, f.modTime); ok {
 			if cached.MsgCount > 0 {
+				// Load custom badges for cached sessions
+				cached.CustomBadges = badgeStore.Get(cached.ID)
 				sessions = append(sessions, cached)
 			}
 			continue
@@ -89,7 +94,7 @@ func ScanSessions(claudeDir string) ([]Session, error) {
 			go func() {
 				defer wg.Done()
 				for fe := range fileCh {
-					sess := scanSessionStream(fe.path, fe.modTime, home)
+					sess := scanSessionStream(fe.path, fe.modTime, home, badgeStore)
 					cache.store(fe.path, fe.modTime, sess)
 					if sess.MsgCount > 0 {
 						resultCh <- sess
@@ -141,6 +146,10 @@ func ScanSessionsForPaths(claudeDir string, projectPaths []string) ([]Session, e
 	}
 
 	home := filepath.Dir(claudeDir)
+
+	// Load badge store
+	badgeStore := LoadBadges(claudeDir)
+
 	projectsDir := filepath.Join(claudeDir, "projects")
 
 	var sessions []Session
@@ -168,7 +177,7 @@ func ScanSessionsForPaths(claudeDir string, projectPaths []string) ([]Session, e
 			}
 		}
 		if bestPath != "" {
-			sess := scanSessionStream(bestPath, bestTime, home)
+			sess := scanSessionStream(bestPath, bestTime, home, badgeStore)
 			if sess.MsgCount > 0 {
 				sessions = append(sessions, sess)
 			}
