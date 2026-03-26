@@ -4810,7 +4810,7 @@ func (a *App) breadcrumbRightStatus() string {
 	// Session group mode badge (styled)
 	if a.state == viewSessions {
 		modeLabels := []string{"FLAT", "PROJ", "TREE", "CHAIN", "FORK", "REPO"}
-		modeColors := []lipgloss.Color{"#9CA3AF", "#3B82F6", "#10B981", "#F59E0B", "#EC4899"}
+		modeColors := []lipgloss.Color{"#9CA3AF", "#3B82F6", "#10B981", "#F59E0B", "#EC4899", "#7C3AED"}
 		ml := modeLabels[a.sessGroupMode]
 		mc := modeColors[a.sessGroupMode]
 		modeStyle := lipgloss.NewStyle().Foreground(mc).Bold(true)
