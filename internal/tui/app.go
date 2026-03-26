@@ -3790,6 +3790,7 @@ func (a *App) renderSearchHintBox() string {
 		lines = []string{
 			h.Render("is:") + d.Render("live wt team"),
 			h.Render("has:") + d.Render("mem todo task plan agent compact skill mcp"),
+			h.Render("tag:") + d.Render("badge-name"),
 			d.Render("text: project branch prompt"),
 		}
 	case viewConversation:
