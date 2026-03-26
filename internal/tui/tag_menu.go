@@ -108,7 +108,7 @@ func (a *App) renderTagMenu() string {
 	lines = append(lines, dimStyle.Render("  Create new:"))
 	lines = append(lines, "  "+a.tagInput.View())
 	lines = append(lines, "")
-	lines = append(lines, helpStyle.Render("  enter:toggle  esc:close  ↑↓:navigate"))
+	lines = append(lines, helpStyle.Render("  enter:toggle  i:input  esc:close  ↑↓:navigate"))
 
 	content := strings.Join(lines, "\n")
 
@@ -194,6 +194,10 @@ func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case "enter":
 			// Handle enter below (toggling badge)
+		case "i", "/":
+			// Focus input for typing
+			a.tagInput.Focus()
+			return a, a.tagInput.Cursor.BlinkCmd()
 		default:
 			// Other keys do nothing when list is focused
 			return a, nil
