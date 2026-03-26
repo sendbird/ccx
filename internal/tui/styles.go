@@ -39,7 +39,7 @@ var (
 	liveBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
 	busyBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
 	forkBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
-	customBadgeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#84CC16")).Bold(true)
+	customBadgeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#84CC16")).Bold(true).Italic(true)
 	blockCursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 	blockSelectedBg     = lipgloss.NewStyle().Background(lipgloss.Color("#1E293B"))
 	previewBorder       = lipgloss.NewStyle().
