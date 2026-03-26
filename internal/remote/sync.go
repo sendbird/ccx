@@ -14,8 +14,10 @@ import (
 )
 
 // CreateConfigTarball creates a tar.gz archive of the full Claude config.
-// Includes settings, memory, skills, agents, commands, hooks, and project config.
-func CreateConfigTarball(claudeDir, projectPath string) ([]byte, error) {
+// Includes settings, memory, skills, agents, commands, hooks, project config,
+// and optionally the session JSONL file for --resume.
+func CreateConfigTarball(claudeDir, projectPath, sessionFile string) ([]byte, error) {
+	home, _ := os.UserHomeDir()
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
@@ -37,11 +39,21 @@ func CreateConfigTarball(claudeDir, projectPath string) ([]byte, error) {
 		addDirToTar(tw, filepath.Join(claudeDir, dir), ".claude/"+dir)
 	}
 
-	// Project-specific config
+	// Project-specific config (CLAUDE.md, memory, etc.)
 	if projectPath != "" {
 		encoded := encodeProjectPath(projectPath)
 		projDir := filepath.Join(claudeDir, "projects", encoded)
 		addDirToTar(tw, projDir, ".claude/projects/"+encoded)
+	}
+
+	// Session JSONL file (for --resume)
+	if sessionFile != "" {
+		// Session files live under ~/.claude/projects/<encoded>/sessions/
+		// We need to preserve the relative path from claudeDir
+		rel, err := filepath.Rel(home, sessionFile)
+		if err == nil {
+			addFileToTar(tw, sessionFile, rel)
+		}
 	}
 
 	tw.Close()

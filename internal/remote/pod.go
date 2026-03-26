@@ -11,40 +11,21 @@ import (
 )
 
 // podSpec generates a Kubernetes pod JSON spec.
+// Uses a single container that stays alive for exec attachment.
 func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
-	// Build init command: install Claude Code, optionally clone repo
-	initParts := []string{
-		"apt-get update -qq && apt-get install -y -qq git rsync > /dev/null 2>&1",
-		"npm install -g @anthropic-ai/claude-code > /dev/null 2>&1",
-	}
-	if cfg.GitRepo != "" && cfg.LocalDir == "" {
-		// Git clone mode (fallback when no local dir)
-		initParts = append(initParts, fmt.Sprintf(
-			"git clone --branch %s --depth 1 %s %s",
-			cfg.GitBranch, cfg.GitRepo, cfg.WorkDir))
-	} else {
-		// Workdir sync mode: just ensure the directory exists
-		initParts = append(initParts, "mkdir -p "+cfg.WorkDir)
-	}
-	initCmd := strings.Join(initParts, " && ")
-
-	mainCmd := "claude --output-format stream-json"
-	if cfg.Prompt != "" {
-		mainCmd += fmt.Sprintf(" -p %s", shellQuote(cfg.Prompt))
-	}
+	// The main container just sleeps — we exec into it for setup and Claude
+	// This ensures we can stream progress and attach interactively.
 
 	// Build env vars list
 	envVars := []map[string]string{
 		{"name": "CLAUDE_CODE_OAUTH_TOKEN", "value": oauthToken},
 		{"name": "HOME", "value": "/root"},
+		{"name": "PATH", "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.npm-global/bin"},
+		{"name": "NPM_CONFIG_PREFIX", "value": "/root/.npm-global"},
 	}
-
-	// Add configured env vars
 	for k, v := range cfg.EnvVars {
 		envVars = append(envVars, map[string]string{"name": k, "value": v})
 	}
-
-	// Mirror local env vars
 	for _, name := range cfg.MirrorEnv {
 		if val := os.Getenv(name); val != "" {
 			envVars = append(envVars, map[string]string{"name": name, "value": val})
@@ -67,34 +48,12 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 			"nodeSelector": map[string]string{
 				"kubernetes.io/arch": cfg.Arch,
 			},
-			"initContainers": []map[string]interface{}{
-				{
-					"name":    "setup",
-					"image":   cfg.Image,
-					"command": []string{"sh", "-c", initCmd},
-					"volumeMounts": []map[string]string{
-						{"name": "workspace", "mountPath": cfg.WorkDir},
-						{"name": "claude-home", "mountPath": "/root/.claude"},
-					},
-					"resources": map[string]interface{}{
-						"limits": map[string]string{
-							"cpu":    cfg.CPULimit,
-							"memory": cfg.MemoryLimit,
-						},
-					},
-				},
-			},
 			"containers": []map[string]interface{}{
 				{
-					"name":       "main",
-					"image":      cfg.Image,
-					"command":    []string{"sh", "-c", mainCmd},
-					"workingDir": cfg.WorkDir,
-					"env":        envVars,
-					"volumeMounts": []map[string]string{
-						{"name": "workspace", "mountPath": cfg.WorkDir},
-						{"name": "claude-home", "mountPath": "/root/.claude"},
-					},
+					"name":    "main",
+					"image":   cfg.Image,
+					"command": []string{"sleep", "infinity"},
+					"env":     envVars,
 					"resources": map[string]interface{}{
 						"limits": map[string]string{
 							"cpu":    cfg.CPULimit,
@@ -102,10 +61,6 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 						},
 					},
 				},
-			},
-			"volumes": []map[string]interface{}{
-				{"name": "workspace", "emptyDir": map[string]interface{}{}},
-				{"name": "claude-home", "emptyDir": map[string]interface{}{}},
 			},
 		},
 	}
@@ -113,7 +68,7 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 	return json.MarshalIndent(spec, "", "  ")
 }
 
-// CreatePod creates the pod via kubectl.
+// CreatePod creates the pod.
 func CreatePod(ctx context.Context, cfg Config, podName, oauthToken string) error {
 	spec, err := podSpec(cfg, podName, oauthToken)
 	if err != nil {
@@ -132,7 +87,7 @@ func CreatePod(ctx context.Context, cfg Config, podName, oauthToken string) erro
 	return nil
 }
 
-// WaitForPod waits until the pod is ready or fails.
+// WaitForPod waits until the pod is ready.
 func WaitForPod(ctx context.Context, cfg Config, podName string, timeout time.Duration) error {
 	cmd := exec.CommandContext(ctx, "kubectl",
 		"--context", cfg.Context,
@@ -145,6 +100,30 @@ func WaitForPod(ctx context.Context, cfg Config, podName string, timeout time.Du
 		return fmt.Errorf("wait: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// ExecInPod runs a command in the pod and returns combined output.
+func ExecInPod(ctx context.Context, cfg Config, podName string, cmd ...string) ([]byte, error) {
+	args := []string{
+		"--context", cfg.Context,
+		"-n", cfg.Namespace,
+		"exec", podName, "--",
+	}
+	args = append(args, cmd...)
+	c := exec.CommandContext(ctx, "kubectl", args...)
+	return c.CombinedOutput()
+}
+
+// ExecInteractive opens an interactive exec session to the pod.
+// This takes over the terminal (like tea.ExecProcess).
+func ExecInteractive(cfg Config, podName string, cmd ...string) *exec.Cmd {
+	args := []string{
+		"--context", cfg.Context,
+		"-n", cfg.Namespace,
+		"exec", "-it", podName, "--",
+	}
+	args = append(args, cmd...)
+	return exec.Command("kubectl", args...)
 }
 
 // DeletePod removes the pod.
@@ -160,20 +139,6 @@ func DeletePod(ctx context.Context, cfg Config, podName string) error {
 		return fmt.Errorf("delete: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
-}
-
-// PodPhase returns the current phase of a pod.
-func PodPhase(ctx context.Context, cfg Config, podName string) (string, error) {
-	cmd := exec.CommandContext(ctx, "kubectl",
-		"--context", cfg.Context,
-		"-n", cfg.Namespace,
-		"get", "pod", podName,
-		"-o", "jsonpath={.status.phase}")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 func shellQuote(s string) string {

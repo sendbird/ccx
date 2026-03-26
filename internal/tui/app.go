@@ -262,8 +262,7 @@ type App struct {
 
 	// Remote execution
 	remoteSession *remote.Session
-	remoteContent string // rendered stream content
-	remoteLines   int    // line count for status
+	remoteContent string // status/progress text
 
 	// Worktree alignment
 	worktreeAlignActive bool
@@ -570,11 +569,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
-	case remoteStartedMsg:
-		return a.handleRemoteStarted(msg)
+	case remoteSetupMsg:
+		return a.handleRemoteSetup(msg)
 
-	case remoteStreamMsg:
-		return a.handleRemoteStream(msg)
+	case remoteExecDoneMsg:
+		return a.handleRemoteExecDone(msg)
 
 	case delayedRefreshMsg:
 		// Auto-refresh after spawning a new session; retry if session not found yet

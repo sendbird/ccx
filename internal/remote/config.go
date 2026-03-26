@@ -3,14 +3,25 @@ package remote
 import (
 	"crypto/rand"
 	"fmt"
+	"os/exec"
+	"strings"
 )
+
+// CurrentContext returns the current kubectl context.
+func CurrentContext() (string, error) {
+	out, err := exec.Command("kubectl", "config", "current-context").Output()
+	if err != nil {
+		return "", fmt.Errorf("no current context: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
 
 // Config holds settings for a remote Claude execution.
 type Config struct {
 	Context     string            `yaml:"context"`       // kubectl --context (required)
 	Namespace   string            `yaml:"namespace"`     // target namespace
 	Image       string            `yaml:"image"`         // container image
-	LocalDir    string            `yaml:"local_dir"`     // local workdir to sync (replaces git clone)
+	LocalDir    string            `yaml:"local_dir"`     // local workdir to sync
 	GitRepo     string            `yaml:"git_repo"`      // repo URL to clone (fallback if no local_dir)
 	GitBranch   string            `yaml:"git_branch"`    // branch to checkout
 	WorkDir     string            `yaml:"work_dir"`      // remote working directory
@@ -20,10 +31,15 @@ type Config struct {
 	Arch        string            `yaml:"arch"`          // "amd64" or "arm64"
 	EnvVars     map[string]string `yaml:"env_vars"`      // extra env vars to inject into pod
 	MirrorEnv   []string          `yaml:"mirror_env"`    // local env var names to mirror to pod
+	SessionID   string            `yaml:"-"`             // session ID to resume
+	SessionFile string            `yaml:"-"`             // local path to session JSONL
 }
 
 // Defaults returns a Config with sensible defaults filled in.
 func (c Config) Defaults() Config {
+	if c.Context == "" {
+		c.Context, _ = CurrentContext()
+	}
 	if c.Namespace == "" {
 		c.Namespace = "default"
 	}
@@ -52,9 +68,6 @@ func (c Config) Defaults() Config {
 func (c Config) Validate() error {
 	if c.Context == "" {
 		return fmt.Errorf("context is required")
-	}
-	if c.LocalDir == "" && c.GitRepo == "" {
-		return fmt.Errorf("local_dir or git_repo is required")
 	}
 	return nil
 }

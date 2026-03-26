@@ -8,27 +8,28 @@ import (
 	"github.com/sendbird/ccx/internal/remote"
 )
 
-// remoteStartedMsg is sent when a remote session has been created.
-type remoteStartedMsg struct {
-	session *remote.Session
+// remoteSetupMsg carries progress updates during remote pod setup.
+type remoteSetupMsg struct {
+	progress string // status message
+	done     bool   // setup complete
+	session  *remote.Session
+	err      error
+}
+
+// remoteExecDoneMsg is sent when the interactive Claude session ends.
+type remoteExecDoneMsg struct {
+	podName string
 	err     error
 }
 
-// remoteStreamMsg carries a line from the remote session stream.
-type remoteStreamMsg struct {
-	line []byte
-	err  error
-	done bool
-}
-
-// startRemoteSession begins the async remote session creation.
+// startRemoteSession begins async pod setup with progress reporting.
 func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 	if a.remoteSession != nil {
-		a.copiedMsg = "Remote session already active"
+		a.copiedMsg = "Remote session already active — :remote:stop first"
 		return a, nil
 	}
 
-	a.copiedMsg = "Starting remote session..."
+	a.remoteContent = dimStyle.Render("Starting remote session...")
 	claudeDir := a.config.ClaudeDir
 	var projectPath string
 	if sess, ok := a.selectedSession(); ok {
@@ -36,83 +37,52 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 	}
 
 	return a, func() tea.Msg {
-		sess, err := remote.Start(cfg, claudeDir, projectPath)
-		return remoteStartedMsg{session: sess, err: err}
+		var lastProgress string
+		progress := func(msg string) {
+			lastProgress = msg
+		}
+
+		sess, err := remote.Start(cfg, claudeDir, projectPath, progress)
+		if err != nil {
+			return remoteSetupMsg{err: err, progress: lastProgress}
+		}
+		return remoteSetupMsg{done: true, session: sess, progress: lastProgress}
 	}
 }
 
-// handleRemoteStarted processes the result of starting a remote session.
-func (a *App) handleRemoteStarted(msg remoteStartedMsg) (tea.Model, tea.Cmd) {
+// handleRemoteSetup processes setup progress and completion.
+func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		a.copiedMsg = "Remote failed: " + msg.err.Error()
+		a.remoteContent = ""
 		return a, nil
 	}
 
-	a.remoteSession = msg.session
-	a.remoteContent = dimStyle.Render(fmt.Sprintf("Connected to pod %s", msg.session.PodName))
-	a.remoteLines = 0
-	a.copiedMsg = fmt.Sprintf("Remote → %s", msg.session.PodName)
+	if msg.done {
+		a.remoteSession = msg.session
+		a.copiedMsg = fmt.Sprintf("Remote ready — %s", msg.session.PodName)
 
-	// Start reading the stream
-	return a, a.readRemoteStream()
+		// Exec interactive Claude — takes over the terminal
+		cmd := msg.session.ClaudeCmd()
+		podName := msg.session.PodName
+		return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
+			return remoteExecDoneMsg{podName: podName, err: err}
+		})
+	}
+
+	// Progress update
+	a.remoteContent = dimStyle.Render(msg.progress)
+	return a, nil
 }
 
-// readRemoteStream returns a command that reads the next line from the stream.
-func (a *App) readRemoteStream() tea.Cmd {
-	if a.remoteSession == nil {
-		return nil
-	}
-	stream := a.remoteSession.Stream
-	return func() tea.Msg {
-		line, ok := <-stream
-		if !ok {
-			return remoteStreamMsg{done: true}
-		}
-		return remoteStreamMsg{
-			line: line.Line,
-			err:  line.Err,
-			done: line.Done,
-		}
-	}
+// handleRemoteExecDone is called when the interactive Claude exits.
+func (a *App) handleRemoteExecDone(msg remoteExecDoneMsg) (tea.Model, tea.Cmd) {
+	a.copiedMsg = fmt.Sprintf("Remote session ended — pod %s still running", msg.podName)
+	// Don't auto-delete — user may want to reconnect or inspect
+	return a, nil
 }
 
-// handleRemoteStream processes a line from the remote session stream.
-func (a *App) handleRemoteStream(msg remoteStreamMsg) (tea.Model, tea.Cmd) {
-	if msg.done || msg.err != nil {
-		label := "Remote session ended"
-		if msg.err != nil {
-			label = "Remote error: " + msg.err.Error()
-		}
-		a.copiedMsg = label
-		if a.remoteSession != nil {
-			a.remoteSession.Stop()
-			a.remoteSession = nil
-		}
-		return a, nil
-	}
-
-	// Append line to rendered content
-	a.remoteLines++
-	line := strings.TrimSpace(string(msg.line))
-	if line != "" {
-		if a.remoteContent == "" {
-			a.remoteContent = line
-		} else {
-			a.remoteContent += "\n" + line
-		}
-	}
-
-	// Update preview if showing remote
-	if a.sessSplit.Show {
-		a.sessSplit.Preview.SetContent(a.remoteContent)
-		a.sessSplit.Preview.GotoBottom()
-	}
-
-	// Continue reading
-	return a, a.readRemoteStream()
-}
-
-// stopRemoteSession stops the active remote session and cleans up the pod.
+// stopRemoteSession stops the active remote session and deletes the pod.
 func (a *App) stopRemoteSession() (tea.Model, tea.Cmd) {
 	if a.remoteSession == nil {
 		a.copiedMsg = "No active remote session"
@@ -123,34 +93,42 @@ func (a *App) stopRemoteSession() (tea.Model, tea.Cmd) {
 	a.remoteSession.Stop()
 	a.remoteSession = nil
 	a.remoteContent = ""
-	a.remoteLines = 0
-	a.copiedMsg = fmt.Sprintf("Stopped remote → %s", podName)
+	a.copiedMsg = fmt.Sprintf("Stopped and deleted pod %s", podName)
 	return a, nil
 }
 
-// executeCmdRemoteStart handles "remote:start <context> [prompt...]".
-// Uses selected session's project as local workdir to sync.
-// Falls back to git repo if no local dir.
-func (a *App) executeCmdRemoteStart(input string) (tea.Model, tea.Cmd) {
-	parts := strings.Fields(input)
-	// remote:start <context> [prompt...]
-	if len(parts) < 2 {
-		a.copiedMsg = "Usage: remote:start <context> [prompt]"
+// reconnectRemoteSession reattaches to the pod's Claude.
+func (a *App) reconnectRemoteSession() (tea.Model, tea.Cmd) {
+	if a.remoteSession == nil {
+		a.copiedMsg = "No active remote session"
 		return a, nil
 	}
 
-	cfg := remote.Config{
-		Context:   parts[1],
-		Namespace: "default",
+	cmd := a.remoteSession.ClaudeCmd()
+	podName := a.remoteSession.PodName
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return remoteExecDoneMsg{podName: podName, err: err}
+	})
+}
+
+// executeCmdRemoteStart handles "remote:start [prompt...]".
+func (a *App) executeCmdRemoteStart(input string) (tea.Model, tea.Cmd) {
+	parts := strings.Fields(input)
+
+	var cfg remote.Config
+
+	// Use selected session for workdir and resume
+	if sess, ok := a.selectedSession(); ok {
+		if sess.ProjectPath != "" {
+			cfg.LocalDir = sess.ProjectPath
+		}
+		cfg.SessionID = sess.ID
+		cfg.SessionFile = sess.FilePath
 	}
 
-	// Use selected session's project as local workdir
-	if sess, ok := a.selectedSession(); ok && sess.ProjectPath != "" {
-		cfg.LocalDir = sess.ProjectPath
-	}
-
-	if len(parts) >= 3 {
-		cfg.Prompt = strings.Join(parts[2:], " ")
+	// Everything after command name is the prompt
+	if len(parts) >= 2 {
+		cfg.Prompt = strings.Join(parts[1:], " ")
 	}
 
 	return a.startRemoteSession(cfg)

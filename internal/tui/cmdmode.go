@@ -268,13 +268,12 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.startWorktreeAlign() }},
 
 		// Remote execution
-		{name: "remote:start", aliases: []string{"r:start"}, desc: "start remote session",
-			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: remote:start <context> [prompt]"
-				return a, nil
-			}},
-		{name: "remote:stop", aliases: []string{"r:stop"}, desc: "stop remote session",
+		{name: "remote:start", aliases: []string{"r:start"}, desc: "resume session remotely",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteStart("remote:start") }},
+		{name: "remote:stop", aliases: []string{"r:stop"}, desc: "stop remote + delete pod",
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.stopRemoteSession() }},
+		{name: "remote:attach", aliases: []string{"r:attach"}, desc: "reattach to remote Claude",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.reconnectRemoteSession() }},
 	}
 }
 
