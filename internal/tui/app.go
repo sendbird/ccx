@@ -122,7 +122,7 @@ type App struct {
 	sessions       []session.Session
 	currentSess    session.Session
 	selectedSet    map[string]bool // multi-select: session ID → selected
-	liveInputPanes []tmux.Pane      // bulk input: multiple target panes
+	liveInputPanes []tmux.Pane     // bulk input: multiple target panes
 
 	// List models
 	sessionList list.Model
@@ -198,23 +198,23 @@ type App struct {
 	editChoices []editChoice // available files to edit
 
 	// Tag menu (t key in actions)
-	tagMenu      bool
-	tagSessID    string
-	tagCursor    int
-	tagInput     textinput.Model
-	tagList      []string
-	badgeStore   *session.BadgeStore
+	tagMenu    bool
+	tagSessID  string
+	tagCursor  int
+	tagInput   textinput.Model
+	tagList    []string
+	badgeStore *session.BadgeStore
 
 	// URL menu (u key in actions)
 	urlMenu        bool
-	urlAllItems    []extract.Item       // unfiltered full list
-	urlItems       []extract.Item       // filtered (displayed) list
+	urlAllItems    []extract.Item // unfiltered full list
+	urlItems       []extract.Item // filtered (displayed) list
 	urlCursor      int
 	urlSelected    map[string]bool // selected URLs for multi-open/copy
 	urlSearching   bool            // typing in search input
 	urlSearchInput textinput.Model
 	urlSearchTerm  string
-	urlScope       string          // context label: "session", "message", "block"
+	urlScope       string // context label: "session", "message", "block"
 
 	// Conversation/message-full actions menu (x key)
 	convActionsMenu bool
@@ -329,17 +329,17 @@ type App struct {
 	plgSearchTerm  string
 
 	// Plugin selection & actions
-	plgSelectedSet       map[string]bool // plugin ID → selected
-	plgActionsMenu       bool            // actions menu open
-	plgUninstallConfirm  bool            // waiting for second x press
+	plgSelectedSet      map[string]bool // plugin ID → selected
+	plgActionsMenu      bool            // actions menu open
+	plgUninstallConfirm bool            // waiting for second x press
 
 	// Plugin detail drill-down
-	plgDetailActive      bool              // true = showing component list for a plugin
-	plgDetailPlugin      session.Plugin    // the plugin being inspected
-	plgDetailList        list.Model        // component list
-	plgDetailSplit       SplitPane         // component list + file preview
-	plgCompSelectedSet   map[string]bool   // selected component paths
-	plgCompActionsMenu   bool              // actions menu active
+	plgDetailActive    bool            // true = showing component list for a plugin
+	plgDetailPlugin    session.Plugin  // the plugin being inspected
+	plgDetailList      list.Model      // component list
+	plgDetailSplit     SplitPane       // component list + file preview
+	plgCompSelectedSet map[string]bool // selected component paths
+	plgCompActionsMenu bool            // actions menu active
 
 	// Hooks view (legacy, kept for viewport reuse)
 	hooksVP viewport.Model
@@ -546,7 +546,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		os.RemoveAll(msg.tmpDir)
 		a.clearPlgSelection()
 		return a, nil
-
 
 	case pluginCmdDoneMsg:
 		if msg.err != nil {
@@ -1035,8 +1034,7 @@ func (a *App) View() string {
 	// Tag menu floating modal
 	if a.tagMenu {
 		modal := a.renderTagMenu()
-		content = lipgloss.Place(a.width, ContentHeight(a.height), lipgloss.Left, lipgloss.Top, content)
-		content = lipgloss.Place(a.width, ContentHeight(a.height), lipgloss.Center, lipgloss.Center, modal, lipgloss.WithString(content))
+		content = placeHintBox(content, modal)
 	}
 
 	// Config actions menu hint box
@@ -1206,8 +1204,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Tag menu: manage custom badges
 	if a.tagMenu {
-		a.handleTagMenuKey(key)
-		return a, nil
+		return a.handleTagMenuKey(msg)
 	}
 
 	// Clear actions menu on any unrelated key

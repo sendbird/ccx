@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -32,7 +32,7 @@ func (a *App) renderTagMenu() string {
 	var currentBadges map[string]bool
 	if sess, ok := a.sessionByID(a.tagSessID); ok {
 		currentBadges = make(map[string]bool)
-		for _, b := range sess.CustomBadges {
+		for _, b := range sess.sess.CustomBadges {
 			currentBadges[b] = true
 		}
 	}
@@ -112,25 +112,27 @@ func (a *App) renderTagMenu() string {
 	)
 }
 
-func (a *App) handleTagMenuKey(key string) {
+func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
 	if key == "esc" {
 		a.tagMenu = false
 		a.tagInput.SetValue("")
-		return
+		return a, nil
 	}
 
 	if key == "up" || key == "k" {
 		if a.tagCursor > 0 {
 			a.tagCursor--
 		}
-		return
+		return a, nil
 	}
 
 	if key == "down" || key == "j" {
 		if a.tagCursor < len(a.tagList)-1 {
 			a.tagCursor++
 		}
-		return
+		return a, nil
 	}
 
 	if key == "enter" {
@@ -140,41 +142,41 @@ func (a *App) handleTagMenuKey(key string) {
 		if inputVal != "" {
 			if !a.validateBadgeName(inputVal) {
 				// Invalid name, ignore
-				return
+				return a, nil
 			}
 
 			// Get current session
 			sess, ok := a.sessionByID(a.tagSessID)
 			if !ok {
-				return
+				return a, nil
 			}
 
 			// Check if badge already exists on session
 			hasBadge := false
-			for _, b := range sess.CustomBadges {
+			for _, b := range sess.sess.CustomBadges {
 				if b == inputVal {
 					hasBadge = true
 					break
 				}
 			}
 
-			if !hasBadge && len(sess.CustomBadges) >= maxBadgesPerSession {
+			if !hasBadge && len(sess.sess.CustomBadges) >= maxBadgesPerSession {
 				// Max badges reached, ignore
-				return
+				return a, nil
 			}
 
 			// Toggle badge
 			var updated []string
 			if hasBadge {
 				// Remove
-				for _, b := range sess.CustomBadges {
+				for _, b := range sess.sess.CustomBadges {
 					if b != inputVal {
 						updated = append(updated, b)
 					}
 				}
 			} else {
 				// Add
-				updated = append(sess.CustomBadges, inputVal)
+				updated = append(sess.sess.CustomBadges, inputVal)
 			}
 
 			// Sort badges
@@ -192,7 +194,7 @@ func (a *App) handleTagMenuKey(key string) {
 			a.tagInput.SetValue("")
 			a.tagCursor = 0
 
-			return
+			return a, nil
 		}
 
 		// Otherwise, toggle selected badge
@@ -202,12 +204,12 @@ func (a *App) handleTagMenuKey(key string) {
 			// Get current session
 			sess, ok := a.sessionByID(a.tagSessID)
 			if !ok {
-				return
+				return a, nil
 			}
 
 			// Check if session has this badge
 			hasBadge := false
-			for _, b := range sess.CustomBadges {
+			for _, b := range sess.sess.CustomBadges {
 				if b == badgeName {
 					hasBadge = true
 					break
@@ -218,17 +220,17 @@ func (a *App) handleTagMenuKey(key string) {
 			var updated []string
 			if hasBadge {
 				// Remove
-				for _, b := range sess.CustomBadges {
+				for _, b := range sess.sess.CustomBadges {
 					if b != badgeName {
 						updated = append(updated, b)
 					}
 				}
 			} else {
 				// Add (check limit)
-				if len(sess.CustomBadges) >= maxBadgesPerSession {
-					return
+				if len(sess.sess.CustomBadges) >= maxBadgesPerSession {
+					return a, nil
 				}
-				updated = append(sess.CustomBadges, badgeName)
+				updated = append(sess.sess.CustomBadges, badgeName)
 			}
 
 			// Sort badges
@@ -242,11 +244,13 @@ func (a *App) handleTagMenuKey(key string) {
 			a.updateSessionBadges(a.tagSessID, updated)
 		}
 
-		return
+		return a, nil
 	}
 
-	// Forward other keys to text input
-	a.tagInput, _ = a.tagInput.Update(textinput.KeyMsg(key))
+	// Forward other keys to text input (for typing in the input field)
+	var cmd tea.Cmd
+	a.tagInput, cmd = a.tagInput.Update(msg)
+	return a, cmd
 }
 
 func (a *App) validateBadgeName(name string) bool {
