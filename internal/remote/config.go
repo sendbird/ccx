@@ -46,7 +46,7 @@ func (c Config) Defaults() Config {
 		c.Namespace = "default"
 	}
 	if c.Image == "" {
-		c.Image = "node:22-slim"
+		c.Image = "ubuntu:24.04"
 	}
 	if c.GitBranch == "" {
 		c.GitBranch = "main"

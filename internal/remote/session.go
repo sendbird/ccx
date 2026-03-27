@@ -84,10 +84,13 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 		return fmt.Errorf("pod not ready: %w", err)
 	}
 
-	// Install Claude
-	steps <- SetupStep{Message: "Installing Claude Code CLI..."}
-	out, err := ExecInPod(ctx, cfg, s.PodName,
-		"sh", "-c", "mkdir -p /root/.npm-global && npm install -g @anthropic-ai/claude-code 2>&1 | tail -3")
+	// Install prerequisites + Claude Code CLI
+	steps <- SetupStep{Message: "Installing Node.js and Claude Code CLI..."}
+	installCmd := "apt-get update -qq && apt-get install -y -qq curl git > /dev/null 2>&1 && " +
+		"curl -fsSL https://deb.nodesource.com/setup_22.x | bash - > /dev/null 2>&1 && " +
+		"apt-get install -y -qq nodejs > /dev/null 2>&1 && " +
+		"mkdir -p /root/.npm-global && npm install -g @anthropic-ai/claude-code 2>&1 | tail -3"
+	out, err := ExecInPod(ctx, cfg, s.PodName, "sh", "-c", installCmd)
 	if err != nil {
 		steps <- SetupStep{Message: fmt.Sprintf("Install issue: %s", string(out))}
 	}

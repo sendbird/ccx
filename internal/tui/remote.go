@@ -144,6 +144,20 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	// Fill defaults to show context in confirmation
+	cfg = cfg.Defaults()
+
+	// Store config for confirmation
+	a.remoteConfirmCfg = &cfg
+	a.copiedMsg = fmt.Sprintf("Remote → %s/%s? (y/n)", cfg.Context, cfg.Namespace)
+	return a, nil
+}
+
+// confirmRemoteStart is called after user confirms with 'y'.
+func (a *App) confirmRemoteStart() (tea.Model, tea.Cmd) {
+	cfg := *a.remoteConfirmCfg
+	a.remoteConfirmCfg = nil
+
 	claudeDir := a.config.ClaudeDir
 	var projectPath string
 	if sess, ok := a.selectedSession(); ok {
@@ -174,7 +188,6 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 		ProjectPath:     cfg.LocalDir,
 		ProjectName:     "remote:" + sess.PodName,
 		ModTime:         time.Now(),
-		IsLive:          true,
 		IsRemote:        true,
 		RemotePodName:   sess.PodName,
 		RemoteContext:   sess.Config.Context,

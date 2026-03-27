@@ -265,6 +265,7 @@ type App struct {
 	remoteContent       string                 // rendered progress/stream content
 	remoteSetupSteps    <-chan remote.SetupStep // setup progress channel (nil after setup)
 	remoteProgressSteps []string               // completed setup step messages
+	remoteConfirmCfg    *remote.Config         // pending confirmation (nil = no pending)
 
 	// Worktree alignment
 	worktreeAlignActive bool
@@ -756,6 +757,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Live input modal intercepts all keys
 		if a.liveInputActive {
 			return a.handleLiveInputKey(msg.String())
+		}
+
+		// Remote confirmation pending
+		if a.remoteConfirmCfg != nil {
+			switch msg.String() {
+			case "y", "Y":
+				return a.confirmRemoteStart()
+			default:
+				a.remoteConfirmCfg = nil
+				a.copiedMsg = "Cancelled"
+				return a, nil
+			}
 		}
 
 		if a.isFiltering() {

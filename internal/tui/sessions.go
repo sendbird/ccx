@@ -280,6 +280,11 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		badges += " " + customBadgeStyle.Render(badgeText)
 		badgesW += len(badgeText) + 1
 	}
+	if s.IsRemote {
+		remoteBadge := lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true)
+		badges += " " + remoteBadge.Render("[R]")
+		badgesW += 4
+	}
 
 	// Calculate available width for project column
 	// cursor(2) + tree(treePrefixW) + id(8) + 2 + time + 2 + msg + 2 + project + badges
