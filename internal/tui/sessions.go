@@ -147,6 +147,9 @@ func (s sessionItem) FilterValue() string {
 	for _, badge := range s.sess.CustomBadges {
 		parts = append(parts, "tag:"+badge, badge)
 	}
+	if s.sess.IsRemote {
+		parts = append(parts, "is:remote", "remote", s.sess.RemotePodName, s.sess.RemoteStatus)
+	}
 	return strings.Join(parts, " ")
 }
 

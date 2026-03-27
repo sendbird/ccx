@@ -473,6 +473,9 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	_, prefs, sc := LoadCCXConfig(configPath())
 	a.applyPreferences(prefs)
 	a.shortcuts = sc
+
+	// Restore saved remote sessions as virtual items
+	a.sessions = append(loadSavedRemoteSessions(), a.sessions...)
 	a.sessSplit = SplitPane{List: &a.sessionList, ItemHeight: 2}
 	a.conv.split = SplitPane{List: &a.convList, Show: true, Folds: &FoldState{}, ItemHeight: 1}
 	a.cfgSplit = SplitPane{List: &a.cfgList, ItemHeight: 1}

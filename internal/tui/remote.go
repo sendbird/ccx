@@ -11,6 +11,26 @@ import (
 	"github.com/sendbird/ccx/internal/session"
 )
 
+// loadSavedRemoteSessions restores persisted remote sessions as virtual items.
+func loadSavedRemoteSessions() []session.Session {
+	saved := remote.LoadSavedSessions()
+	var sessions []session.Session
+	for _, s := range saved {
+		sessions = append(sessions, session.Session{
+			ID:            "remote-" + s.PodName,
+			ShortID:       s.PodName,
+			ProjectPath:   s.LocalDir,
+			ProjectName:   "remote:" + s.PodName,
+			ModTime:       time.Now(),
+			IsRemote:      true,
+			RemotePodName: s.PodName,
+			RemoteStatus:  s.Status,
+			FirstPrompt:   "Remote: " + s.Status,
+		})
+	}
+	return sessions
+}
+
 // buildRemoteProgressView renders the progress panel for a remote session.
 func (a *App) buildRemoteProgressView(sess *remote.Session, currentStep string) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
@@ -83,6 +103,18 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 	sess, steps := remote.Start(cfg, claudeDir, projectPath)
 	a.remoteSession = sess
 	a.remoteSetupSteps = steps
+
+	// Persist remote session to disk
+	remote.AddSavedSession(remote.SavedSession{
+		PodName:   sess.PodName,
+		Context:   sess.Config.Context,
+		Namespace: sess.Config.Namespace,
+		Image:     sess.Config.Image,
+		LocalDir:  cfg.LocalDir,
+		SessionID: cfg.SessionID,
+		WorkDir:   sess.Config.WorkDir,
+		Status:    "starting",
+	})
 
 	// Insert virtual session into the list
 	virtualSess := session.Session{
@@ -242,7 +274,7 @@ func (a *App) handleRemoteStream(msg remoteStreamMsg) (tea.Model, tea.Cmd) {
 	return a, a.readRemoteStream(msg.podName)
 }
 
-// updateRemoteSessionStatus updates the virtual session's status in the list.
+// updateRemoteSessionStatus updates the virtual session's status in the list and on disk.
 func (a *App) updateRemoteSessionStatus(podName, status string) {
 	for i := range a.sessions {
 		if a.sessions[i].IsRemote && a.sessions[i].RemotePodName == podName {
@@ -251,6 +283,7 @@ func (a *App) updateRemoteSessionStatus(podName, status string) {
 			break
 		}
 	}
+	remote.UpdateSavedSessionStatus(podName, status)
 }
 
 // stopRemoteSession stops the remote and removes the virtual session.
@@ -265,6 +298,7 @@ func (a *App) stopRemoteSession() (tea.Model, tea.Cmd) {
 	a.remoteSession = nil
 	a.remoteContent = ""
 	a.remoteProgressSteps = nil
+	remote.RemoveSavedSession(podName)
 
 	// Remove virtual session from list
 	var filtered []session.Session
