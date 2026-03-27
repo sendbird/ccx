@@ -55,9 +55,11 @@ type Session struct {
 	TmuxWindowName string // tmux window name (set if pane CWD matches ProjectPath)
 
 	// Remote execution
-	IsRemote      bool   // virtual remote session
-	RemotePodName string // K8s pod name
-	RemoteStatus  string // setup progress / running / stopped
+	IsRemote        bool   // virtual remote session
+	RemotePodName   string // K8s pod name
+	RemoteContext   string // kubectl context
+	RemoteNamespace string // K8s namespace
+	RemoteStatus    string // setup progress / running / stopped
 }
 
 type Entry struct {

@@ -41,15 +41,17 @@ func loadSavedRemoteSessions() []session.Session {
 	var sessions []session.Session
 	for _, s := range saved {
 		sessions = append(sessions, session.Session{
-			ID:            "remote-" + s.PodName,
-			ShortID:       s.PodName,
-			ProjectPath:   s.LocalDir,
-			ProjectName:   "remote:" + s.PodName,
-			ModTime:       time.Now(),
-			IsRemote:      true,
-			RemotePodName: s.PodName,
-			RemoteStatus:  s.Status,
-			FirstPrompt:   "Remote: " + s.Status,
+			ID:              "remote-" + s.PodName,
+			ShortID:         s.PodName,
+			ProjectPath:     s.LocalDir,
+			ProjectName:     "remote:" + s.PodName,
+			ModTime:         time.Now(),
+			IsRemote:        true,
+			RemotePodName:   s.PodName,
+			RemoteContext:   s.Context,
+			RemoteNamespace: s.Namespace,
+			RemoteStatus:    s.Status,
+			FirstPrompt:     fmt.Sprintf("%s/%s/%s [%s]", s.Context, s.Namespace, s.PodName, s.Status),
 		})
 	}
 	return sessions
@@ -142,16 +144,18 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 
 	// Insert virtual session into the list
 	virtualSess := session.Session{
-		ID:           "remote-" + sess.PodName,
-		ShortID:      sess.PodName,
-		ProjectPath:  cfg.LocalDir,
-		ProjectName:  "remote:" + sess.PodName,
-		ModTime:      time.Now(),
-		IsLive:       true,
-		IsRemote:     true,
-		RemotePodName: sess.PodName,
-		RemoteStatus: "starting...",
-		FirstPrompt:  "Remote session",
+		ID:              "remote-" + sess.PodName,
+		ShortID:         sess.PodName,
+		ProjectPath:     cfg.LocalDir,
+		ProjectName:     "remote:" + sess.PodName,
+		ModTime:         time.Now(),
+		IsLive:          true,
+		IsRemote:        true,
+		RemotePodName:   sess.PodName,
+		RemoteContext:   sess.Config.Context,
+		RemoteNamespace: sess.Config.Namespace,
+		RemoteStatus:    "starting...",
+		FirstPrompt:     fmt.Sprintf("%s/%s/%s", sess.Config.Context, sess.Config.Namespace, sess.PodName),
 	}
 	a.sessions = append([]session.Session{virtualSess}, a.sessions...)
 	a.rebuildSessionList()
@@ -301,9 +305,10 @@ func (a *App) handleRemoteStream(msg remoteStreamMsg) (tea.Model, tea.Cmd) {
 // updateRemoteSessionStatus updates the virtual session's status in the list and on disk.
 func (a *App) updateRemoteSessionStatus(podName, status string) {
 	for i := range a.sessions {
-		if a.sessions[i].IsRemote && a.sessions[i].RemotePodName == podName {
-			a.sessions[i].RemoteStatus = status
-			a.sessions[i].FirstPrompt = "Remote: " + status
+		s := &a.sessions[i]
+		if s.IsRemote && s.RemotePodName == podName {
+			s.RemoteStatus = status
+			s.FirstPrompt = fmt.Sprintf("%s/%s/%s [%s]", s.RemoteContext, s.RemoteNamespace, podName, status)
 			break
 		}
 	}
