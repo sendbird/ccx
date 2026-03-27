@@ -59,6 +59,8 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 				"name":    "main",
 				"image":   cfg.Image,
 				"command": []string{"sleep", "infinity"},
+				"stdin":   true,
+				"tty":     true,
 				"env":     envVars,
 				"resources": map[string]interface{}{
 					"limits": map[string]string{
