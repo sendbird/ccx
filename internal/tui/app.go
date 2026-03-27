@@ -2535,13 +2535,33 @@ func (a *App) openInEditor(path string) (tea.Model, tea.Cmd) {
 type editorDoneMsg struct{}
 
 func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
-	if err := os.Remove(sess.FilePath); err != nil && !os.IsNotExist(err) {
-		a.copiedMsg = "Delete failed: " + err.Error()
-		return a, nil
+	// Remote sessions: clean up pod and saved state
+	if sess.IsRemote {
+		if a.remoteSession != nil && a.remoteSession.PodName == sess.RemotePodName {
+			a.remoteSession.Stop()
+			a.remoteSession = nil
+			a.remoteContent = ""
+			a.remoteProgressSteps = nil
+		} else {
+			// Saved remote — try delete pod from cluster
+			for _, saved := range remote.LoadSavedSessions() {
+				if saved.PodName == sess.RemotePodName {
+					cfg := remote.Config{Context: saved.Context, Namespace: saved.Namespace}
+					remote.DeletePod(context.Background(), cfg, sess.RemotePodName)
+					break
+				}
+			}
+		}
+		remote.RemoveSavedSession(sess.RemotePodName)
+	} else {
+		if err := os.Remove(sess.FilePath); err != nil && !os.IsNotExist(err) {
+			a.copiedMsg = "Delete failed: " + err.Error()
+			return a, nil
+		}
+		os.RemoveAll(filepath.Join(filepath.Dir(sess.FilePath), sess.ID))
+		os.RemoveAll(filepath.Join(a.config.ClaudeDir, "file-history", sess.ID))
+		os.RemoveAll(filepath.Join(a.config.ClaudeDir, "tasks", sess.ID))
 	}
-	os.RemoveAll(filepath.Join(filepath.Dir(sess.FilePath), sess.ID))
-	os.RemoveAll(filepath.Join(a.config.ClaudeDir, "file-history", sess.ID))
-	os.RemoveAll(filepath.Join(a.config.ClaudeDir, "tasks", sess.ID))
 
 	delete(a.selectedSet, sess.ID)
 
@@ -3461,9 +3481,12 @@ func (a *App) updateSessionPreview() tea.Cmd {
 	}
 
 	// Remote sessions show their own progress/stream content
-	if sess.IsRemote && a.remoteContent != "" {
-		a.sessSplit.Preview.SetContent(a.remoteContent)
-		a.sessSplit.CacheKey = "remote:" + sess.ID
+	if sess.IsRemote {
+		remoteCK := "remote:" + sess.ID
+		if a.sessSplit.CacheKey != remoteCK && a.remoteContent != "" {
+			a.sessSplit.Preview.SetContent(a.remoteContent)
+			a.sessSplit.CacheKey = remoteCK
+		}
 		return nil
 	}
 
