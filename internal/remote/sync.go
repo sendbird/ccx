@@ -61,9 +61,57 @@ func CreateConfigTarball(claudeDir, projectPath, sessionFile string) ([]byte, er
 	return buf.Bytes(), nil
 }
 
+const (
+	maxTarballSize = 500 * 1024 * 1024 // 500MB
+	maxFileCount   = 50000
+)
+
+// ValidateWorkdir checks if the directory is safe to sync.
+// Rejects root, home, and other dangerous paths.
+func ValidateWorkdir(dir string) error {
+	home, _ := os.UserHomeDir()
+	abs, _ := filepath.Abs(dir)
+
+	dangerous := []string{"/", "/etc", "/usr", "/var", "/tmp", "/opt", "/bin", "/sbin"}
+	for _, d := range dangerous {
+		if abs == d {
+			return fmt.Errorf("refusing to sync dangerous path: %s", abs)
+		}
+	}
+	if abs == home {
+		return fmt.Errorf("refusing to sync home directory: %s (use a project subdirectory)", abs)
+	}
+
+	// Must be a git repo or have a reasonable structure
+	gitDir := filepath.Join(abs, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		// Not a git repo — check file count to be safe
+		count := 0
+		filepath.Walk(abs, func(_ string, info os.FileInfo, _ error) error {
+			if info != nil && !info.IsDir() {
+				count++
+			}
+			if count > maxFileCount {
+				return fmt.Errorf("too many files")
+			}
+			return nil
+		})
+		if count > maxFileCount {
+			return fmt.Errorf("directory has >%d files and is not a git repo — too risky to sync", maxFileCount)
+		}
+	}
+
+	return nil
+}
+
 // CreateWorkdirTarball creates a tar.gz of the local working directory.
 // Respects .gitignore by using git ls-files if available, otherwise walks the dir.
+// Returns error if the directory is dangerous or the tarball exceeds size limits.
 func CreateWorkdirTarball(localDir string) ([]byte, error) {
+	if err := ValidateWorkdir(localDir); err != nil {
+		return nil, err
+	}
+
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
@@ -79,9 +127,19 @@ func CreateWorkdirTarball(localDir string) ([]byte, error) {
 		}
 	}
 
+	if len(files) > maxFileCount {
+		gw.Close()
+		return nil, fmt.Errorf("too many files (%d > %d limit)", len(files), maxFileCount)
+	}
+
 	for _, relPath := range files {
 		absPath := filepath.Join(localDir, relPath)
 		addFileToTar(tw, absPath, relPath)
+		if buf.Len() > maxTarballSize {
+			tw.Close()
+			gw.Close()
+			return nil, fmt.Errorf("tarball exceeds %dMB limit", maxTarballSize/1024/1024)
+		}
 	}
 
 	tw.Close()
