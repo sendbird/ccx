@@ -18,7 +18,7 @@ import (
 // Includes settings, memory, skills, agents, commands, hooks, project config,
 // and optionally the session JSONL file for --resume.
 // remoteWorkDir is the working directory on the pod (e.g. "/workspace").
-func CreateConfigTarball(claudeDir, projectPath, remoteWorkDir string) ([]byte, error) {
+func CreateConfigTarball(claudeDir, projectPath, remoteWorkDir, sessionFile string) ([]byte, error) {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
@@ -50,9 +50,14 @@ func CreateConfigTarball(claudeDir, projectPath, remoteWorkDir string) ([]byte, 
 		addDirToTar(tw, projDir, ".claude/projects/"+encoded)
 	}
 
-	// Note: session JSONL is NOT synced — --resume doesn't work remotely
-	// because local file paths in the JSONL don't match the pod.
-	// Context continuity comes from synced CLAUDE.md and memory files.
+	// Session JSONL file (for --resume)
+	// Placed under the remote workdir's encoded path so Claude finds it.
+	if sessionFile != "" && remoteWorkDir != "" {
+		remoteEncoded := encodeProjectPath(remoteWorkDir)
+		sessionFileName := filepath.Base(sessionFile)
+		remotePath := ".claude/projects/" + remoteEncoded + "/" + sessionFileName
+		addFileToTar(tw, sessionFile, remotePath)
+	}
 
 	tw.Close()
 	gw.Close()
