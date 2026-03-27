@@ -97,7 +97,7 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 
 	// Sync config
 	steps <- SetupStep{Message: "Syncing config..."}
-	configTar, err := CreateConfigTarball(claudeDir, projectPath, cfg.SessionFile, cfg.WorkDir)
+	configTar, err := CreateConfigTarball(claudeDir, projectPath, cfg.WorkDir)
 	if err == nil && len(configTar) > 0 {
 		UploadTarball(ctx, cfg, s.PodName, "main", "/root", configTar)
 	}
@@ -112,12 +112,10 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 		}
 	}
 
-	// Start Claude with streaming output
+	// Start Claude with streaming output (always fresh session — resume doesn't
+	// work remotely because local file paths in the JSONL don't match the pod).
 	steps <- SetupStep{Message: "Starting Claude..."}
 	claudeArgs := []string{"sh", "-c", "cd " + cfg.WorkDir + " && claude --output-format stream-json"}
-	if cfg.SessionID != "" {
-		claudeArgs = []string{"sh", "-c", "cd " + cfg.WorkDir + " && claude --output-format stream-json --resume " + cfg.SessionID}
-	}
 
 	stream, err := StreamExec(ctx, cfg, s.PodName, claudeArgs...)
 	if err != nil {
@@ -134,12 +132,10 @@ func (s *Session) AttachCmd() *exec.Cmd {
 }
 
 // BuildAttachCmd creates a kubectl exec command for interactive Claude.
+// Always starts fresh — resume doesn't work remotely (local paths in JSONL don't match pod).
+// To continue context, the workdir and CLAUDE.md are synced instead.
 func BuildAttachCmd(cfg Config, podName string) *exec.Cmd {
-	claudeCmd := "claude"
-	if cfg.SessionID != "" {
-		claudeCmd += " --resume " + cfg.SessionID
-	}
-	shellCmd := fmt.Sprintf("cd %s 2>/dev/null; %s", cfg.WorkDir, claudeCmd)
+	shellCmd := fmt.Sprintf("cd %s 2>/dev/null; claude", cfg.WorkDir)
 	return ExecInteractive(cfg, podName, "sh", "-c", shellCmd)
 }
 
