@@ -197,7 +197,13 @@ func (a *App) confirmRemoteStart() (tea.Model, tea.Cmd) {
 	}
 	a.sessions = append([]session.Session{virtualSess}, a.sessions...)
 	a.rebuildSessionList()
-	a.sessionList.Select(0) // select the new virtual session
+	// Select the newly created remote session by ID
+	for i, item := range a.sessionList.Items() {
+		if si, ok := item.(sessionItem); ok && si.sess.ID == virtualSess.ID {
+			a.sessionList.Select(i)
+			break
+		}
+	}
 
 	// Initialize progress tracking
 	a.remoteProgressSteps = nil
