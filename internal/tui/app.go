@@ -266,6 +266,7 @@ type App struct {
 	remoteSetupSteps    <-chan remote.SetupStep // setup progress channel (nil after setup)
 	remoteProgressSteps []string               // completed setup step messages
 	remoteConfirmCfg    *remote.Config         // pending confirmation (nil = no pending)
+	deleteConfirmSess   *session.Session       // pending delete confirmation
 
 	// Worktree alignment
 	worktreeAlignActive bool
@@ -759,7 +760,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.handleLiveInputKey(msg.String())
 		}
 
-		// Remote confirmation pending
+		// Confirmation prompts (y/n)
+		if a.deleteConfirmSess != nil {
+			sess := *a.deleteConfirmSess
+			a.deleteConfirmSess = nil
+			if msg.String() == "y" || msg.String() == "Y" {
+				return a.deleteSession(sess)
+			}
+			a.copiedMsg = "Cancelled"
+			return a, nil
+		}
 		if a.remoteConfirmCfg != nil {
 			switch msg.String() {
 			case "y", "Y":
@@ -2127,7 +2137,9 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 			a.copiedMsg = "Cannot delete live session"
 			return a, nil
 		}
-		return a.deleteSession(sess)
+		a.deleteConfirmSess = &sess
+		a.copiedMsg = fmt.Sprintf("Delete %s? (y/n)", sess.ShortID)
+		return a, nil
 	case akm.Resume:
 		return a.resumeSession(sess)
 	case akm.CopyPath:
