@@ -367,15 +367,27 @@ func (a *App) stopRemoteSession() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) reconnectRemoteSession() (tea.Model, tea.Cmd) {
-	if a.remoteSession == nil {
-		a.copiedMsg = "No active remote session"
-		return a, nil
+	// Try active session first
+	if a.remoteSession != nil {
+		return a.attachToRemoteSession(session.Session{
+			IsRemote:      true,
+			RemotePodName: a.remoteSession.PodName,
+		})
 	}
-	cmd := a.remoteSession.AttachCmd()
-	podName := a.remoteSession.PodName
-	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return remoteExecDoneMsg{podName: podName, err: err}
-	})
+	// Try selected session
+	if sess, ok := a.selectedSession(); ok && sess.IsRemote {
+		return a.attachToRemoteSession(sess)
+	}
+	// Try any saved remote
+	saved := remote.LoadSavedSessions()
+	if len(saved) > 0 {
+		return a.attachToRemoteSession(session.Session{
+			IsRemote:      true,
+			RemotePodName: saved[0].PodName,
+		})
+	}
+	a.copiedMsg = "No remote session found"
+	return a, nil
 }
 
 // attachToRemoteSession opens interactive Claude on the remote pod.
@@ -403,11 +415,7 @@ func (a *App) attachToRemoteSession(sess session.Session) (tea.Model, tea.Cmd) {
 				SessionID: saved.SessionID,
 				WorkDir:   saved.WorkDir,
 			}
-			args := []string{"claude"}
-			if cfg.SessionID != "" {
-				args = append(args, "--resume", cfg.SessionID)
-			}
-			cmd := remote.ExecInteractive(cfg, saved.PodName, args...)
+			cmd := remote.BuildAttachCmd(cfg, saved.PodName)
 			podName := saved.PodName
 			return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 				return remoteExecDoneMsg{podName: podName, err: err}

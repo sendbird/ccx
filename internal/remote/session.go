@@ -130,11 +130,17 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 
 // AttachCmd returns an exec.Cmd for interactive Claude in the pod.
 func (s *Session) AttachCmd() *exec.Cmd {
-	args := []string{"claude"}
-	if s.Config.SessionID != "" {
-		args = append(args, "--resume", s.Config.SessionID)
+	return BuildAttachCmd(s.Config, s.PodName)
+}
+
+// BuildAttachCmd creates a kubectl exec command for interactive Claude.
+func BuildAttachCmd(cfg Config, podName string) *exec.Cmd {
+	claudeCmd := "claude"
+	if cfg.SessionID != "" {
+		claudeCmd += " --resume " + cfg.SessionID
 	}
-	return ExecInteractive(s.Config, s.PodName, args...)
+	shellCmd := fmt.Sprintf("cd %s 2>/dev/null; %s", cfg.WorkDir, claudeCmd)
+	return ExecInteractive(cfg, podName, "sh", "-c", shellCmd)
 }
 
 // Stop cancels and deletes the pod.
