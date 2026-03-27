@@ -701,7 +701,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selectedID = sess.ID
 		}
 
-		a.sessions = msg.sessions
+		a.sessions = a.injectRemoteSessions(msg.sessions)
 		// Build/rebuild session list
 		if a.width > 0 && a.height > 0 {
 			contentH := a.height - 3
@@ -3109,7 +3109,7 @@ func (a *App) doRefresh() tea.Cmd {
 				selectedID = sess.ID
 			}
 
-			a.sessions = fresh
+			a.sessions = a.injectRemoteSessions(fresh)
 			a.globalStatsCache = nil // invalidate cached stats
 
 			if !a.isFiltering() && !a.hasFilterApplied() {

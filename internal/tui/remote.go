@@ -11,6 +11,30 @@ import (
 	"github.com/sendbird/ccx/internal/session"
 )
 
+// injectRemoteSessions prepends virtual remote sessions into a session list,
+// preserving any that exist in memory (with live status) and adding saved ones.
+func (a *App) injectRemoteSessions(sessions []session.Session) []session.Session {
+	// Collect current in-memory remote sessions (may have live status)
+	remoteMap := make(map[string]session.Session)
+	for _, s := range a.sessions {
+		if s.IsRemote {
+			remoteMap[s.RemotePodName] = s
+		}
+	}
+	// Also load from disk for any not currently in memory
+	for _, s := range loadSavedRemoteSessions() {
+		if _, exists := remoteMap[s.RemotePodName]; !exists {
+			remoteMap[s.RemotePodName] = s
+		}
+	}
+	// Prepend remote sessions
+	var result []session.Session
+	for _, s := range remoteMap {
+		result = append(result, s)
+	}
+	return append(result, sessions...)
+}
+
 // loadSavedRemoteSessions restores persisted remote sessions as virtual items.
 func loadSavedRemoteSessions() []session.Session {
 	saved := remote.LoadSavedSessions()
