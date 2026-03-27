@@ -48,6 +48,7 @@ type ActionsKeymap struct {
 	RemoveMem string `yaml:"remove_mem"`
 	Fork      string `yaml:"fork"`
 	New       string `yaml:"new"`
+	Remote    string `yaml:"remote"`
 }
 
 // ViewsKeymap defines configurable keybindings for the views menu.
@@ -119,6 +120,7 @@ func DefaultKeymap() Keymap {
 			RemoveMem: "X",
 			Fork:      "F",
 			New:       "n",
+			Remote:    "R",
 		},
 		Views: ViewsKeymap{
 			Stats:   "s",
@@ -265,6 +267,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Actions.New != "" {
 		dst.Actions.New = src.Actions.New
+	}
+	if src.Actions.Remote != "" {
+		dst.Actions.Remote = src.Actions.Remote
 	}
 
 	// Views

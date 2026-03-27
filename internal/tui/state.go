@@ -142,6 +142,7 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if a.RemoveMem == "" { a.RemoveMem = d.Actions.RemoveMem }
 	if a.Fork == "" { a.Fork = d.Actions.Fork }
 	if a.New == "" { a.New = d.Actions.New }
+	if a.Remote == "" { a.Remote = d.Actions.Remote }
 
 	v := &cfg.Keymaps.Views
 	if v.Stats == "" { v.Stats = d.Views.Stats }

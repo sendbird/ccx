@@ -474,7 +474,8 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	a.applyPreferences(prefs)
 	a.shortcuts = sc
 
-	// Restore saved remote sessions as virtual items
+	// Cleanup stale remote sessions, then restore remaining as virtual items
+	cleanupStaleRemoteSessions()
 	a.sessions = append(loadSavedRemoteSessions(), a.sessions...)
 	a.sessSplit = SplitPane{List: &a.sessionList, ItemHeight: 2}
 	a.conv.split = SplitPane{List: &a.convList, Show: true, Folds: &FoldState{}, ItemHeight: 1}
@@ -2205,6 +2206,13 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.forkSession(sess)
 	case akm.New:
 		return a.startNewSessionInProject(sess)
+	case akm.Remote:
+		cfg := remote.Config{
+			LocalDir:    sess.ProjectPath,
+			SessionID:   sess.ID,
+			SessionFile: sess.FilePath,
+		}
+		return a.startRemoteSession(cfg)
 	}
 	return a, nil
 }
@@ -4184,6 +4192,7 @@ func (a *App) renderActionsHintBox() string {
 		}
 		line2 += sp + hl.Render(displayKey(akm.Fork)) + d.Render(":fork")
 		line2 += sp + hl.Render(displayKey(akm.New)) + d.Render(":new")
+		line2 += sp + hl.Render(displayKey(akm.Remote)) + d.Render(":remote")
 		lines = append(lines, line2)
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))

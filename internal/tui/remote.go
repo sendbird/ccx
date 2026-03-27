@@ -36,6 +36,30 @@ func (a *App) injectRemoteSessions(sessions []session.Session) []session.Session
 	return append(result, sessions...)
 }
 
+// cleanupStaleRemoteSessions checks saved sessions against the cluster
+// and removes ones whose pods no longer exist. Best-effort: if the cluster
+// is unreachable, the session is kept.
+func cleanupStaleRemoteSessions() {
+	saved := remote.LoadSavedSessions()
+	var kept []remote.SavedSession
+	for _, s := range saved {
+		cfg := remote.Config{Context: s.Context, Namespace: s.Namespace}
+		phase, err := remote.PodPhase(context.Background(), cfg, s.PodName)
+		if err != nil {
+			// Can't reach cluster — keep the session (don't delete blindly)
+			kept = append(kept, s)
+			continue
+		}
+		if phase == "Running" || phase == "Pending" {
+			kept = append(kept, s)
+		}
+		// Succeeded, Failed, Unknown — pod is gone, don't keep
+	}
+	if len(kept) != len(saved) {
+		remote.SaveSessions(kept)
+	}
+}
+
 // loadSavedRemoteSessions restores persisted remote sessions as virtual items.
 func loadSavedRemoteSessions() []session.Session {
 	saved := remote.LoadSavedSessions()

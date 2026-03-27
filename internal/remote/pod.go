@@ -135,6 +135,20 @@ func ExecInPod(ctx context.Context, cfg Config, podName string, cmd ...string) (
 	return c.CombinedOutput()
 }
 
+// PodPhase returns the current phase of a pod (Running, Pending, Succeeded, Failed, Unknown).
+func PodPhase(ctx context.Context, cfg Config, podName string) (string, error) {
+	cmd := exec.CommandContext(ctx, "kubectl",
+		"--context", cfg.Context,
+		"-n", cfg.Namespace,
+		"get", "pod", podName,
+		"-o", "jsonpath={.status.phase}")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // ExecInteractive opens an interactive exec session to the pod.
 // This takes over the terminal (like tea.ExecProcess).
 func ExecInteractive(cfg Config, podName string, cmd ...string) *exec.Cmd {
