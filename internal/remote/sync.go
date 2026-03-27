@@ -19,7 +19,6 @@ import (
 // and optionally the session JSONL file for --resume.
 // remoteWorkDir is the working directory on the pod (e.g. "/workspace").
 func CreateConfigTarball(claudeDir, projectPath, sessionFile, remoteWorkDir string) ([]byte, error) {
-	home, _ := os.UserHomeDir()
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
@@ -52,13 +51,12 @@ func CreateConfigTarball(claudeDir, projectPath, sessionFile, remoteWorkDir stri
 	}
 
 	// Session JSONL file (for --resume)
-	if sessionFile != "" {
-		// Session files live under ~/.claude/projects/<encoded>/sessions/
-		// We need to preserve the relative path from claudeDir
-		rel, err := filepath.Rel(home, sessionFile)
-		if err == nil {
-			addFileToTar(tw, sessionFile, rel)
-		}
+	// Must be placed under the REMOTE workdir's encoded path, not the local one.
+	if sessionFile != "" && remoteWorkDir != "" {
+		remoteEncoded := encodeProjectPath(remoteWorkDir)
+		sessionFileName := filepath.Base(sessionFile)
+		remotePath := ".claude/projects/" + remoteEncoded + "/" + sessionFileName
+		addFileToTar(tw, sessionFile, remotePath)
 	}
 
 	tw.Close()
