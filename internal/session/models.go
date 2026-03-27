@@ -50,6 +50,8 @@ type Session struct {
 	HasSkills     bool
 	HasMCP        bool
 
+	CustomBadges []string // user-created badge tags
+
 	TmuxWindowName string // tmux window name (set if pane CWD matches ProjectPath)
 }
 

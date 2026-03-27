@@ -215,6 +215,14 @@ func buildCmdRegistry() []cmdEntry {
 		// Search
 		{name: "search", aliases: []string{"find", "grep"}, desc: "search across all sessions",
 			action: func(a *App) (tea.Model, tea.Cmd) { a.enterSearchMode(); return a, nil }},
+
+		// Badge management
+		{name: "badge:rm", aliases: []string{"badge:remove"}, desc: "remove badge from all sessions",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				// Handled specially in executeCommand for "badge:rm NAME" syntax
+				a.copiedMsg = "Usage: badge:rm NAME"
+				return a, nil
+			}},
 	}
 }
 
@@ -404,6 +412,11 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 		return a.executeCmdSetRatio(input)
 	}
 
+	// Check badge:rm NAME (consumes the whole input)
+	if strings.HasPrefix(lower, "badge:rm") || strings.HasPrefix(lower, "badge:remove") {
+		return a.executeCmdBadgeRm(input)
+	}
+
 	// Split into parts for multi-command support
 	parts := strings.Fields(lower)
 	var cmds []tea.Cmd
@@ -462,6 +475,55 @@ func (a *App) executeCmdSetRatio(input string) (tea.Model, tea.Cmd) {
 		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
 	}
 	a.copiedMsg = fmt.Sprintf("Ratio: %d%%", n)
+	return a, nil
+}
+
+// executeCmdBadgeRm handles "badge:rm NAME" commands.
+func (a *App) executeCmdBadgeRm(input string) (tea.Model, tea.Cmd) {
+	parts := strings.Fields(input)
+	if len(parts) < 2 {
+		a.copiedMsg = "Usage: badge:rm NAME"
+		return a, nil
+	}
+
+	badgeName := strings.TrimSpace(parts[len(parts)-1])
+	if badgeName == "" {
+		a.copiedMsg = "Badge name cannot be empty"
+		return a, nil
+	}
+
+	count := a.badgeStore.RemoveBadgeFromAll(badgeName)
+	if count == 0 {
+		a.copiedMsg = fmt.Sprintf("Badge '%s' not found", badgeName)
+		return a, nil
+	}
+
+	// Save to disk
+	if err := a.badgeStore.Save(); err != nil {
+		a.copiedMsg = "Failed to save: " + err.Error()
+		return a, nil
+	}
+
+	// Update all sessions in the list
+	items := a.sessionList.Items()
+	for i, item := range items {
+		if si, ok := item.(sessionItem); ok {
+			filtered := make([]string, 0, len(si.sess.CustomBadges))
+			for _, b := range si.sess.CustomBadges {
+				if b != badgeName {
+					filtered = append(filtered, b)
+				}
+			}
+			si.sess.CustomBadges = filtered
+			items[i] = si
+		}
+	}
+	a.sessionList.SetItems(items)
+
+	// Update tag list
+	a.tagList = a.badgeStore.AllBadges()
+
+	a.copiedMsg = fmt.Sprintf("Removed '%s' from %d session(s)", badgeName, count)
 	return a, nil
 }
 

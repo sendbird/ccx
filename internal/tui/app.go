@@ -122,7 +122,7 @@ type App struct {
 	sessions       []session.Session
 	currentSess    session.Session
 	selectedSet    map[string]bool // multi-select: session ID → selected
-	liveInputPanes []tmux.Pane      // bulk input: multiple target panes
+	liveInputPanes []tmux.Pane     // bulk input: multiple target panes
 
 	// List models
 	sessionList list.Model
@@ -197,16 +197,25 @@ type App struct {
 	actionsSess session.Session
 	editChoices []editChoice // available files to edit
 
+	// Tag menu (t key in actions)
+	tagMenu     bool
+	tagSessID   string   // single session ID
+	tagSessIDs  []string // multi-select session IDs
+	tagCursor   int
+	tagInput    textinput.Model
+	tagList     []string
+	badgeStore  *session.BadgeStore
+
 	// URL menu (u key in actions)
 	urlMenu        bool
-	urlAllItems    []extract.Item       // unfiltered full list
-	urlItems       []extract.Item       // filtered (displayed) list
+	urlAllItems    []extract.Item // unfiltered full list
+	urlItems       []extract.Item // filtered (displayed) list
 	urlCursor      int
 	urlSelected    map[string]bool // selected URLs for multi-open/copy
 	urlSearching   bool            // typing in search input
 	urlSearchInput textinput.Model
 	urlSearchTerm  string
-	urlScope       string          // context label: "session", "message", "block"
+	urlScope       string // context label: "session", "message", "block"
 
 	// Conversation/message-full actions menu (x key)
 	convActionsMenu bool
@@ -321,17 +330,17 @@ type App struct {
 	plgSearchTerm  string
 
 	// Plugin selection & actions
-	plgSelectedSet       map[string]bool // plugin ID → selected
-	plgActionsMenu       bool            // actions menu open
-	plgUninstallConfirm  bool            // waiting for second x press
+	plgSelectedSet      map[string]bool // plugin ID → selected
+	plgActionsMenu      bool            // actions menu open
+	plgUninstallConfirm bool            // waiting for second x press
 
 	// Plugin detail drill-down
-	plgDetailActive      bool              // true = showing component list for a plugin
-	plgDetailPlugin      session.Plugin    // the plugin being inspected
-	plgDetailList        list.Model        // component list
-	plgDetailSplit       SplitPane         // component list + file preview
-	plgCompSelectedSet   map[string]bool   // selected component paths
-	plgCompActionsMenu   bool              // actions menu active
+	plgDetailActive    bool            // true = showing component list for a plugin
+	plgDetailPlugin    session.Plugin  // the plugin being inspected
+	plgDetailList      list.Model      // component list
+	plgDetailSplit     SplitPane       // component list + file preview
+	plgCompSelectedSet map[string]bool // selected component paths
+	plgCompActionsMenu bool            // actions menu active
 
 	// Hooks view (legacy, kept for viewport reuse)
 	hooksVP viewport.Model
@@ -437,6 +446,12 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	a.plgCompSelectedSet = make(map[string]bool)
 	a.cmdRegistry = buildCmdRegistry()
 
+	// Initialize tag menu
+	a.badgeStore = session.LoadBadges(cfg.ClaudeDir)
+	a.tagInput = textinput.New()
+	a.tagInput.Placeholder = "badge-name"
+	a.tagInput.CharLimit = 20
+
 	// Apply CLI flags for initial group/preview mode
 	if cfg.GroupMode != "" {
 		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork}
@@ -532,7 +547,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		os.RemoveAll(msg.tmpDir)
 		a.clearPlgSelection()
 		return a, nil
-
 
 	case pluginCmdDoneMsg:
 		if msg.err != nil {
@@ -775,6 +789,8 @@ func (a *App) View() string {
 		} else if a.showHelp {
 			content = renderHelpModal(content, a.width, ContentHeight(a.height), a.keymap)
 			help = formatHelp("press any key to close")
+		} else if a.tagMenu {
+			help = "" // Tag menu has its own help text inside the modal
 		} else if a.moveMode {
 			help = "  " + a.moveInput.View() + helpStyle.Render("  enter:move esc:cancel")
 		} else if a.worktreeMode {
@@ -1018,6 +1034,12 @@ func (a *App) View() string {
 		help = formatHelp("x:actions — pick an action")
 	}
 
+	// Tag menu floating modal
+	if a.tagMenu {
+		modal := a.renderTagMenu()
+		content = placeHintBox(content, modal)
+	}
+
 	// Config actions menu hint box
 	if a.cfgActionsMenu && a.state == viewConfig {
 		hintBox := a.renderCfgActionsHintBox()
@@ -1181,6 +1203,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.sessConvFullScroll += 10
 		}
 		return a, nil
+	}
+
+	// Tag menu: manage custom badges
+	if a.tagMenu {
+		return a.handleTagMenuKey(msg)
 	}
 
 	// Clear actions menu on any unrelated key
@@ -2090,6 +2117,14 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.openURLMenuFromItems(extract.SessionURLs(sess.FilePath), "session")
 	case akm.Files:
 		return a.openURLMenuFromItems(extract.SessionFilePaths(sess.FilePath), "session files")
+	case akm.Tags:
+		a.tagMenu = true
+		a.tagSessID = sess.ID
+		a.tagList = a.badgeStore.AllBadges()
+		a.tagCursor = 0
+		a.tagInput.SetValue("")
+		a.tagInput.Focus()
+		return a, a.tagInput.Cursor.BlinkCmd()
 	}
 	return a, nil
 }
@@ -2106,6 +2141,20 @@ func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.bulkKill(selected)
 	case akm.Input:
 		return a.bulkInput(selected)
+	case akm.Tags:
+		// Collect all selected session IDs
+		var sessIDs []string
+		for _, s := range selected {
+			sessIDs = append(sessIDs, s.ID)
+		}
+		a.tagMenu = true
+		a.tagSessIDs = sessIDs // Use plural for multi-select
+		a.tagSessID = ""       // Clear single session
+		a.tagList = a.badgeStore.AllBadges()
+		a.tagCursor = 0
+		a.tagInput.SetValue("")
+		a.tagInput.Focus()
+		return a, a.tagInput.Cursor.BlinkCmd()
 	}
 	return a, nil
 }
@@ -3728,10 +3777,11 @@ func (a *App) renderActionsHintBox() string {
 		header := fmt.Sprintf("%d selected", len(a.selectedSet))
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
+		lines = append(lines, hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
 	} else {
 		sess := a.actionsSess
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
-		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree")+sp+hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files"))
+		lines = append(lines, hl.Render(displayKey(akm.Worktree))+d.Render(":worktree")+sp+hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
 		if sess.IsLive && a.config.TmuxEnabled {
 			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
 		}
@@ -3758,6 +3808,7 @@ func (a *App) renderSearchHintBox() string {
 		lines = []string{
 			h.Render("is:") + d.Render("live wt team"),
 			h.Render("has:") + d.Render("mem todo task plan agent compact skill mcp"),
+			h.Render("tag:") + d.Render("badge-name"),
 			d.Render("text: project branch prompt"),
 		}
 	case viewConversation:

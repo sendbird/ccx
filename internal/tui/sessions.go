@@ -136,6 +136,10 @@ func (s sessionItem) FilterValue() string {
 	if s.sess.ParentSessionID != "" {
 		parts = append(parts, "is:fork")
 	}
+	// Custom badges
+	for _, badge := range s.sess.CustomBadges {
+		parts = append(parts, "tag:"+badge, badge)
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -257,6 +261,12 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if s.ParentSessionID != "" {
 		badges += " " + forkBadge.Render("[F]")
 		badgesW += 4
+	}
+	// Custom user badges
+	for _, badge := range s.CustomBadges {
+		badgeText := "[" + badge + "]"
+		badges += " " + customBadgeStyle.Render(badgeText)
+		badgesW += len(badgeText) + 1
 	}
 
 	// Calculate available width for project column

@@ -11,7 +11,7 @@ import (
 )
 
 // scanSessionStream uses buffered line-by-line scanning for large files to avoid OOM.
-func scanSessionStream(path string, modTime time.Time, home string) Session {
+func scanSessionStream(path string, modTime time.Time, home string, badgeStore *BadgeStore) Session {
 	id := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	shortID := id
 	if len(shortID) > 8 {
@@ -199,6 +199,11 @@ func scanSessionStream(path string, modTime time.Time, home string) Session {
 
 	// Check for subagents
 	sess.HasAgents = hasSubagents(path)
+
+	// Load custom badges
+	if badgeStore != nil {
+		sess.CustomBadges = badgeStore.Get(sess.ID)
+	}
 
 	return sess
 }
