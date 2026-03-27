@@ -349,6 +349,7 @@ func TestPreviewModeConstants(t *testing.T) {
 		sessPreviewMemory,
 		sessPreviewTasksPlan,
 		sessPreviewLive,
+		sessPreviewRemote,
 	}
 
 	if len(modes) != int(numSessPreviewModes) {

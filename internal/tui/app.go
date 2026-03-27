@@ -429,7 +429,8 @@ const (
 	sessPreviewMemory
 	sessPreviewTasksPlan
 	sessPreviewLive     // tmux pane capture
-	numSessPreviewModes = 5
+	sessPreviewRemote   // remote session status/stream
+	numSessPreviewModes = 6
 )
 
 // Config holds application configuration from CLI flags.
@@ -3378,10 +3379,16 @@ func (a *App) renderSessionSplit() string {
 		oldTotal := a.sessSplit.Preview.TotalLineCount()
 		a.sessSplit.Preview.Width = previewW
 		a.sessSplit.Preview.Height = max(contentH, 1)
+
 		// Re-render at new size without reloading data or resetting cursor
-		if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
+		// Skip for live and remote — they manage their own content
+		isRemoteSess := false
+		if selSess, selOk := a.selectedSession(); selOk {
+			isRemoteSess = selSess.IsRemote
+		}
+		if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 && !isRemoteSess {
 			a.refreshConvPreview()
-		} else if a.sessPreviewMode != sessPreviewLive {
+		} else if a.sessPreviewMode != sessPreviewLive && !isRemoteSess {
 			a.sessSplit.CacheKey = ""
 			_ = a.updateSessionPreview()
 			if a.sessPreviewMode == sessPreviewLive {
@@ -3446,7 +3453,8 @@ func (a *App) toggleSessionPreviewMode(mode sessPreview) {
 // Skips sessPreviewLive — it's only entered via the L key.
 func (a *App) cycleSessionPreviewMode() {
 	a.sessPreviewMode = (a.sessPreviewMode + 1) % numSessPreviewModes
-	if a.sessPreviewMode == sessPreviewLive {
+	// Skip live and remote — they're entered via dedicated keys
+	for a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRemote {
 		a.sessPreviewMode = (a.sessPreviewMode + 1) % numSessPreviewModes
 	}
 	a.closePaneProxy()
@@ -3454,10 +3462,10 @@ func (a *App) cycleSessionPreviewMode() {
 }
 
 // cycleSessionPreviewModeReverse goes to the previous preview tab.
-// Skips sessPreviewLive — it's only entered via the L key.
+// Skips sessPreviewLive and sessPreviewRemote.
 func (a *App) cycleSessionPreviewModeReverse() {
 	a.sessPreviewMode = (a.sessPreviewMode + numSessPreviewModes - 1) % numSessPreviewModes
-	if a.sessPreviewMode == sessPreviewLive {
+	for a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRemote {
 		a.sessPreviewMode = (a.sessPreviewMode + numSessPreviewModes - 1) % numSessPreviewModes
 	}
 	a.closePaneProxy()
@@ -3480,17 +3488,13 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		return nil
 	}
 
-	// Remote sessions show their own progress/stream content
+	// Force remote preview mode for remote sessions
+	previewMode := a.sessPreviewMode
 	if sess.IsRemote {
-		remoteCK := "remote:" + sess.ID
-		if a.sessSplit.CacheKey != remoteCK && a.remoteContent != "" {
-			a.sessSplit.Preview.SetContent(a.remoteContent)
-			a.sessSplit.CacheKey = remoteCK
-		}
-		return nil
+		previewMode = sessPreviewRemote
 	}
 
-	cacheKey := fmt.Sprintf("%d:%s", a.sessPreviewMode, sess.ID)
+	cacheKey := fmt.Sprintf("%d:%s", previewMode, sess.ID)
 	if cacheKey == a.sessSplit.CacheKey {
 		return nil
 	}
@@ -3506,7 +3510,7 @@ func (a *App) updateSessionPreview() tea.Cmd {
 	a.sessSplit.CacheKey = cacheKey
 	a.sessPreviewPinned = false
 
-	switch a.sessPreviewMode {
+	switch previewMode {
 	case sessPreviewStats:
 		a.updateSessionStatsPreview(sess)
 	case sessPreviewMemory:
@@ -3526,6 +3530,12 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		}
 		a.closePaneProxy()
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(not a live session)"))
+	case sessPreviewRemote:
+		content := a.remoteContent
+		if content == "" {
+			content = dimStyle.Render(fmt.Sprintf("Remote session: %s [%s]", sess.RemotePodName, sess.RemoteStatus))
+		}
+		a.sessSplit.Preview.SetContent(content)
 	default:
 		a.updateSessionConvPreview(sess)
 	}

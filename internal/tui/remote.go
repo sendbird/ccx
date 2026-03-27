@@ -304,13 +304,12 @@ func (a *App) handleRemoteExecDone(msg remoteExecDoneMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// updateRemotePreview updates the preview pane if the selected session is this remote.
+// updateRemotePreview invalidates cache so the render path picks up new content.
 func (a *App) updateRemotePreview(podName string) {
 	if a.sessSplit.Show {
 		if sess, ok := a.selectedSession(); ok && sess.IsRemote && sess.RemotePodName == podName {
-			a.sessSplit.Preview.SetContent(a.remoteContent)
-			a.sessSplit.Preview.GotoBottom()
-			a.sessSplit.CacheKey = "remote:" + sess.ID
+			// Invalidate cache — updateSessionPreview will re-set content
+			a.sessSplit.CacheKey = ""
 		}
 	}
 }
