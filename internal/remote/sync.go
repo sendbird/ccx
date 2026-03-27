@@ -35,6 +35,7 @@ func CreateConfigTarball(claudeDir, projectPath, sessionFile, remoteWorkDir stri
 	}
 
 	// .claude.json: inject trust entry for remote workdir
+	// Claude reads from both ~/.claude/.claude.json AND ~/.claude.json
 	addClaudeJSON(tw, filepath.Join(claudeDir, ".claude.json"), remoteWorkDir)
 
 	// Directories to mirror fully: skills, agents, commands, contexts, rules, memory
@@ -188,13 +189,16 @@ func addClaudeJSON(tw *tar.Writer, srcPath, remoteWorkDir string) {
 		return
 	}
 
-	header := &tar.Header{
-		Name: ".claude/.claude.json",
-		Size: int64(len(modified)),
-		Mode: 0644,
-	}
-	if tw.WriteHeader(header) == nil {
-		tw.Write(modified)
+	// Write to both locations — Claude reads ~/.claude.json (root) and ~/.claude/.claude.json
+	for _, name := range []string{".claude.json", ".claude/.claude.json"} {
+		header := &tar.Header{
+			Name: name,
+			Size: int64(len(modified)),
+			Mode: 0644,
+		}
+		if tw.WriteHeader(header) == nil {
+			tw.Write(modified)
+		}
 	}
 }
 
