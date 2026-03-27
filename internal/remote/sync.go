@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,22 +17,25 @@ import (
 // CreateConfigTarball creates a tar.gz archive of the full Claude config.
 // Includes settings, memory, skills, agents, commands, hooks, project config,
 // and optionally the session JSONL file for --resume.
-func CreateConfigTarball(claudeDir, projectPath, sessionFile string) ([]byte, error) {
+// remoteWorkDir is the working directory on the pod (e.g. "/workspace").
+func CreateConfigTarball(claudeDir, projectPath, sessionFile, remoteWorkDir string) ([]byte, error) {
 	home, _ := os.UserHomeDir()
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 
-	// Core config files
+	// Core config files (except .claude.json which needs modification)
 	coreFiles := []string{
 		"CLAUDE.md",
 		"settings.json",
 		"settings.local.json",
-		".claude.json",
 	}
 	for _, name := range coreFiles {
 		addFileToTar(tw, filepath.Join(claudeDir, name), ".claude/"+name)
 	}
+
+	// .claude.json: inject trust entry for remote workdir
+	addClaudeJSON(tw, filepath.Join(claudeDir, ".claude.json"), remoteWorkDir)
 
 	// Directories to mirror fully: skills, agents, commands, contexts, rules, memory
 	dirs := []string{"skills", "agents", "commands", "contexts", "rules", "memory"}
@@ -145,6 +149,53 @@ func CreateWorkdirTarball(localDir string) ([]byte, error) {
 	tw.Close()
 	gw.Close()
 	return buf.Bytes(), nil
+}
+
+// addClaudeJSON reads .claude.json, injects a trust entry for the remote workdir,
+// and writes the modified version to the tarball.
+func addClaudeJSON(tw *tar.Writer, srcPath, remoteWorkDir string) {
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return
+	}
+
+	var config map[string]interface{}
+	if json.Unmarshal(data, &config) != nil {
+		addFileToTar(tw, srcPath, ".claude/.claude.json")
+		return
+	}
+
+	projects, _ := config["projects"].(map[string]interface{})
+	if projects == nil {
+		projects = make(map[string]interface{})
+		config["projects"] = projects
+	}
+
+	if remoteWorkDir != "" {
+		if _, exists := projects[remoteWorkDir]; !exists {
+			projects[remoteWorkDir] = map[string]interface{}{
+				"allowedTools":                  []interface{}{},
+				"hasTrustDialogAccepted":        true,
+				"hasCompletedProjectOnboarding": true,
+				"projectOnboardingSeenCount":    1,
+			}
+		}
+	}
+
+	modified, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		addFileToTar(tw, srcPath, ".claude/.claude.json")
+		return
+	}
+
+	header := &tar.Header{
+		Name: ".claude/.claude.json",
+		Size: int64(len(modified)),
+		Mode: 0644,
+	}
+	if tw.WriteHeader(header) == nil {
+		tw.Write(modified)
+	}
 }
 
 // UploadTarball extracts a tarball into a directory on the pod.

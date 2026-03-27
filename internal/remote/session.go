@@ -97,7 +97,7 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 
 	// Sync config
 	steps <- SetupStep{Message: "Syncing config..."}
-	configTar, err := CreateConfigTarball(claudeDir, projectPath, cfg.SessionFile)
+	configTar, err := CreateConfigTarball(claudeDir, projectPath, cfg.SessionFile, cfg.WorkDir)
 	if err == nil && len(configTar) > 0 {
 		UploadTarball(ctx, cfg, s.PodName, "main", "/root", configTar)
 	}
