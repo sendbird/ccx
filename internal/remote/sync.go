@@ -37,8 +37,8 @@ func CreateConfigTarball(claudeDir, projectPath, remoteWorkDir string) ([]byte, 
 	// Claude reads from both ~/.claude/.claude.json AND ~/.claude.json
 	addClaudeJSON(tw, filepath.Join(claudeDir, ".claude.json"), remoteWorkDir)
 
-	// Directories to mirror fully: skills, agents, commands, contexts, rules, memory
-	dirs := []string{"skills", "agents", "commands", "contexts", "rules", "memory"}
+	// Directories to mirror fully
+	dirs := []string{"skills", "agents", "commands", "contexts", "rules", "memory", "hooks"}
 	for _, dir := range dirs {
 		addDirToTar(tw, filepath.Join(claudeDir, dir), ".claude/"+dir)
 	}
