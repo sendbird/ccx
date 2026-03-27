@@ -2544,34 +2544,7 @@ func (a *App) openInEditor(path string) (tea.Model, tea.Cmd) {
 type editorDoneMsg struct{}
 
 func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
-	// Remote sessions: clean up pod and saved state
-	if sess.IsRemote {
-		if a.remoteSession != nil && a.remoteSession.PodName == sess.RemotePodName {
-			a.remoteSession.Stop()
-			a.remoteSession = nil
-			a.remoteContent = ""
-			a.remoteProgressSteps = nil
-		} else {
-			// Saved remote — try delete pod from cluster
-			for _, saved := range remote.LoadSavedSessions() {
-				if saved.PodName == sess.RemotePodName {
-					cfg := remote.Config{Context: saved.Context, Namespace: saved.Namespace}
-					remote.DeletePod(context.Background(), cfg, sess.RemotePodName)
-					break
-				}
-			}
-		}
-		remote.RemoveSavedSession(sess.RemotePodName)
-	} else {
-		if err := os.Remove(sess.FilePath); err != nil && !os.IsNotExist(err) {
-			a.copiedMsg = "Delete failed: " + err.Error()
-			return a, nil
-		}
-		os.RemoveAll(filepath.Join(filepath.Dir(sess.FilePath), sess.ID))
-		os.RemoveAll(filepath.Join(a.config.ClaudeDir, "file-history", sess.ID))
-		os.RemoveAll(filepath.Join(a.config.ClaudeDir, "tasks", sess.ID))
-	}
-
+	// Remove from UI immediately
 	delete(a.selectedSet, sess.ID)
 
 	// Remove from in-memory list and update the list widget
@@ -2599,8 +2572,44 @@ func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
 		a.sessionList.Select(idx)
 	}
 	a.sessSplit.CacheKey = ""
-	a.copiedMsg = "Session deleted"
-	return a, nil
+	a.copiedMsg = "Deleted"
+
+	// Async cleanup — file/pod deletion happens in background
+	if sess.IsRemote {
+		rs := a.remoteSession
+		podName := sess.RemotePodName
+		if rs != nil && rs.PodName == podName {
+			a.remoteSession = nil
+			a.remoteContent = ""
+			a.remoteProgressSteps = nil
+		}
+		return a, func() tea.Msg {
+			if rs != nil && rs.PodName == podName {
+				rs.Stop()
+			} else {
+				for _, saved := range remote.LoadSavedSessions() {
+					if saved.PodName == podName {
+						cfg := remote.Config{Context: saved.Context, Namespace: saved.Namespace}
+						remote.DeletePod(context.Background(), cfg, podName)
+						break
+					}
+				}
+			}
+			remote.RemoveSavedSession(podName)
+			return nil
+		}
+	}
+
+	claudeDir := a.config.ClaudeDir
+	filePath := sess.FilePath
+	sessID := sess.ID
+	return a, func() tea.Msg {
+		os.Remove(filePath)
+		os.RemoveAll(filepath.Join(filepath.Dir(filePath), sessID))
+		os.RemoveAll(filepath.Join(claudeDir, "file-history", sessID))
+		os.RemoveAll(filepath.Join(claudeDir, "tasks", sessID))
+		return nil
+	}
 }
 
 func (a *App) handleMoveInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
