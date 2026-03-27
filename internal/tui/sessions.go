@@ -982,6 +982,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{"proj:<name>", "By project name"},
 		{"team:<name>", "By team name"},
 		{"is:fork", "Forked sessions"},
+		{"is:remote", "Remote sessions"},
 	}
 	for i := 0; i < len(allFilters); i += 2 {
 		f := allFilters[i]

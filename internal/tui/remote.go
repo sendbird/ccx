@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -316,17 +317,38 @@ func (a *App) updateRemoteSessionStatus(podName, status string) {
 }
 
 // stopRemoteSession stops the remote and removes the virtual session.
+// Works with both active in-memory sessions and saved/restored sessions.
 func (a *App) stopRemoteSession() (tea.Model, tea.Cmd) {
-	if a.remoteSession == nil {
-		a.copiedMsg = "No active remote session"
-		return a, nil
+	var podName string
+
+	if a.remoteSession != nil {
+		// Active session — stop it (cancels stream + deletes pod)
+		podName = a.remoteSession.PodName
+		a.remoteSession.Stop()
+		a.remoteSession = nil
+		a.remoteContent = ""
+		a.remoteProgressSteps = nil
+	} else {
+		// No active session — try selected session or any saved remote
+		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
+			podName = sess.RemotePodName
+			// Delete the pod from the cluster
+			for _, saved := range remote.LoadSavedSessions() {
+				if saved.PodName == podName {
+					cfg := remote.Config{
+						Context:   saved.Context,
+						Namespace: saved.Namespace,
+					}
+					remote.DeletePod(context.Background(), cfg, podName)
+					break
+				}
+			}
+		} else {
+			a.copiedMsg = "No remote session selected"
+			return a, nil
+		}
 	}
 
-	podName := a.remoteSession.PodName
-	a.remoteSession.Stop()
-	a.remoteSession = nil
-	a.remoteContent = ""
-	a.remoteProgressSteps = nil
 	remote.RemoveSavedSession(podName)
 
 	// Remove virtual session from list
