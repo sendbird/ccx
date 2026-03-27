@@ -6,9 +6,45 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/remote"
 	"github.com/sendbird/ccx/internal/session"
 )
+
+// buildRemoteProgressView renders the progress panel for a remote session.
+func (a *App) buildRemoteProgressView(sess *remote.Session, currentStep string) string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
+	labelStyle := lipgloss.NewStyle().Foreground(colorDim)
+	valStyle := lipgloss.NewStyle().Foreground(colorAccent)
+
+	var sb strings.Builder
+
+	sb.WriteString(titleStyle.Render("Remote Session") + "\n\n")
+
+	// Cluster info
+	sb.WriteString(labelStyle.Render("  Context:   ") + valStyle.Render(sess.Config.Context) + "\n")
+	sb.WriteString(labelStyle.Render("  Namespace: ") + valStyle.Render(sess.Config.Namespace) + "\n")
+	sb.WriteString(labelStyle.Render("  Pod:       ") + valStyle.Render(sess.PodName) + "\n")
+	sb.WriteString(labelStyle.Render("  Image:     ") + valStyle.Render(sess.Config.Image) + "\n")
+	if sess.Config.LocalDir != "" {
+		sb.WriteString(labelStyle.Render("  Workdir:   ") + valStyle.Render(sess.Config.LocalDir) + "\n")
+	}
+	if sess.Config.SessionID != "" {
+		sb.WriteString(labelStyle.Render("  Session:   ") + valStyle.Render(sess.Config.SessionID[:min(12, len(sess.Config.SessionID))]) + "\n")
+	}
+	sb.WriteString("\n")
+
+	// Progress steps
+	sb.WriteString(titleStyle.Render("Progress") + "\n\n")
+	for _, step := range a.remoteProgressSteps {
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(colorAccent).Render("✓") + " " + step + "\n")
+	}
+	if currentStep != "" {
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Render("◉") + " " + currentStep + "\n")
+	}
+
+	return sb.String()
+}
 
 // remoteSetupMsg carries a setup progress step.
 type remoteSetupMsg struct {
@@ -65,7 +101,19 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 	a.rebuildSessionList()
 	a.sessionList.Select(0) // select the new virtual session
 
-	a.copiedMsg = "Remote starting..."
+	// Initialize progress tracking
+	a.remoteProgressSteps = nil
+	a.remoteContent = a.buildRemoteProgressView(sess, "Initializing...")
+	a.copiedMsg = fmt.Sprintf("Remote → %s/%s", cfg.Namespace, sess.PodName)
+
+	// Open preview showing progress
+	if !a.sessSplit.Show {
+		a.sessSplit.Show = true
+		contentH := max(a.height-3, 1)
+		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
+	}
+	a.sessSplit.CacheKey = ""
+	a.sessSplit.Preview.SetContent(a.remoteContent)
 
 	// Start reading setup steps
 	podName := sess.PodName
@@ -94,7 +142,17 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 	if msg.step.Done {
 		a.updateRemoteSessionStatus(msg.podName, "running")
 		a.remoteSetupSteps = nil // setup finished
+		a.remoteProgressSteps = append(a.remoteProgressSteps, "Claude started")
+		if a.remoteSession != nil {
+			a.remoteContent = a.buildRemoteProgressView(a.remoteSession, "")
+		}
 		a.copiedMsg = "Remote Claude running"
+		// Update preview
+		if a.sessSplit.Show {
+			if sess, ok := a.selectedSession(); ok && sess.IsRemote {
+				a.sessSplit.Preview.SetContent(a.remoteContent)
+			}
+		}
 		// Start streaming output for live preview
 		if a.remoteSession != nil && a.remoteSession.Stream != nil {
 			return a, a.readRemoteStream(msg.podName)
@@ -102,14 +160,27 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Progress update
+	// Progress update — accumulate completed steps
 	a.updateRemoteSessionStatus(msg.podName, msg.step.Message)
-	a.remoteContent = dimStyle.Render(msg.step.Message)
+	if len(a.remoteProgressSteps) > 0 {
+		// Previous step completed, add it to done list
+	}
+	a.remoteProgressSteps = append(a.remoteProgressSteps, msg.step.Message)
+	// Rebuild the progress view with all steps
+	if a.remoteSession != nil {
+		// Show last step as "current" (in progress), rest as completed
+		completed := a.remoteProgressSteps[:len(a.remoteProgressSteps)-1]
+		current := a.remoteProgressSteps[len(a.remoteProgressSteps)-1]
+		a.remoteProgressSteps = completed
+		a.remoteContent = a.buildRemoteProgressView(a.remoteSession, current)
+		a.remoteProgressSteps = append(completed, current) // restore for next iteration
+	}
 
 	// Update preview if this remote session is selected
 	if a.sessSplit.Show {
 		if sess, ok := a.selectedSession(); ok && sess.IsRemote && sess.RemotePodName == msg.podName {
 			a.sessSplit.Preview.SetContent(a.remoteContent)
+			a.sessSplit.CacheKey = "remote-progress" // prevent conversation loading
 		}
 	}
 
@@ -193,6 +264,7 @@ func (a *App) stopRemoteSession() (tea.Model, tea.Cmd) {
 	a.remoteSession.Stop()
 	a.remoteSession = nil
 	a.remoteContent = ""
+	a.remoteProgressSteps = nil
 
 	// Remove virtual session from list
 	var filtered []session.Session

@@ -261,9 +261,10 @@ type App struct {
 	memRemoveSrc    string // project path to remove from
 
 	// Remote execution
-	remoteSession    *remote.Session
-	remoteContent    string                      // status/progress text
-	remoteSetupSteps <-chan remote.SetupStep      // setup progress channel (nil after setup)
+	remoteSession       *remote.Session
+	remoteContent       string                 // rendered progress/stream content
+	remoteSetupSteps    <-chan remote.SetupStep // setup progress channel (nil after setup)
+	remoteProgressSteps []string               // completed setup step messages
 
 	// Worktree alignment
 	worktreeAlignActive bool
@@ -3420,6 +3421,13 @@ func (a *App) updateSessionPreview() tea.Cmd {
 	}
 	sess, ok := a.selectedSession()
 	if !ok {
+		return nil
+	}
+
+	// Remote sessions show their own progress/stream content
+	if sess.IsRemote && a.remoteContent != "" {
+		a.sessSplit.Preview.SetContent(a.remoteContent)
+		a.sessSplit.CacheKey = "remote:" + sess.ID
 		return nil
 	}
 
