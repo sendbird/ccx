@@ -378,6 +378,47 @@ func (a *App) reconnectRemoteSession() (tea.Model, tea.Cmd) {
 	})
 }
 
+// attachToRemoteSession opens interactive Claude on the remote pod.
+// Works for both active sessions and saved/restored ones.
+func (a *App) attachToRemoteSession(sess session.Session) (tea.Model, tea.Cmd) {
+	if !sess.IsRemote {
+		return a, nil
+	}
+
+	// Active session — use its config directly
+	if a.remoteSession != nil && a.remoteSession.PodName == sess.RemotePodName {
+		cmd := a.remoteSession.AttachCmd()
+		podName := a.remoteSession.PodName
+		return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
+			return remoteExecDoneMsg{podName: podName, err: err}
+		})
+	}
+
+	// Saved session — build exec command from saved config
+	for _, saved := range remote.LoadSavedSessions() {
+		if saved.PodName == sess.RemotePodName {
+			cfg := remote.Config{
+				Context:   saved.Context,
+				Namespace: saved.Namespace,
+				SessionID: saved.SessionID,
+				WorkDir:   saved.WorkDir,
+			}
+			args := []string{"claude"}
+			if cfg.SessionID != "" {
+				args = append(args, "--resume", cfg.SessionID)
+			}
+			cmd := remote.ExecInteractive(cfg, saved.PodName, args...)
+			podName := saved.PodName
+			return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return remoteExecDoneMsg{podName: podName, err: err}
+			})
+		}
+	}
+
+	a.copiedMsg = "Remote pod not found in saved sessions"
+	return a, nil
+}
+
 // executeCmdRemoteStart handles "remote:start [prompt...]".
 func (a *App) executeCmdRemoteStart(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)

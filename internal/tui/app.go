@@ -1385,6 +1385,10 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case km.Session.Open:
+		// Remote sessions: attach interactively
+		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
+			return a.attachToRemoteSession(sess)
+		}
 		// If conversation preview is focused, jump to the selected message
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 			return a.jumpToConvMessage()
@@ -1424,6 +1428,10 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.actionsSess = sess
 		return a, nil
 	case km.Session.Live:
+		// Remote sessions: attach interactively
+		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
+			return a.attachToRemoteSession(sess)
+		}
 		if !a.config.TmuxEnabled {
 			return a, nil
 		}
