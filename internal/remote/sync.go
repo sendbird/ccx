@@ -300,8 +300,5 @@ func walkDir(dir string) ([]string, error) {
 func encodeProjectPath(path string) string {
 	s := strings.ReplaceAll(path, "/", "-")
 	s = strings.ReplaceAll(s, ".", "-")
-	if len(s) > 0 && s[0] == '-' {
-		s = s[1:]
-	}
 	return s
 }
