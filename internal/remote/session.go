@@ -140,9 +140,9 @@ func BuildAttachCmd(cfg Config, podName string) *exec.Cmd {
 
 // buildClaudeCmd constructs the claude command string with all configured args.
 func buildClaudeCmd(cfg Config, streaming bool) string {
-	cmd := "claude"
+	cmd := "claude --dangerously-skip-permissions"
 	if streaming {
-		cmd += " --output-format stream-json"
+		cmd += " --output-format stream-json --verbose"
 	}
 	if cfg.SessionID != "" {
 		cmd += " --resume " + cfg.SessionID
