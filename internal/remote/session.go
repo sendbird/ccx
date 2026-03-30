@@ -114,10 +114,7 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 
 	// Start Claude with streaming output
 	steps <- SetupStep{Message: "Starting Claude..."}
-	claudeCmd := "claude --output-format stream-json"
-	if cfg.SessionID != "" {
-		claudeCmd += " --resume " + cfg.SessionID
-	}
+	claudeCmd := buildClaudeCmd(cfg, true)
 	claudeArgs := []string{"sh", "-c", "cd " + cfg.WorkDir + " && " + claudeCmd}
 
 	stream, err := StreamExec(ctx, cfg, s.PodName, claudeArgs...)
@@ -136,12 +133,24 @@ func (s *Session) AttachCmd() *exec.Cmd {
 
 // BuildAttachCmd creates a kubectl exec command for interactive Claude.
 func BuildAttachCmd(cfg Config, podName string) *exec.Cmd {
-	claudeCmd := "claude"
-	if cfg.SessionID != "" {
-		claudeCmd += " --resume " + cfg.SessionID
-	}
+	claudeCmd := buildClaudeCmd(cfg, false)
 	shellCmd := fmt.Sprintf("cd %s 2>/dev/null; %s", cfg.WorkDir, claudeCmd)
 	return ExecInteractive(cfg, podName, "sh", "-c", shellCmd)
+}
+
+// buildClaudeCmd constructs the claude command string with all configured args.
+func buildClaudeCmd(cfg Config, streaming bool) string {
+	cmd := "claude"
+	if streaming {
+		cmd += " --output-format stream-json"
+	}
+	if cfg.SessionID != "" {
+		cmd += " --resume " + cfg.SessionID
+	}
+	for _, arg := range cfg.ClaudeArgs {
+		cmd += " " + arg
+	}
+	return cmd
 }
 
 // Stop cancels and deletes the pod.

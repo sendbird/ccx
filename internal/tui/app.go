@@ -1430,9 +1430,15 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.actionsSess = sess
 		return a, nil
 	case km.Session.Live:
-		// Remote sessions: attach interactively
+		// Remote sessions: open/toggle streaming preview
 		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
-			return a.attachToRemoteSession(sess)
+			if !a.sessSplit.Show {
+				a.sessSplit.Show = true
+				contentH := max(a.height-3, 1)
+				a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
+			}
+			a.sessSplit.CacheKey = ""
+			return a, nil
 		}
 		if !a.config.TmuxEnabled {
 			return a, nil

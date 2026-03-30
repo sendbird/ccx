@@ -32,7 +32,8 @@ type Config struct {
 	EnvVars     map[string]string `yaml:"env_vars"`      // extra env vars to inject into pod
 	MirrorEnv   []string          `yaml:"mirror_env"`    // local env var names to mirror to pod
 	Labels      map[string]string `yaml:"labels"`        // extra pod labels
-	Tolerations []string          `yaml:"tolerations"`   // toleration keys (e.g. "sendbird.com/system")
+	Tolerations []string          `yaml:"tolerations"`   // toleration keys
+	ClaudeArgs  []string          `yaml:"claude_args"`   // extra args for claude CLI (e.g. --model, --allowedTools)
 	SessionID   string            `yaml:"-"`             // session ID to resume
 	SessionFile string            `yaml:"-"`             // local path to session JSONL
 }
