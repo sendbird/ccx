@@ -85,31 +85,43 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 		return fmt.Errorf("pod not ready: %w", err)
 	}
 
-	// Install prerequisites + Claude Code CLI
+	// Create non-root user (--dangerously-skip-permissions blocks root)
+	steps <- SetupStep{Message: "Creating user..."}
+	ExecInPod(ctx, cfg, s.PodName, "sh", "-c",
+		"useradd -m -s /bin/bash claude 2>/dev/null; "+
+			"mkdir -p /home/claude/.claude "+cfg.WorkDir+" && "+
+			"chown -R claude:claude /home/claude "+cfg.WorkDir+" && "+
+			// Write token to file so claude user can source it
+			"echo \"export CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN\" > /home/claude/.claude_env && "+
+			"chown claude:claude /home/claude/.claude_env && chmod 600 /home/claude/.claude_env")
+
+	// Install prerequisites + Claude Code CLI (as root)
 	steps <- SetupStep{Message: "Installing Node.js and Claude Code CLI..."}
-	installCmd := "apt-get update -qq && apt-get install -y -qq curl git > /dev/null 2>&1 && " +
+	installCmd := "apt-get update -qq && apt-get install -y -qq curl git sudo > /dev/null 2>&1 && " +
 		"curl -fsSL https://deb.nodesource.com/setup_22.x | bash - > /dev/null 2>&1 && " +
 		"apt-get install -y -qq nodejs > /dev/null 2>&1 && " +
-		"mkdir -p /root/.npm-global && npm install -g @anthropic-ai/claude-code 2>&1 | tail -3"
+		"npm install -g @anthropic-ai/claude-code 2>&1 | tail -3"
 	out, err := ExecInPod(ctx, cfg, s.PodName, "sh", "-c", installCmd)
 	if err != nil {
 		steps <- SetupStep{Message: fmt.Sprintf("Install issue: %s", string(out))}
 	}
 
-	// Sync config
+	// Sync config to claude user's home
 	steps <- SetupStep{Message: "Syncing config..."}
 	configTar, err := CreateConfigTarball(claudeDir, projectPath, cfg.WorkDir, cfg.SessionFile)
 	if err == nil && len(configTar) > 0 {
-		UploadTarball(ctx, cfg, s.PodName, "main", "/root", configTar)
+		UploadTarball(ctx, cfg, s.PodName, "main", "/home/claude", configTar)
+		// Fix ownership
+		ExecInPod(ctx, cfg, s.PodName, "chown", "-R", "claude:claude", "/home/claude/.claude", "/home/claude/.claude.json")
 	}
 
 	// Sync workdir
 	if cfg.LocalDir != "" {
 		steps <- SetupStep{Message: "Syncing workdir..."}
-		ExecInPod(ctx, cfg, s.PodName, "mkdir", "-p", cfg.WorkDir)
 		workdirTar, err := CreateWorkdirTarball(cfg.LocalDir)
 		if err == nil && len(workdirTar) > 0 {
 			UploadTarball(ctx, cfg, s.PodName, "main", cfg.WorkDir, workdirTar)
+			ExecInPod(ctx, cfg, s.PodName, "chown", "-R", "claude:claude", cfg.WorkDir)
 		}
 	}
 
@@ -123,9 +135,13 @@ func (s *Session) AttachCmd() *exec.Cmd {
 }
 
 // BuildAttachCmd creates a kubectl exec command for interactive Claude.
+// Runs as the non-root 'claude' user to allow --dangerously-skip-permissions.
+// Passes CLAUDE_CODE_OAUTH_TOKEN via env since su doesn't inherit it.
 func BuildAttachCmd(cfg Config, podName string) *exec.Cmd {
 	claudeCmd := BuildClaudeCmd(cfg, false)
-	shellCmd := fmt.Sprintf("cd %s 2>/dev/null; %s", cfg.WorkDir, claudeCmd)
+	shellCmd := fmt.Sprintf(
+		"su - claude -c '. ~/.claude_env; cd %s 2>/dev/null; %s'",
+		cfg.WorkDir, claudeCmd)
 	return ExecInteractive(cfg, podName, "sh", "-c", shellCmd)
 }
 
@@ -149,7 +165,7 @@ func BuildClaudeCmd(cfg Config, streaming bool) string {
 func FetchSessionJSONL(cfg Config, podName string) ([]byte, error) {
 	encoded := encodeProjectPath(cfg.WorkDir)
 	// Find the latest .jsonl file
-	findCmd := fmt.Sprintf("ls -t /root/.claude/projects/%s/*.jsonl 2>/dev/null | head -1", encoded)
+	findCmd := fmt.Sprintf("ls -t /home/claude/.claude/projects/%s/*.jsonl 2>/dev/null | head -1", encoded)
 	out, err := ExecInPod(context.Background(), cfg, podName, "sh", "-c", findCmd)
 	if err != nil || len(out) == 0 {
 		return nil, fmt.Errorf("no session file found on pod")

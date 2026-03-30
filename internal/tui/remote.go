@@ -317,9 +317,10 @@ func (a *App) openRemoteLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 	// Close existing pane proxy
 	a.closePaneProxy()
 
-	// Build the shell command for the hidden tmux window
+	// Build the shell command for the hidden tmux window (runs as non-root claude user)
 	claudeCmd := remote.BuildClaudeCmd(cfg, false)
-	kubectlCmd := fmt.Sprintf("kubectl --context=%s -n %s exec -it %s -- sh -c 'cd %s 2>/dev/null; %s'",
+	kubectlCmd := fmt.Sprintf(
+		"kubectl --context=%s -n %s exec -it %s -- su - claude -c '. ~/.claude_env; cd %s 2>/dev/null; %s'",
 		cfg.Context, cfg.Namespace, sess.RemotePodName, cfg.WorkDir, claudeCmd)
 
 	windowName := "ccx-remote-" + sess.RemotePodName[:min(8, len(sess.RemotePodName))]
