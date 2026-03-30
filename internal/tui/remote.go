@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/remote"
 	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tmux"
 )
 
 // injectRemoteSessions prepends virtual remote sessions into a session list.
@@ -275,6 +276,69 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 		return a, readSetupStep(msg.podName, a.remoteSetupSteps)
 	}
 	return a, nil
+}
+
+// openRemoteLivePreview spawns kubectl exec in a hidden tmux window and
+// uses the existing pane proxy to capture it — same as local live preview.
+func (a *App) openRemoteLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
+	if !tmux.InTmux() {
+		a.copiedMsg = "Requires tmux"
+		return a, nil
+	}
+
+	// Build the kubectl exec command
+	var cfg remote.Config
+	if a.remoteSession != nil && a.remoteSession.PodName == sess.RemotePodName {
+		cfg = a.remoteSession.Config
+	} else {
+		for _, saved := range remote.LoadSavedSessions() {
+			if saved.PodName == sess.RemotePodName {
+				cfg = remote.Config{
+					Context:   saved.Context,
+					Namespace: saved.Namespace,
+					SessionID: saved.SessionID,
+					WorkDir:   saved.WorkDir,
+				}
+				cfg = mergeRemoteConfig(a.remoteDefaults, cfg)
+				cfg = cfg.Defaults()
+				break
+			}
+		}
+	}
+	if cfg.Context == "" {
+		a.copiedMsg = "No config for remote session"
+		return a, nil
+	}
+
+	// Close existing pane proxy
+	a.closePaneProxy()
+
+	// Build the shell command for the hidden tmux window
+	claudeCmd := "claude --dangerously-skip-permissions"
+	for _, arg := range cfg.ClaudeArgs {
+		if arg != "--dangerously-skip-permissions" {
+			claudeCmd += " " + arg
+		}
+	}
+	if cfg.SessionID != "" {
+		claudeCmd += " --resume " + cfg.SessionID
+	}
+	kubectlCmd := fmt.Sprintf("kubectl --context=%s -n %s exec -it %s -- sh -c 'cd %s 2>/dev/null; %s'",
+		cfg.Context, cfg.Namespace, sess.RemotePodName, cfg.WorkDir, claudeCmd)
+
+	windowName := "ccx-remote-" + sess.RemotePodName[:8]
+	pane, err := tmux.SpawnHiddenWindow(windowName, kubectlCmd)
+	if err != nil {
+		a.copiedMsg = "Spawn failed: " + err.Error()
+		return a, nil
+	}
+
+	// Use existing pane proxy infrastructure
+	pane.Path = sess.ProjectPath
+	a.paneProxy = &paneProxyState{pane: pane, sessID: sess.ID, isShell: true}
+	a.toggleSessionPreviewMode(sessPreviewLive)
+	a.refreshLivePreview()
+	return a, liveTickCmd()
 }
 
 // remoteFetchMsg carries fetched JSONL data from the pod.

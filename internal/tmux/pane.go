@@ -278,6 +278,35 @@ func NewWindowClaudeNew(windowName, dir string) error {
 		"-n", windowName, cmd).Run()
 }
 
+// SpawnHiddenWindow creates a hidden tmux window running the given command
+// and returns the Pane reference for capture-pane. The window is created
+// with -d (detached) so it doesn't steal focus.
+func SpawnHiddenWindow(windowName, shellCmd string) (Pane, error) {
+	// Create window and get its pane ID
+	out, err := exec.Command("tmux", "new-window", "-d", "-P",
+		"-F", "#{session_name}:#{window_index}.#{pane_index}",
+		"-n", windowName, shellCmd).Output()
+	if err != nil {
+		return Pane{}, err
+	}
+	target := strings.TrimSpace(string(out))
+	parts := strings.SplitN(target, ":", 2)
+	if len(parts) != 2 {
+		return Pane{}, exec.ErrNotFound
+	}
+	sess := parts[0]
+	winPane := strings.SplitN(parts[1], ".", 2)
+	if len(winPane) != 2 {
+		return Pane{}, exec.ErrNotFound
+	}
+	return Pane{
+		Session:    sess,
+		Window:     winPane[0],
+		WindowName: windowName,
+		Pane:       winPane[1],
+	}, nil
+}
+
 // PaneCursorCol returns the cursor column position in the pane.
 func PaneCursorCol(p Pane) (int, error) {
 	target := p.Session + ":" + p.Window + "." + p.Pane

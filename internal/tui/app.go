@@ -1435,14 +1435,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.actionsSess = sess
 		return a, nil
 	case km.Session.Live:
-		// Remote sessions: fetch JSONL from pod and show in preview
+		// Remote sessions: spawn kubectl exec in hidden tmux pane, use as live preview
 		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
-			if !a.sessSplit.Show {
-				a.sessSplit.Show = true
-				contentH := max(a.height-3, 1)
-				a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
-			}
-			return a.fetchRemotePreview(sess)
+			return a.openRemoteLivePreview(sess)
 		}
 		if !a.config.TmuxEnabled {
 			return a, nil
