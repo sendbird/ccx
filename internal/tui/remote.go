@@ -125,6 +125,23 @@ type remoteExecDoneMsg struct {
 	err     error
 }
 
+// mergeRemoteConfig applies defaults from config.yaml onto a runtime config.
+// Runtime values take precedence over defaults.
+func mergeRemoteConfig(defaults, cfg remote.Config) remote.Config {
+	if cfg.Context == "" { cfg.Context = defaults.Context }
+	if cfg.Namespace == "" { cfg.Namespace = defaults.Namespace }
+	if cfg.Image == "" { cfg.Image = defaults.Image }
+	if cfg.WorkDir == "" { cfg.WorkDir = defaults.WorkDir }
+	if cfg.CPULimit == "" { cfg.CPULimit = defaults.CPULimit }
+	if cfg.MemoryLimit == "" { cfg.MemoryLimit = defaults.MemoryLimit }
+	if len(cfg.EnvVars) == 0 { cfg.EnvVars = defaults.EnvVars }
+	if len(cfg.MirrorEnv) == 0 { cfg.MirrorEnv = defaults.MirrorEnv }
+	if len(cfg.Labels) == 0 { cfg.Labels = defaults.Labels }
+	if len(cfg.Tolerations) == 0 { cfg.Tolerations = defaults.Tolerations }
+	if len(cfg.ClaudeArgs) == 0 { cfg.ClaudeArgs = defaults.ClaudeArgs }
+	return cfg
+}
+
 // --- Actions ---
 
 // startRemoteSession shows confirmation with context info.
@@ -134,6 +151,8 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	// Merge config.yaml remote defaults into the config
+	cfg = mergeRemoteConfig(a.remoteDefaults, cfg)
 	cfg = cfg.Defaults()
 
 	// Capture session info NOW (before user presses y and selection might change)

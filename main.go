@@ -68,7 +68,7 @@ func main() {
 	}
 
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
-	km, _, _ := tui.LoadCCXConfig(configPath)
+	km, _, _, _ := tui.LoadCCXConfig(configPath)
 
 	// Load cached sessions for instant first paint (~5ms).
 	// Falls back to live-only scan (~40ms) if no cache exists.

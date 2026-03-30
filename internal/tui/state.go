@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/sendbird/ccx/internal/remote"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,9 +34,10 @@ type KeymapsConfig struct {
 // CCXConfig is the unified config file containing keybindings + preferences.
 // Stored at ~/.config/ccx/config.yaml.
 type CCXConfig struct {
-	Keymaps     KeymapsConfig `yaml:"keymaps,omitempty"`
-	Preferences Preferences   `yaml:"preferences,omitempty"`
-	Shortcuts   Shortcuts     `yaml:"shortcuts,omitempty"`
+	Keymaps     KeymapsConfig  `yaml:"keymaps,omitempty"`
+	Preferences Preferences    `yaml:"preferences,omitempty"`
+	Shortcuts   Shortcuts      `yaml:"shortcuts,omitempty"`
+	Remote      remote.Config  `yaml:"remote,omitempty"`
 }
 
 // configPath returns the path to the unified config file.
@@ -46,19 +48,20 @@ func configPath() string {
 
 // LoadCCXConfig reads the unified config file.
 // Returns keymap, preferences, and shortcuts separately.
-func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts) {
+func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config) {
 	km := DefaultKeymap()
 	var prefs Preferences
 	sc := DefaultShortcuts()
+	var rc remote.Config
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return &km, prefs, sc
+		return &km, prefs, sc, rc
 	}
 
 	var cfg CCXConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return &km, prefs, sc
+		return &km, prefs, sc, rc
 	}
 
 	// Merge keymap overrides from keymaps section
@@ -73,7 +76,7 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts) {
 	// Merge shortcut overrides over defaults
 	mergeShortcuts(sc, cfg.Shortcuts)
 
-	return &km, cfg.Preferences, sc
+	return &km, cfg.Preferences, sc, cfg.Remote
 }
 
 // SavePreferences updates the preferences section in the config file,

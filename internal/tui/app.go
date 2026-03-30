@@ -266,6 +266,7 @@ type App struct {
 	remoteSetupSteps    <-chan remote.SetupStep // setup progress channel (nil after setup)
 	remoteProgressSteps []string               // completed setup step messages
 	remoteConfirmCfg    *remote.Config         // pending confirmation (nil = no pending)
+	remoteDefaults      remote.Config          // defaults from config.yaml
 	remoteJSONLFile     *os.File               // temp file accumulating streamed JSONL
 	remoteStreaming     bool                   // true once Claude output is streaming
 	deleteConfirmSess   *session.Session       // pending delete confirmation
@@ -475,9 +476,10 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
-	_, prefs, sc := LoadCCXConfig(configPath())
+	_, prefs, sc, rc := LoadCCXConfig(configPath())
 	a.applyPreferences(prefs)
 	a.shortcuts = sc
+	a.remoteDefaults = rc
 
 	// Cleanup stale remote sessions, then restore remaining as virtual items
 	cleanupStaleRemoteSessions()
