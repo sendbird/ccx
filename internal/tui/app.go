@@ -269,7 +269,9 @@ type App struct {
 	remoteDefaults      remote.Config          // defaults from config.yaml
 	remoteJSONLFile     *os.File               // temp file accumulating streamed JSONL
 	remoteStreaming     bool                   // true once Claude output is streaming
-	deleteConfirmSess   *session.Session       // pending delete confirmation
+	// Generic confirm modal
+	confirmMsg    string                      // message to show (empty = no modal)
+	confirmAction func() (tea.Model, tea.Cmd) // action to run on "y"
 
 	// Worktree alignment
 	worktreeAlignActive bool
@@ -768,25 +770,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.handleLiveInputKey(msg.String())
 		}
 
-		// Confirmation prompts (y/n)
-		if a.deleteConfirmSess != nil {
-			sess := *a.deleteConfirmSess
-			a.deleteConfirmSess = nil
+		// Confirm modal (y/n)
+		if a.confirmMsg != "" {
+			action := a.confirmAction
+			a.confirmMsg = ""
+			a.confirmAction = nil
 			if msg.String() == "y" || msg.String() == "Y" {
-				return a.deleteSession(sess)
+				if action != nil {
+					return action()
+				}
 			}
-			a.copiedMsg = "Cancelled"
 			return a, nil
-		}
-		if a.remoteConfirmCfg != nil {
-			switch msg.String() {
-			case "y", "Y":
-				return a.confirmRemoteStart()
-			default:
-				a.remoteConfirmCfg = nil
-				a.copiedMsg = "Cancelled"
-				return a, nil
-			}
 		}
 
 		if a.isFiltering() {
@@ -881,7 +875,10 @@ func (a *App) View() string {
 			break
 		}
 		content = a.renderSessionSplit()
-		if a.sessConvFullText != "" {
+		if a.confirmMsg != "" {
+			content = renderConfirmModal(content, a.confirmMsg, a.width, ContentHeight(a.height))
+			help = formatHelp("y:confirm  any:cancel")
+		} else if a.sessConvFullText != "" {
 			content = renderFullTextModal(content, a.sessConvFullText, a.sessConvFullScroll, a.width, ContentHeight(a.height))
 			help = formatHelp("↑↓:scroll pgup/pgdn:page esc/c:close")
 		} else if a.showHelp {
@@ -2153,8 +2150,9 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 			a.copiedMsg = "Cannot delete live session"
 			return a, nil
 		}
-		a.deleteConfirmSess = &sess
-		a.copiedMsg = fmt.Sprintf("Delete %s? (y/n)", sess.ShortID)
+		sessCopy := sess
+		a.confirmMsg = fmt.Sprintf("Delete session %s?", sess.ShortID)
+		a.confirmAction = func() (tea.Model, tea.Cmd) { return a.deleteSession(sessCopy) }
 		return a, nil
 	case akm.Resume:
 		return a.resumeSession(sess)

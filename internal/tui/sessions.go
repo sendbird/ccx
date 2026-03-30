@@ -1057,6 +1057,30 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 
 // renderFullTextModal renders a scrollable modal showing the full text of a
 // conversation entry, overlaid on bg.
+// renderConfirmModal shows a centered y/n confirmation dialog.
+func renderConfirmModal(bg, message string, screenW, screenH int) string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
+	hintStyle := lipgloss.NewStyle().Foreground(colorDim)
+
+	body := titleStyle.Render("  "+message) + "\n\n" +
+		"  " + lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("y") + hintStyle.Render(": confirm") +
+		"    " + hintStyle.Render("any other key: cancel")
+
+	modalW := min(len(message)+10, screenW-10)
+	if modalW < 30 {
+		modalW = 30
+	}
+
+	modal := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorPrimary).
+		Width(modalW).
+		Padding(1, 1).
+		Render(body)
+
+	return overlayCenter(bg, modal, screenW, screenH)
+}
+
 func renderFullTextModal(bg, text string, scroll, screenW, screenH int) string {
 	// Modal size: 80% of screen, capped
 	modalW := min(screenW*4/5, screenW-6)

@@ -160,8 +160,12 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	a.remoteConfirmCfg = &cfg
-	a.copiedMsg = fmt.Sprintf("Start remote on %s/%s? (y/n)", cfg.Context, cfg.Namespace)
+	cfgCopy := cfg
+	a.confirmMsg = fmt.Sprintf("Start remote on %s/%s?", cfg.Context, cfg.Namespace)
+	a.confirmAction = func() (tea.Model, tea.Cmd) {
+		a.remoteConfirmCfg = &cfgCopy
+		return a.confirmRemoteStart()
+	}
 	return a, nil
 }
 
