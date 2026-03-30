@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/sendbird/ccx/internal/tmux"
@@ -112,17 +113,7 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 		}
 	}
 
-	// Start Claude with streaming output
-	steps <- SetupStep{Message: "Starting Claude..."}
-	claudeCmd := buildClaudeCmd(cfg, true)
-	claudeArgs := []string{"sh", "-c", "cd " + cfg.WorkDir + " && " + claudeCmd}
-
-	stream, err := StreamExec(ctx, cfg, s.PodName, claudeArgs...)
-	if err != nil {
-		return fmt.Errorf("start claude: %w", err)
-	}
-	s.Stream = stream
-
+	steps <- SetupStep{Message: "Ready — use Enter to attach, L to preview"}
 	return nil
 }
 
@@ -151,6 +142,28 @@ func buildClaudeCmd(cfg Config, streaming bool) string {
 		cmd += " " + arg
 	}
 	return cmd
+}
+
+// FetchSessionJSONL downloads the latest session JSONL from the pod.
+// It finds the most recent .jsonl file under the remote workdir's project path.
+func FetchSessionJSONL(cfg Config, podName string) ([]byte, error) {
+	encoded := encodeProjectPath(cfg.WorkDir)
+	// Find the latest .jsonl file
+	findCmd := fmt.Sprintf("ls -t /root/.claude/projects/%s/*.jsonl 2>/dev/null | head -1", encoded)
+	out, err := ExecInPod(context.Background(), cfg, podName, "sh", "-c", findCmd)
+	if err != nil || len(out) == 0 {
+		return nil, fmt.Errorf("no session file found on pod")
+	}
+	jsonlPath := strings.TrimSpace(string(out))
+	if jsonlPath == "" {
+		return nil, fmt.Errorf("no session file found on pod")
+	}
+	// Cat the file
+	data, err := ExecInPod(context.Background(), cfg, podName, "cat", jsonlPath)
+	if err != nil {
+		return nil, fmt.Errorf("fetch session: %w", err)
+	}
+	return data, nil
 }
 
 // Stop cancels and deletes the pod.

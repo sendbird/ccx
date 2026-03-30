@@ -113,13 +113,6 @@ type remoteSetupMsg struct {
 	step    remote.SetupStep
 }
 
-type remoteStreamMsg struct {
-	podName string
-	line    []byte
-	err     error
-	done    bool
-}
-
 type remoteExecDoneMsg struct {
 	podName string
 	err     error
@@ -257,30 +250,14 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if msg.step.Done {
-		a.updateRemoteSessionStatus(msg.podName, "running")
+		a.updateRemoteSessionStatus(msg.podName, "ready")
 		a.remoteSetupSteps = nil
-		a.remoteProgressSteps = append(a.remoteProgressSteps, "Claude started — streaming output")
-
-		// Create temp JSONL file for preview modes
-		tmpFile, err := os.CreateTemp("", "ccx-remote-*.jsonl")
-		if err == nil {
-			a.remoteJSONLFile = tmpFile
-			// Update virtual session's FilePath so preview modes can read it
-			for i := range a.sessions {
-				if a.sessions[i].IsRemote && a.sessions[i].RemotePodName == msg.podName {
-					a.sessions[i].FilePath = tmpFile.Name()
-					break
-				}
-			}
+		a.remoteProgressSteps = append(a.remoteProgressSteps, "Ready")
+		if a.remoteSession != nil {
+			a.remoteContent = a.buildRemoteProgressView(a.remoteSession, "")
 		}
-
-		a.remoteStreaming = true
-		a.sessSplit.CacheKey = "" // trigger preview refresh
-		a.copiedMsg = "Remote Claude running — L:attach, tab:preview modes"
-
-		if a.remoteSession != nil && a.remoteSession.Stream != nil {
-			return a, a.readRemoteStream(msg.podName)
-		}
+		a.updateRemotePreview(msg.podName)
+		a.copiedMsg = "Remote ready — Enter:attach  L:fetch preview"
 		return a, nil
 	}
 
@@ -300,48 +277,82 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a *App) readRemoteStream(podName string) tea.Cmd {
-	if a.remoteSession == nil || a.remoteSession.Stream == nil {
-		return nil
-	}
-	stream := a.remoteSession.Stream
-	return func() tea.Msg {
-		line, ok := <-stream
-		if !ok {
-			return remoteStreamMsg{podName: podName, done: true}
-		}
-		return remoteStreamMsg{podName: podName, line: line.Line, err: line.Err, done: line.Done}
-	}
+// remoteFetchMsg carries fetched JSONL data from the pod.
+type remoteFetchMsg struct {
+	podName string
+	data    []byte
+	err     error
 }
 
-func (a *App) handleRemoteStream(msg remoteStreamMsg) (tea.Model, tea.Cmd) {
-	if msg.done || msg.err != nil {
-		a.updateRemoteSessionStatus(msg.podName, "stopped")
-		a.remoteStreaming = false
+// fetchRemotePreview triggers an async download of the session JSONL from the pod.
+func (a *App) fetchRemotePreview(sess session.Session) (tea.Model, tea.Cmd) {
+	if !sess.IsRemote {
 		return a, nil
 	}
 
-	line := msg.line
-	if len(line) == 0 {
-		return a, a.readRemoteStream(msg.podName)
+	// Find config for this pod
+	var cfg remote.Config
+	if a.remoteSession != nil && a.remoteSession.PodName == sess.RemotePodName {
+		cfg = a.remoteSession.Config
+	} else {
+		for _, saved := range remote.LoadSavedSessions() {
+			if saved.PodName == sess.RemotePodName {
+				cfg = remote.Config{
+					Context:   saved.Context,
+					Namespace: saved.Namespace,
+					WorkDir:   saved.WorkDir,
+				}
+				break
+			}
+		}
+	}
+	if cfg.Context == "" {
+		a.copiedMsg = "No config found for remote session"
+		return a, nil
 	}
 
-	// Write to temp JSONL file so all preview modes work
+	podName := sess.RemotePodName
+	a.copiedMsg = "Fetching session from pod..."
+	return a, func() tea.Msg {
+		data, err := remote.FetchSessionJSONL(cfg, podName)
+		return remoteFetchMsg{podName: podName, data: data, err: err}
+	}
+}
+
+// handleRemoteFetch processes the fetched JSONL and enables normal preview.
+func (a *App) handleRemoteFetch(msg remoteFetchMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		a.copiedMsg = "Fetch failed: " + msg.err.Error()
+		return a, nil
+	}
+
+	// Write to temp file
 	if a.remoteJSONLFile != nil {
-		a.remoteJSONLFile.Write(line)
-		a.remoteJSONLFile.Write([]byte("\n"))
-		a.remoteJSONLFile.Sync()
+		a.remoteJSONLFile.Close()
+		os.Remove(a.remoteJSONLFile.Name())
 	}
+	tmpFile, err := os.CreateTemp("", "ccx-remote-*.jsonl")
+	if err != nil {
+		a.copiedMsg = "Temp file failed"
+		return a, nil
+	}
+	tmpFile.Write(msg.data)
+	tmpFile.Sync()
+	a.remoteJSONLFile = tmpFile
 
-	// Invalidate conversation cache to pick up new data
-	if a.sessSplit.Show {
-		if sess, ok := a.selectedSession(); ok && sess.IsRemote && sess.RemotePodName == msg.podName {
-			a.sessSplit.CacheKey = ""
-			a.sessConvCacheID = "" // force conversation reload
+	// Update virtual session's FilePath
+	for i := range a.sessions {
+		if a.sessions[i].IsRemote && a.sessions[i].RemotePodName == msg.podName {
+			a.sessions[i].FilePath = tmpFile.Name()
+			break
 		}
 	}
 
-	return a, a.readRemoteStream(msg.podName)
+	a.remoteStreaming = true
+	a.sessSplit.CacheKey = ""
+	a.sessConvCacheID = ""
+	a.copiedMsg = fmt.Sprintf("Loaded %d bytes from pod", len(msg.data))
+	return a, nil
 }
 
 func (a *App) handleRemoteExecDone(msg remoteExecDoneMsg) (tea.Model, tea.Cmd) {

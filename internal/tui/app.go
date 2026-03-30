@@ -585,6 +585,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case remoteSetupMsg:
 		return a.handleRemoteSetup(msg)
 
+	case remoteFetchMsg:
+		return a.handleRemoteFetch(msg)
+
 	case remoteExecDoneMsg:
 		return a.handleRemoteExecDone(msg)
 
@@ -1432,15 +1435,14 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.actionsSess = sess
 		return a, nil
 	case km.Session.Live:
-		// Remote sessions: open/toggle streaming preview
+		// Remote sessions: fetch JSONL from pod and show in preview
 		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
 			if !a.sessSplit.Show {
 				a.sessSplit.Show = true
 				contentH := max(a.height-3, 1)
 				a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
 			}
-			a.sessSplit.CacheKey = ""
-			return a, nil
+			return a.fetchRemotePreview(sess)
 		}
 		if !a.config.TmuxEnabled {
 			return a, nil
