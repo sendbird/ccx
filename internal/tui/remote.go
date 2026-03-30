@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -239,12 +240,25 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 	if msg.step.Done {
 		a.updateRemoteSessionStatus(msg.podName, "running")
 		a.remoteSetupSteps = nil
-		a.remoteProgressSteps = append(a.remoteProgressSteps, "Claude started")
-		if a.remoteSession != nil {
-			a.remoteContent = a.buildRemoteProgressView(a.remoteSession, "")
+		a.remoteProgressSteps = append(a.remoteProgressSteps, "Claude started — streaming output")
+
+		// Create temp JSONL file for preview modes
+		tmpFile, err := os.CreateTemp("", "ccx-remote-*.jsonl")
+		if err == nil {
+			a.remoteJSONLFile = tmpFile
+			// Update virtual session's FilePath so preview modes can read it
+			for i := range a.sessions {
+				if a.sessions[i].IsRemote && a.sessions[i].RemotePodName == msg.podName {
+					a.sessions[i].FilePath = tmpFile.Name()
+					break
+				}
+			}
 		}
-		a.copiedMsg = "Remote Claude running — :remote:attach to connect"
-		a.updateRemotePreview(msg.podName)
+
+		a.remoteStreaming = true
+		a.sessSplit.CacheKey = "" // trigger preview refresh
+		a.copiedMsg = "Remote Claude running — L:attach, tab:preview modes"
+
 		if a.remoteSession != nil && a.remoteSession.Stream != nil {
 			return a, a.readRemoteStream(msg.podName)
 		}
@@ -284,18 +298,30 @@ func (a *App) readRemoteStream(podName string) tea.Cmd {
 func (a *App) handleRemoteStream(msg remoteStreamMsg) (tea.Model, tea.Cmd) {
 	if msg.done || msg.err != nil {
 		a.updateRemoteSessionStatus(msg.podName, "stopped")
+		a.remoteStreaming = false
 		return a, nil
 	}
 
-	line := strings.TrimSpace(string(msg.line))
-	if line != "" {
-		if a.remoteContent == "" || strings.HasPrefix(a.remoteContent, "\x1b") {
-			a.remoteContent = line
-		} else {
-			a.remoteContent += "\n" + line
+	line := msg.line
+	if len(line) == 0 {
+		return a, a.readRemoteStream(msg.podName)
+	}
+
+	// Write to temp JSONL file so all preview modes work
+	if a.remoteJSONLFile != nil {
+		a.remoteJSONLFile.Write(line)
+		a.remoteJSONLFile.Write([]byte("\n"))
+		a.remoteJSONLFile.Sync()
+	}
+
+	// Invalidate conversation cache to pick up new data
+	if a.sessSplit.Show {
+		if sess, ok := a.selectedSession(); ok && sess.IsRemote && sess.RemotePodName == msg.podName {
+			a.sessSplit.CacheKey = ""
+			a.sessConvCacheID = "" // force conversation reload
 		}
 	}
-	a.updateRemotePreview(msg.podName)
+
 	return a, a.readRemoteStream(msg.podName)
 }
 
@@ -338,6 +364,13 @@ func (a *App) stopRemoteSession() (tea.Model, tea.Cmd) {
 		a.remoteSession = nil
 		a.remoteContent = ""
 		a.remoteProgressSteps = nil
+		a.remoteStreaming = false
+		if a.remoteJSONLFile != nil {
+			name := a.remoteJSONLFile.Name()
+			a.remoteJSONLFile.Close()
+			os.Remove(name)
+			a.remoteJSONLFile = nil
+		}
 	} else if sess, ok := a.selectedSession(); ok && sess.IsRemote {
 		podName = sess.RemotePodName
 		for _, saved := range remote.LoadSavedSessions() {

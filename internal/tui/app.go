@@ -262,10 +262,12 @@ type App struct {
 
 	// Remote execution
 	remoteSession       *remote.Session
-	remoteContent       string                 // rendered progress/stream content
+	remoteContent       string                 // progress view content (during setup)
 	remoteSetupSteps    <-chan remote.SetupStep // setup progress channel (nil after setup)
 	remoteProgressSteps []string               // completed setup step messages
 	remoteConfirmCfg    *remote.Config         // pending confirmation (nil = no pending)
+	remoteJSONLFile     *os.File               // temp file accumulating streamed JSONL
+	remoteStreaming     bool                   // true once Claude output is streaming
 	deleteConfirmSess   *session.Session       // pending delete confirmation
 
 	// Worktree alignment
@@ -3398,14 +3400,14 @@ func (a *App) renderSessionSplit() string {
 		a.sessSplit.Preview.Height = max(contentH, 1)
 
 		// Re-render at new size without reloading data or resetting cursor
-		// Skip for live and remote — they manage their own content
-		isRemoteSess := false
-		if selSess, selOk := a.selectedSession(); selOk {
-			isRemoteSess = selSess.IsRemote
+		// Skip for live and non-streaming remote setup
+		isRemoteSetup := false
+		if selSess, selOk := a.selectedSession(); selOk && selSess.IsRemote && !a.remoteStreaming {
+			isRemoteSetup = true
 		}
-		if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 && !isRemoteSess {
+		if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 && !isRemoteSetup {
 			a.refreshConvPreview()
-		} else if a.sessPreviewMode != sessPreviewLive && !isRemoteSess {
+		} else if a.sessPreviewMode != sessPreviewLive && !isRemoteSetup {
 			a.sessSplit.CacheKey = ""
 			_ = a.updateSessionPreview()
 			if a.sessPreviewMode == sessPreviewLive {
@@ -3505,9 +3507,9 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		return nil
 	}
 
-	// Force remote preview mode for remote sessions
+	// Force remote preview mode during setup (not yet streaming)
 	previewMode := a.sessPreviewMode
-	if sess.IsRemote {
+	if sess.IsRemote && !a.remoteStreaming {
 		previewMode = sessPreviewRemote
 	}
 
