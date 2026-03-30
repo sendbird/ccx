@@ -314,19 +314,12 @@ func (a *App) openRemoteLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 	a.closePaneProxy()
 
 	// Build the shell command for the hidden tmux window
-	claudeCmd := "claude --dangerously-skip-permissions"
-	for _, arg := range cfg.ClaudeArgs {
-		if arg != "--dangerously-skip-permissions" {
-			claudeCmd += " " + arg
-		}
-	}
-	if cfg.SessionID != "" {
-		claudeCmd += " --resume " + cfg.SessionID
-	}
+	claudeCmd := remote.BuildClaudeCmd(cfg, false)
 	kubectlCmd := fmt.Sprintf("kubectl --context=%s -n %s exec -it %s -- sh -c 'cd %s 2>/dev/null; %s'",
 		cfg.Context, cfg.Namespace, sess.RemotePodName, cfg.WorkDir, claudeCmd)
 
-	windowName := "ccx-remote-" + sess.RemotePodName[:8]
+	windowName := "ccx-remote-" + sess.RemotePodName[:min(8, len(sess.RemotePodName))]
+	a.copiedMsg = fmt.Sprintf("Spawning live → %s/%s...", cfg.Context, sess.RemotePodName)
 	pane, err := tmux.SpawnHiddenWindow(windowName, kubectlCmd)
 	if err != nil {
 		a.copiedMsg = "Spawn failed: " + err.Error()

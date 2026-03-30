@@ -124,13 +124,13 @@ func (s *Session) AttachCmd() *exec.Cmd {
 
 // BuildAttachCmd creates a kubectl exec command for interactive Claude.
 func BuildAttachCmd(cfg Config, podName string) *exec.Cmd {
-	claudeCmd := buildClaudeCmd(cfg, false)
+	claudeCmd := BuildClaudeCmd(cfg, false)
 	shellCmd := fmt.Sprintf("cd %s 2>/dev/null; %s", cfg.WorkDir, claudeCmd)
 	return ExecInteractive(cfg, podName, "sh", "-c", shellCmd)
 }
 
-// buildClaudeCmd constructs the claude command string with all configured args.
-func buildClaudeCmd(cfg Config, streaming bool) string {
+// BuildClaudeCmd constructs the claude command string with all configured args.
+func BuildClaudeCmd(cfg Config, streaming bool) string {
 	cmd := "claude"
 	if streaming {
 		cmd += " --output-format stream-json --verbose"
