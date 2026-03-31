@@ -140,7 +140,7 @@ func (s *Session) AttachCmd() *exec.Cmd {
 func BuildAttachCmd(cfg Config, podName string) *exec.Cmd {
 	claudeCmd := BuildClaudeCmd(cfg, false)
 	shellCmd := fmt.Sprintf(
-		"su - claude -c '. ~/.claude_env; cd %s 2>/dev/null; %s'",
+		"su - claude -c 'export PATH=/usr/local/bin:/usr/bin:/bin:$PATH; . ~/.claude_env; cd %s 2>/dev/null; %s'",
 		cfg.WorkDir, claudeCmd)
 	return ExecInteractive(cfg, podName, "sh", "-c", shellCmd)
 }
