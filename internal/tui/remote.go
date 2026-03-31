@@ -249,8 +249,15 @@ func readSetupStep(podName string, steps <-chan remote.SetupStep) tea.Cmd {
 
 func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 	if msg.step.Err != nil {
-		a.copiedMsg = "Remote failed: " + msg.step.Err.Error()
-		a.updateRemoteSessionStatus(msg.podName, "failed")
+		errMsg := msg.step.Err.Error()
+		a.copiedMsg = "Remote failed: " + errMsg
+		a.updateRemoteSessionStatus(msg.podName, "failed: "+errMsg)
+		// Show error in progress view
+		a.remoteProgressSteps = append(a.remoteProgressSteps, "FAILED: "+errMsg)
+		if a.remoteSession != nil {
+			a.remoteContent = a.buildRemoteProgressView(a.remoteSession, "")
+		}
+		a.updateRemotePreview(msg.podName)
 		return a, nil
 	}
 
