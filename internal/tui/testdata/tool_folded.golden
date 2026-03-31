@@ -3,7 +3,7 @@ ASSISTANT  2025-06-01 12:00:00
 
 Let me check that file.
 
-Tool: Read  {"file_path":"/tmp/test.go"}
+Tool: Read  /tmp/test.go
 Result: package main
                     
 func main() {}      

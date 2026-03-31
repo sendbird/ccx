@@ -194,26 +194,180 @@ func isWriteTool(name string) bool {
 	return name == "Write"
 }
 
-// toolFoldedSummary returns a diff-aware folded summary for Edit/Write tool_use blocks.
-// Returns empty string for other tool types.
-func toolFoldedSummary(block session.ContentBlock) string {
-	if isEditTool(block.ToolName) {
-		return formatEditFolded(block.ToolInput)
+// --- Bash pretty-print ---
+
+type bashInput struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+	Timeout     int    `json:"timeout"`
+}
+
+var bashCmdStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true) // yellow
+
+func formatBashFolded(toolInput string) string {
+	var b bashInput
+	if json.Unmarshal([]byte(toolInput), &b) != nil || b.Command == "" {
+		return ""
 	}
-	if isWriteTool(block.ToolName) {
+	cmd := b.Command
+	if len(cmd) > 80 {
+		cmd = cmd[:77] + "..."
+	}
+	// Replace newlines with semicolons for compact display
+	cmd = strings.ReplaceAll(cmd, "\n", "; ")
+	s := bashCmdStyle.Render("$ " + cmd)
+	if b.Description != "" {
+		s = dimStyle.Render(b.Description+"  ") + s
+	}
+	return s
+}
+
+func formatBashExpanded(toolInput string, width int) string {
+	var b bashInput
+	if json.Unmarshal([]byte(toolInput), &b) != nil || b.Command == "" {
+		return ""
+	}
+	var buf strings.Builder
+	if b.Description != "" {
+		buf.WriteString(dimStyle.Render("  # "+b.Description) + "\n")
+	}
+	for _, line := range splitLines(b.Command) {
+		buf.WriteString(bashCmdStyle.Render("  $ "+line) + "\n")
+	}
+	return buf.String()
+}
+
+// --- Read pretty-print ---
+
+type readInput struct {
+	FilePath string `json:"file_path"`
+	Offset   int    `json:"offset"`
+	Limit    int    `json:"limit"`
+}
+
+func formatReadFolded(toolInput string) string {
+	var r readInput
+	if json.Unmarshal([]byte(toolInput), &r) != nil || r.FilePath == "" {
+		return ""
+	}
+	shortPath := session.ShortenPath(r.FilePath, homeDir())
+	s := shortPath
+	if r.Offset > 0 || r.Limit > 0 {
+		if r.Offset > 0 && r.Limit > 0 {
+			s += dimStyle.Render(fmt.Sprintf(" L%d-%d", r.Offset, r.Offset+r.Limit))
+		} else if r.Limit > 0 {
+			s += dimStyle.Render(fmt.Sprintf(" L1-%d", r.Limit))
+		}
+	}
+	return s
+}
+
+// --- Grep pretty-print ---
+
+type grepInput struct {
+	Pattern    string `json:"pattern"`
+	Path       string `json:"path"`
+	Glob       string `json:"glob"`
+	OutputMode string `json:"output_mode"`
+}
+
+var grepPatStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F472B6")).Bold(true) // pink
+
+func formatGrepFolded(toolInput string) string {
+	var g grepInput
+	if json.Unmarshal([]byte(toolInput), &g) != nil || g.Pattern == "" {
+		return ""
+	}
+	s := grepPatStyle.Render("/"+g.Pattern+"/")
+	if g.Path != "" {
+		s += " " + dimStyle.Render(session.ShortenPath(g.Path, homeDir()))
+	}
+	if g.Glob != "" {
+		s += " " + dimStyle.Render(g.Glob)
+	}
+	return s
+}
+
+// --- Glob pretty-print ---
+
+type globInput struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path"`
+}
+
+func formatGlobFolded(toolInput string) string {
+	var g globInput
+	if json.Unmarshal([]byte(toolInput), &g) != nil || g.Pattern == "" {
+		return ""
+	}
+	s := grepPatStyle.Render(g.Pattern)
+	if g.Path != "" {
+		s += " " + dimStyle.Render(session.ShortenPath(g.Path, homeDir()))
+	}
+	return s
+}
+
+// --- Agent pretty-print ---
+
+type agentInput struct {
+	Description  string `json:"description"`
+	SubagentType string `json:"subagent_type"`
+	Prompt       string `json:"prompt"`
+}
+
+func formatAgentFolded(toolInput string) string {
+	var a agentInput
+	if json.Unmarshal([]byte(toolInput), &a) != nil {
+		return ""
+	}
+	parts := []string{}
+	if a.SubagentType != "" {
+		parts = append(parts, lipgloss.NewStyle().Foreground(colorAccent).Render(a.SubagentType))
+	}
+	if a.Description != "" {
+		parts = append(parts, a.Description)
+	} else if a.Prompt != "" {
+		prompt := a.Prompt
+		if len(prompt) > 60 {
+			prompt = prompt[:57] + "..."
+		}
+		parts = append(parts, dimStyle.Render(prompt))
+	}
+	return strings.Join(parts, "  ")
+}
+
+// --- Dispatch ---
+
+// toolFoldedSummary returns a pretty folded summary for tool_use blocks.
+func toolFoldedSummary(block session.ContentBlock) string {
+	switch {
+	case isEditTool(block.ToolName):
+		return formatEditFolded(block.ToolInput)
+	case isWriteTool(block.ToolName):
 		return formatWriteFolded(block.ToolInput)
+	case block.ToolName == "Bash":
+		return formatBashFolded(block.ToolInput)
+	case block.ToolName == "Read":
+		return formatReadFolded(block.ToolInput)
+	case block.ToolName == "Grep":
+		return formatGrepFolded(block.ToolInput)
+	case block.ToolName == "Glob":
+		return formatGlobFolded(block.ToolInput)
+	case block.ToolName == "Agent":
+		return formatAgentFolded(block.ToolInput)
 	}
 	return ""
 }
 
-// toolDiffOutput returns diff-formatted output for Edit/Write tool_use blocks.
-// Returns empty string for other tool types.
+// toolDiffOutput returns pretty-printed output for tool_use blocks.
 func toolDiffOutput(block session.ContentBlock, width int) string {
-	if isEditTool(block.ToolName) {
+	switch {
+	case isEditTool(block.ToolName):
 		return formatEditDiff(block.ToolInput, width)
-	}
-	if isWriteTool(block.ToolName) {
+	case isWriteTool(block.ToolName):
 		return formatWriteDiff(block.ToolInput, width)
+	case block.ToolName == "Bash":
+		return formatBashExpanded(block.ToolInput, width)
 	}
 	return ""
 }

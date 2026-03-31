@@ -127,9 +127,19 @@ func TestToolFoldedSummary(t *testing.T) {
 			wantNon: true,
 		},
 		{
-			name:    "Read tool (no diff)",
+			name:    "Read tool",
 			block:   session.ContentBlock{ToolName: "Read", ToolInput: `{"file_path":"/tmp/t.go"}`},
-			wantNon: false,
+			wantNon: true,
+		},
+		{
+			name:    "Bash tool",
+			block:   session.ContentBlock{ToolName: "Bash", ToolInput: `{"command":"ls"}`},
+			wantNon: true,
+		},
+		{
+			name:    "Grep tool",
+			block:   session.ContentBlock{ToolName: "Grep", ToolInput: `{"pattern":"TODO","path":"/tmp"}`},
+			wantNon: true,
 		},
 	}
 
@@ -163,9 +173,9 @@ func TestToolDiffOutput(t *testing.T) {
 			wantNon: true,
 		},
 		{
-			name:    "Bash tool (no diff)",
+			name:    "Bash tool",
 			block:   session.ContentBlock{ToolName: "Bash", ToolInput: `{"command":"ls"}`},
-			wantNon: false,
+			wantNon: true,
 		},
 	}
 
