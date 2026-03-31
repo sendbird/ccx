@@ -30,8 +30,7 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 	envVars := []map[string]string{
 		{"name": "CLAUDE_CODE_OAUTH_TOKEN", "value": oauthToken},
 		{"name": "HOME", "value": "/root"},
-		{"name": "PATH", "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.npm-global/bin"},
-		{"name": "NPM_CONFIG_PREFIX", "value": "/root/.npm-global"},
+		{"name": "PATH", "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 	}
 	for k, v := range cfg.EnvVars {
 		envVars = append(envVars, map[string]string{"name": k, "value": v})

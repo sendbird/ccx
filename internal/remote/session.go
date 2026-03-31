@@ -97,7 +97,7 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 
 	// Install prerequisites + Claude Code CLI (as root)
 	steps <- SetupStep{Message: "Installing Node.js and Claude Code CLI..."}
-	installCmd := "apt-get update -qq && apt-get install -y -qq curl git sudo > /dev/null 2>&1 && " +
+	installCmd := "apt-get update -qq && apt-get install -y -qq curl git > /dev/null 2>&1 && " +
 		"curl -fsSL https://deb.nodesource.com/setup_22.x | bash - > /dev/null 2>&1 && " +
 		"apt-get install -y -qq nodejs > /dev/null 2>&1 && " +
 		"npm install -g @anthropic-ai/claude-code 2>&1 | tail -3"
