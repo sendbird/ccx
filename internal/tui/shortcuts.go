@@ -28,9 +28,9 @@ func DefaultShortcuts() Shortcuts {
 		},
 		"conversation": {
 			Left: ShortcutMap{
-				"1": "detail:text",
-				"2": "detail:tool",
-				"3": "detail:hook",
+				"1": "detail:compact",
+				"2": "detail:standard",
+				"3": "detail:verbose",
 			},
 		},
 		"config": {

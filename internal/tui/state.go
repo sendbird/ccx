@@ -15,7 +15,7 @@ type Preferences struct {
 	GroupMode       string   `yaml:"group_mode,omitempty"`        // flat|proj|tree|chain|fork
 	PreviewMode     string   `yaml:"preview_mode,omitempty"`      // conv|stats|mem|tasks|live
 	ViewMode        string   `yaml:"view_mode,omitempty"`         // sessions|config|plugins|stats
-	ConvDetailLevel int      `yaml:"conv_detail_level,omitempty"` // 0=text,1=tool,2=hook
+	ConvDetailLevel int      `yaml:"conv_detail_level,omitempty"` // 0=compact,1=standard,2=verbose
 	SplitRatio      int      `yaml:"split_ratio,omitempty"`       // 15-85
 	WorktreeDir     string   `yaml:"worktree_dir,omitempty"`      // worktree subdirectory name
 	HiddenBadges    []string `yaml:"hidden_badges,omitempty"`     // badge keys to hide: M,W,T,K,P,A,C,S,X,F

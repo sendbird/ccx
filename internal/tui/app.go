@@ -41,12 +41,12 @@ type liveCaptureMsg struct {
 
 // Conversation preview detail levels (cycled with tab).
 const (
-	previewText = 0 // text only — no tool blocks
-	previewTool = 1 // text + tool blocks (hooks hidden)
-	previewHook = 2 // text + tool blocks + hook details
+	previewText = 0 // compact — text only, no tool blocks
+	previewTool = 1 // standard — text + tool blocks (hooks hidden)
+	previewHook = 2 // verbose — text + tool blocks + hook details
 )
 
-var previewModeLabels = [3]string{"text", "tool", "hook"}
+var previewModeLabels = [3]string{"compact", "standard", "verbose"}
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
