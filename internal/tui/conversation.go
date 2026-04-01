@@ -67,7 +67,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.conv.split.Show = true
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
-	a.conv.previewMode = previewText
+	// Keep the persisted detail level (don't reset to compact on every open)
 	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
 	a.conv.split.List = &a.convList
 
