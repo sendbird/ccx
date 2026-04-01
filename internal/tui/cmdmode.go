@@ -57,11 +57,11 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupBaseProject; a.rebuildSessionList(); return a, nil }},
 
 		// Conversation detail levels
-		{name: "detail:compact", aliases: []string{"d:compact", "detail:text", "d:text"}, desc: "text only", views: cmdConv,
+		{name: "detail:compact", aliases: []string{"d:compact"}, desc: "text only", views: cmdConv,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvDetailLevel(previewText); return a, nil }},
-		{name: "detail:standard", aliases: []string{"d:standard", "detail:tool", "d:tool"}, desc: "text + tools", views: cmdConv,
+		{name: "detail:standard", aliases: []string{"d:standard"}, desc: "text + tools", views: cmdConv,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvDetailLevel(previewTool); return a, nil }},
-		{name: "detail:verbose", aliases: []string{"d:verbose", "detail:hook", "d:hook"}, desc: "text + tools + hooks", views: cmdConv,
+		{name: "detail:verbose", aliases: []string{"d:verbose"}, desc: "text + tools + hooks", views: cmdConv,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvDetailLevel(previewHook); return a, nil }},
 
 		// Preview modes (sessions only)
