@@ -271,6 +271,9 @@ type App struct {
 	remoteStreaming     bool                   // true once Claude output is streaming
 	// Generic confirm modal
 	confirmMsg    string                      // message to show (empty = no modal)
+
+	// Conversation tooltip
+	convTooltipScroll int // scroll offset in tooltip
 	confirmAction func() (tea.Model, tea.Cmd) // action to run on "y"
 
 	// Worktree alignment

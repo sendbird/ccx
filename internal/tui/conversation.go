@@ -338,6 +338,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateConvPreview refreshes the right-pane preview for the selected conversation item.
 func (a *App) updateConvPreview() {
+	a.convTooltipScroll = 0 // reset tooltip scroll on selection change
 	sp := &a.conv.split
 	if !sp.Show {
 		return
@@ -847,7 +848,7 @@ func (a *App) renderConvSplit() string {
 	if !sp.Focus && sp.Show && len(a.convList.Items()) > 0 {
 		if tooltip := a.convTooltip(); tooltip != "" {
 			contentH := ContentHeight(a.height)
-			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage)
+			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage, a.convTooltipScroll)
 		}
 	}
 
@@ -893,7 +894,7 @@ func (a *App) convTooltip() string {
 }
 
 // overlayTooltip places a bordered tooltip near the selected item position.
-func overlayTooltip(bg, text string, screenW, screenH, cursorIdx, perPage int) string {
+func overlayTooltip(bg, text string, screenW, screenH, cursorIdx, perPage, scroll int) string {
 	// Tooltip dimensions
 	maxW := screenW / 2
 	if maxW > 60 {
@@ -905,11 +906,26 @@ func overlayTooltip(bg, text string, screenW, screenH, cursorIdx, perPage int) s
 
 	// Wrap text to fit
 	wrapped := wrapText(text, maxW-4)
-	lines := strings.Split(wrapped, "\n")
-	maxLines := 8
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("... +%d more lines", len(strings.Split(wrapped, "\n"))-maxLines)))
+	allLines := strings.Split(wrapped, "\n")
+	maxVisible := screenH / 2
+	if maxVisible < 5 {
+		maxVisible = 5
+	}
+
+	// Apply scroll
+	total := len(allLines)
+	if scroll > total-maxVisible {
+		scroll = max(total-maxVisible, 0)
+	}
+	end := min(scroll+maxVisible, total)
+	lines := allLines[scroll:end]
+
+	// Scroll indicators
+	if scroll > 0 {
+		lines = append([]string{dimStyle.Render(fmt.Sprintf("↑ %d more above", scroll))}, lines...)
+	}
+	if end < total {
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("↓ %d more below (scroll wheel)", total-end)))
 	}
 
 	body := strings.Join(lines, "\n")
