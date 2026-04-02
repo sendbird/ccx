@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -1284,6 +1285,10 @@ func splitANSICells(s string) []string {
 		pending.WriteRune(r)
 		cells = append(cells, pending.String())
 		pending.Reset()
+		// Wide characters (CJK, etc.) take 2 columns — add a padding cell
+		if runewidth.RuneWidth(r) == 2 {
+			cells = append(cells, "")
+		}
 	}
 	// Trailing escapes (no printable after them) — attach to last cell or discard
 	if pending.Len() > 0 {
