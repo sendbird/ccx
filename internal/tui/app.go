@@ -925,6 +925,10 @@ func (a *App) View() string {
 				if a.config.TmuxEnabled && tmux.InTmux() {
 					h += " " + fmtKey(sk.Live, "live")
 				}
+				scHint := a.shortcutHint()
+				if scHint != "" {
+					h += " " + dimStyle.Render(scHint)
+				}
 				help = formatHelp(h + " " + fmtKey(sk.Search, "search") + " " + fmtKey(sk.Help, "help") + " " + fmtKey(sk.Quit, "quit"))
 			}
 		}
@@ -4715,10 +4719,21 @@ func (a *App) rebuildSessionList() {
 		selectedID = sess.ID
 	}
 
+	// Preserve active filter
+	var filterTerm string
+	if a.sessionList.FilterState() == list.FilterApplied {
+		filterTerm = a.sessionList.FilterInput.Value()
+	}
+
 	contentH := max(a.height-3, 1)
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
 	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.config.WorktreeDir)
 	a.sessSplit.CacheKey = ""
+
+	// Reapply filter
+	if filterTerm != "" {
+		applyListFilter(&a.sessionList, filterTerm)
+	}
 
 	// Restore cursor to previously selected session
 	if selectedID != "" {
