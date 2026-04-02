@@ -283,8 +283,8 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 	if s.IsRemote {
 		remoteBadge := lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true)
-		badges += " " + remoteBadge.Render("[R]")
-		badgesW += 4
+		badges += " " + remoteBadge.Render("[R·exp]")
+		badgesW += 8
 	}
 
 	// Calculate available width for project column
@@ -955,6 +955,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{todoBadge, "[S]", "Used skills"},
 		{mcpBadgeStyle, "[X]", "Used MCP"},
 		{forkBadge, "[F]", "Forked session"},
+		{lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true), "[R·exp]", "Remote (experimental)"},
 	}
 	// Render badges in pairs (two per line)
 	for i := 0; i < len(allBadges); i += 2 {
@@ -988,7 +989,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{"proj:<name>", "By project name"},
 		{"team:<name>", "By team name"},
 		{"is:fork", "Forked sessions"},
-		{"is:remote", "Remote sessions"},
+		{"is:remote", "Remote sessions (exp)"},
 	}
 	for i := 0; i < len(allFilters); i += 2 {
 		f := allFilters[i]
