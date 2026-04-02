@@ -273,7 +273,8 @@ type App struct {
 	confirmMsg    string                      // message to show (empty = no modal)
 
 	// Conversation tooltip
-	convTooltipScroll int // scroll offset in tooltip
+	convTooltipScroll int  // scroll offset in tooltip
+	convTooltipOn     bool // tooltip visible (toggle with t)
 	confirmAction func() (tea.Model, tea.Cmd) // action to run on "y"
 
 	// Worktree alignment

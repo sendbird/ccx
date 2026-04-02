@@ -126,7 +126,7 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	case viewConversation:
 		// If tooltip is visible and scrolling on list side, scroll tooltip instead
-		if !scrolledPreview && !a.conv.split.Focus && a.convTooltip() != "" {
+		if !scrolledPreview && a.convTooltipOn && !a.conv.split.Focus && a.convTooltip() != "" {
 			if up {
 				a.convTooltipScroll = max(a.convTooltipScroll-3, 0)
 			} else {

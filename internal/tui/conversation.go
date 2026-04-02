@@ -198,6 +198,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case "e":
 		return a.openEditMenu(a.currentSess)
+	case "t":
+		a.convTooltipOn = !a.convTooltipOn
+		a.convTooltipScroll = 0
+		return a, nil
 	case "i":
 		return a.openMessageImage()
 	case "I":
@@ -844,8 +848,8 @@ func (a *App) renderConvSplit() string {
 	sp := &a.conv.split
 	rendered := sp.Render(a.width, a.height, a.splitRatio)
 
-	// Show tooltip for selected item when list is focused
-	if !sp.Focus && sp.Show && len(a.convList.Items()) > 0 {
+	// Show tooltip for selected item when list is focused and tooltip is on
+	if a.convTooltipOn && !sp.Focus && sp.Show && len(a.convList.Items()) > 0 {
 		if tooltip := a.convTooltip(); tooltip != "" {
 			contentH := ContentHeight(a.height)
 			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage, a.convTooltipScroll)
