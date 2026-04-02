@@ -155,8 +155,8 @@ func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map
 		if filterTerm != "" && availW > 0 && preview != "" {
 			styledPreview = highlightSnippet(preview, filterTerm, availW, pStyle)
 		} else {
-			if selected && availW > 0 && len(preview) > availW {
-				// Selected item: wrap full text across multiple lines
+			if availW > 0 && len(preview) > availW {
+				// Wrap full text across multiple lines
 				wrapped := wrapText(preview, availW)
 				wrapLines := strings.Split(wrapped, "\n")
 				styledPreview = pStyle.Render(wrapLines[0])
@@ -164,9 +164,7 @@ func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map
 				for _, wl := range wrapLines[1:] {
 					styledPreview += "\n" + pad + pStyle.Render(wl)
 				}
-			} else if availW > 3 && len(preview) > availW {
-				preview = preview[:availW-3] + "..."
-			} else if availW <= 3 {
+			} else if availW <= 0 {
 				preview = ""
 			}
 			styledPreview = pStyle.Render(preview)
