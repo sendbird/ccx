@@ -841,8 +841,113 @@ func (a *App) scrollConvPreviewToTail() {
 // renderConvSplit renders the conversation split view.
 func (a *App) renderConvSplit() string {
 	sp := &a.conv.split
-	return sp.Render(a.width, a.height, a.splitRatio)
+	rendered := sp.Render(a.width, a.height, a.splitRatio)
+
+	// Show tooltip for selected item when list is focused
+	if !sp.Focus && sp.Show && len(a.convList.Items()) > 0 {
+		if tooltip := a.convTooltip(); tooltip != "" {
+			contentH := ContentHeight(a.height)
+			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage)
+		}
+	}
+
+	return rendered
 }
+
+// convTooltip returns the full text of the selected conversation item, or empty if it fits.
+func (a *App) convTooltip() string {
+	idx := a.convList.Index()
+	items := a.convList.VisibleItems()
+	if idx < 0 || idx >= len(items) {
+		return ""
+	}
+	ci, ok := items[idx].(convItem)
+	if !ok {
+		return ""
+	}
+
+	var text string
+	switch ci.kind {
+	case convMsg:
+		text = entryFullText(ci.merged.entry)
+	case convTask:
+		text = ci.task.Subject
+		if ci.task.Description != "" {
+			text += "\n" + ci.task.Description
+		}
+	case convAgent:
+		text = ci.agent.FirstPrompt
+	}
+
+	if text == "" {
+		return ""
+	}
+
+	// Only show tooltip if text is longer than list width (would be truncated)
+	listW := a.conv.split.ListWidth(a.width, a.splitRatio)
+	if len(text) <= listW-15 && !strings.Contains(text, "\n") {
+		return ""
+	}
+
+	return text
+}
+
+// overlayTooltip places a bordered tooltip near the selected item position.
+func overlayTooltip(bg, text string, screenW, screenH, cursorIdx, perPage int) string {
+	// Tooltip dimensions
+	maxW := screenW / 2
+	if maxW > 60 {
+		maxW = 60
+	}
+	if maxW < 20 {
+		maxW = screenW - 4
+	}
+
+	// Wrap text to fit
+	wrapped := wrapText(text, maxW-4)
+	lines := strings.Split(wrapped, "\n")
+	maxLines := 8
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("... +%d more lines", len(strings.Split(wrapped, "\n"))-maxLines)))
+	}
+
+	body := strings.Join(lines, "\n")
+
+	tooltipStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7DD3FC")).
+		Width(maxW).
+		Padding(0, 1)
+
+	tooltip := tooltipStyle.Render(body)
+
+	// Position: right of the list, near the selected item
+	tooltipLines := strings.Split(tooltip, "\n")
+	tooltipH := len(tooltipLines)
+
+	// Y position: relative to cursor in the visible page
+	visibleIdx := cursorIdx % max(perPage, 1)
+	y := visibleIdx + 1 // +1 for title bar
+	if y+tooltipH > screenH {
+		y = max(screenH-tooltipH, 1)
+	}
+
+	// Overlay onto bg
+	bgLines := strings.Split(bg, "\n")
+	for i, tl := range tooltipLines {
+		row := y + i
+		if row >= 0 && row < len(bgLines) {
+			bgLine := bgLines[row]
+			// Place tooltip starting at column 2
+			bgLines[row] = overlayLine(bgLine, tl, 2, screenW)
+		}
+	}
+
+	return strings.Join(bgLines, "\n")
+}
+
+// overlayLine is defined in sessions.go
 
 // extractTaskEntries returns entries related to a specific task.
 // It finds ranges where the task was in_progress and collects all entries
