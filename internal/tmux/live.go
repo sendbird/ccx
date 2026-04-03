@@ -60,13 +60,28 @@ func markLiveSessionsTmux(sessions []session.Session) {
 		}
 	}
 
-	// Batch pgrep: find all claude processes and their parent PIDs in one call
-	claudeProcs := BatchFindClaudeProcs()
-	if len(claudeProcs) == 0 {
+	// Batch pgrep: find all claude processes with their PIDs, PPIDs, and args
+	allProcs := batchFindClaudeProcsAll()
+	if len(allProcs) == 0 {
 		return
 	}
 
-	// Build pane PID → claude args map
+	// Separate direct-child procs (ppid matches a pane) from orphaned (ppid=1)
+	panePIDs := make(map[int]bool, len(panes))
+	for _, p := range panes {
+		panePIDs[p.PID] = true
+	}
+	directByPPID := make(map[int]string)   // ppid → args (for pane-matched procs)
+	var orphaned []ClaudeProc              // ppid=1 or ppid not matching any pane
+	for _, cp := range allProcs {
+		if panePIDs[cp.PPID] {
+			directByPPID[cp.PPID] = cp.Args
+		} else {
+			orphaned = append(orphaned, cp)
+		}
+	}
+
+	// Build pane PID → claude args map (direct children)
 	type claudeMatch struct {
 		args       string
 		windowName string
@@ -74,11 +89,19 @@ func markLiveSessionsTmux(sessions []session.Session) {
 	}
 	var cps []claudeMatch
 	for _, p := range panes {
-		if args, ok := claudeProcs[p.PID]; ok {
+		if args, ok := directByPPID[p.PID]; ok {
 			absPath, _ := filepath.Abs(p.Path)
 			if absPath != "" {
 				cps = append(cps, claudeMatch{args: args, windowName: p.WindowName, path: absPath})
 			}
+		}
+	}
+
+	// For orphaned claude procs, resolve their cwd via lsof and match to sessions
+	if len(orphaned) > 0 {
+		orphanCwds := resolveOrphanCwds(orphaned)
+		for _, oc := range orphanCwds {
+			cps = append(cps, claudeMatch{args: oc.args, path: oc.cwd})
 		}
 	}
 
@@ -118,9 +141,27 @@ func markLiveSessionsTmux(sessions []session.Session) {
 	}
 }
 
+// ClaudeProc holds information about a running claude process.
+type ClaudeProc struct {
+	PID  int
+	PPID int
+	Args string
+}
+
 // BatchFindClaudeProcs finds all claude processes and maps parent PID → args.
-// Uses two commands total (pgrep + ps) instead of per-pane pgrep calls.
+// When multiple processes share ppid=1 (orphaned/reparented), they are stored
+// in the OrphanedProcs slice instead to avoid map key collisions.
 func BatchFindClaudeProcs() map[int]string {
+	procs := batchFindClaudeProcsAll()
+	result := make(map[int]string)
+	for _, p := range procs {
+		result[p.PPID] = p.Args
+	}
+	return result
+}
+
+// batchFindClaudeProcsAll returns all claude processes with pid, ppid, and args.
+func batchFindClaudeProcsAll() []ClaudeProc {
 	// Get all claude PIDs (exact binary name match to avoid matching ccx itself)
 	pidOut, err := exec.Command("pgrep", "-x", "claude").Output()
 	if err != nil {
@@ -138,7 +179,7 @@ func BatchFindClaudeProcs() map[int]string {
 		return nil
 	}
 
-	result := make(map[int]string)
+	var result []ClaudeProc
 	for line := range strings.SplitSeq(strings.TrimSpace(string(psOut)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -149,12 +190,62 @@ func BatchFindClaudeProcs() map[int]string {
 		if len(fields) < 3 {
 			continue
 		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
 		ppid, err := strconv.Atoi(fields[1])
 		if err != nil {
 			continue
 		}
 		args := strings.Join(fields[2:], " ")
-		result[ppid] = args
+		result = append(result, ClaudeProc{PID: pid, PPID: ppid, Args: args})
+	}
+	return result
+}
+
+// orphanCwd holds a resolved cwd and args for an orphaned claude process.
+type orphanCwd struct {
+	cwd  string
+	args string
+}
+
+// resolveOrphanCwds uses lsof to find the cwd of orphaned claude processes.
+func resolveOrphanCwds(procs []ClaudeProc) []orphanCwd {
+	if len(procs) == 0 {
+		return nil
+	}
+	pidStrs := make([]string, len(procs))
+	for i, p := range procs {
+		pidStrs[i] = strconv.Itoa(p.PID)
+	}
+	out, err := exec.Command("lsof", "-a", "-d", "cwd", "-Fpn", "-p", strings.Join(pidStrs, ",")).Output()
+	if err != nil {
+		return nil
+	}
+
+	// Parse lsof output: "p<pid>\nn<path>\n" pairs
+	pidArgs := make(map[int]string, len(procs))
+	for _, p := range procs {
+		pidArgs[p.PID] = p.Args
+	}
+
+	var result []orphanCwd
+	var currentPID int
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "p") {
+			pid, err := strconv.Atoi(line[1:])
+			if err == nil {
+				currentPID = pid
+			}
+		} else if strings.HasPrefix(line, "n") && currentPID > 0 {
+			path := strings.TrimSpace(line[1:])
+			if path != "" {
+				if args, ok := pidArgs[currentPID]; ok {
+					result = append(result, orphanCwd{cwd: path, args: args})
+				}
+			}
+		}
 	}
 	return result
 }
@@ -184,16 +275,39 @@ func DetectLiveProjectPaths() []string {
 		if err != nil {
 			return nil
 		}
-		claudeProcs := BatchFindClaudeProcs()
+		allProcs := batchFindClaudeProcsAll()
+
+		// Direct children: ppid matches a pane PID
+		panePIDs := make(map[int]bool, len(panes))
+		for _, p := range panes {
+			panePIDs[p.PID] = true
+		}
+		directByPPID := make(map[int]string)
+		var orphaned []ClaudeProc
+		for _, cp := range allProcs {
+			if panePIDs[cp.PPID] {
+				directByPPID[cp.PPID] = cp.Args
+			} else {
+				orphaned = append(orphaned, cp)
+			}
+		}
+
 		seen := make(map[string]bool)
 		var paths []string
 		for _, p := range panes {
-			if _, ok := claudeProcs[p.PID]; ok {
+			if _, ok := directByPPID[p.PID]; ok {
 				absPath, _ := filepath.Abs(p.Path)
 				if absPath != "" && !seen[absPath] {
 					seen[absPath] = true
 					paths = append(paths, absPath)
 				}
+			}
+		}
+		// Include orphaned process cwds
+		for _, oc := range resolveOrphanCwds(orphaned) {
+			if !seen[oc.cwd] {
+				seen[oc.cwd] = true
+				paths = append(paths, oc.cwd)
 			}
 		}
 		return paths
