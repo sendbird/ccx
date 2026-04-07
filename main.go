@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sendbird/ccx/internal/cli"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
 	"github.com/sendbird/ccx/internal/tui"
@@ -43,6 +44,27 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
+	// Handle subcommands before flag parsing (urls/files aren't registered flags)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "urls", "files":
+			dir := os.Getenv("CLAUDE_CONFIG_DIR")
+			if dir == "" {
+				home, err := os.UserHomeDir()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					os.Exit(1)
+				}
+				dir = home + "/.claude"
+			}
+			if err := cli.Run(os.Args[1], dir); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+	}
+
 	flag.Parse()
 
 	if showVersion {

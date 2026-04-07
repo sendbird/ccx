@@ -2155,8 +2155,37 @@ func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
 		a.tagInput.SetValue("")
 		a.tagInput.Focus()
 		return a, a.tagInput.Cursor.BlinkCmd()
+	case akm.URLs:
+		return a.openBulkURLMenu(selected, false)
+	case akm.Files:
+		return a.openBulkURLMenu(selected, true)
 	}
 	return a, nil
+}
+
+// openBulkURLMenu merges URLs or file paths from multiple sessions into the URL menu.
+func (a *App) openBulkURLMenu(selected []session.Session, files bool) (tea.Model, tea.Cmd) {
+	seen := make(map[string]bool)
+	var merged []extract.Item
+	for _, s := range selected {
+		var items []extract.Item
+		if files {
+			items = extract.SessionFilePaths(s.FilePath)
+		} else {
+			items = extract.SessionURLs(s.FilePath)
+		}
+		for _, item := range items {
+			if !seen[item.URL] {
+				seen[item.URL] = true
+				merged = append(merged, item)
+			}
+		}
+	}
+	scope := fmt.Sprintf("%d sessions", len(selected))
+	if files {
+		scope += " files"
+	}
+	return a.openURLMenuFromItems(merged, scope)
 }
 
 func (a *App) bulkDelete(selected []session.Session) (tea.Model, tea.Cmd) {
@@ -3777,7 +3806,7 @@ func (a *App) renderActionsHintBox() string {
 		header := fmt.Sprintf("%d selected", len(a.selectedSet))
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
-		lines = append(lines, hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
+		lines = append(lines, hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
 	} else {
 		sess := a.actionsSess
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
