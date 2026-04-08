@@ -142,4 +142,20 @@ type GlobalStats struct {
 	HookCounts      map[string]int            // command -> total invocations
 	HookEventCounts map[string]int            // event type -> count
 	HookTimestamps  map[string][]time.Time    // command -> timestamps
+
+	ProjectStats []ProjectStats // per-project aggregated stats, sorted by cost desc
+}
+
+// ProjectStats holds aggregated stats for a single project.
+type ProjectStats struct {
+	ProjectName              string
+	ProjectPath              string
+	SessionCount             int
+	TotalInputTokens         int64
+	TotalOutputTokens        int64
+	TotalCacheReadTokens     int64
+	TotalCacheCreationTokens int64
+	CostUSD                  float64
+	TotalMessages            int
+	TotalDuration            time.Duration
 }

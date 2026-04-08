@@ -357,7 +357,7 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case "u":
 		return a.undoCfgDelete()
-	case "R":
+	case a.keymap.Session.Refresh:
 		a.copiedMsg = "Refreshing configs…"
 		return a.openConfigExplorer()
 	}

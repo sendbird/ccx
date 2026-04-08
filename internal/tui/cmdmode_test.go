@@ -133,6 +133,7 @@ func TestRegistryCompleteness(t *testing.T) {
 	expected := map[string]bool{
 		"group:flat": false, "group:proj": false, "group:tree": false,
 		"group:chain": false, "group:fork": false,
+		"pane:flat": false, "pane:tree": false,
 		"preview:conv": false, "preview:stats": false, "preview:mem": false,
 		"preview:tasks": false, "preview:live": false,
 		"view:sessions": false, "view:stats": false, "view:config": false,

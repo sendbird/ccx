@@ -27,6 +27,12 @@ type navFrame struct {
 
 // openMsgFullForEntry opens viewMessageFull for a specific merged message.
 func (a *App) openMsgFullForEntry(m mergedMsg) (tea.Model, tea.Cmd) {
+	return a.openMsgFullForEntryAt(m, -1)
+}
+
+// openMsgFullForEntryAt opens viewMessageFull positioned at a specific block index.
+// If blockIdx < 0, starts at the top (default behavior).
+func (a *App) openMsgFullForEntryAt(m mergedMsg, blockIdx int) (tea.Model, tea.Cmd) {
 	a.msgFull.sess = a.currentSess
 	a.msgFull.agent = session.Subagent{}
 	a.msgFull.messages = a.conv.messages
@@ -43,6 +49,23 @@ func (a *App) openMsgFullForEntry(m mergedMsg) (tea.Model, tea.Cmd) {
 	}
 	a.msgFull.idx = idx
 	a.navToMsgFull(idx)
+
+	// Position block cursor and scroll to the target block
+	if blockIdx >= 0 && blockIdx < len(a.msgFull.folds.Entry.Content) {
+		a.msgFull.folds.BlockCursor = blockIdx
+		a.refreshMsgFullPreview()
+		// Force scroll to block position (refreshMsgFullPreview may not scroll
+		// enough when jumping from a fresh viewport with YOffset=0)
+		if blockIdx < len(a.msgFull.folds.BlockStarts) {
+			line := a.msgFull.folds.BlockStarts[blockIdx]
+			maxOffset := max(a.msgFull.vp.TotalLineCount()-a.msgFull.vp.Height, 0)
+			if line > maxOffset {
+				line = maxOffset
+			}
+			a.msgFull.vp.YOffset = line
+		}
+	}
+
 	a.state = viewMessageFull
 	return a, nil
 }

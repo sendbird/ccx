@@ -378,7 +378,7 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.plgSearchNext(-1)
 		}
 		return a, nil
-	case "R":
+	case a.keymap.Session.Refresh:
 		a.copiedMsg = "Refreshing plugins…"
 		return a.openPluginExplorer()
 	}

@@ -2,6 +2,8 @@ package tui
 
 import (
 	"io"
+	"strings"
+
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -19,27 +21,40 @@ const (
 
 // convItem represents a single row in the conversation list.
 type convItem struct {
-	kind      convItemKind
-	merged    mergedMsg          // for convMsg
-	task      session.TaskItem   // for convTask
-	agent     session.Subagent   // for convAgent
-	indent    int                // 0=message, 1=sub-item
-	folded    bool               // for expandable group headers (tasks/agents)
-	parentIdx int                // index of parent message in items slice
-	groupTag  string             // "tasks" or "agents" — for group header rows
-	count     int                // number of items in group (for header display)
+	kind        convItemKind
+	merged      mergedMsg        // for convMsg
+	task        session.TaskItem // for convTask
+	agent       session.Subagent // for convAgent
+	agentStatus string           // "running", "completed", "stopped" for convAgent
+	bgTaskID    string           // background task ID for individual task op items
+	indent      int              // 0=message, 1=sub-item
+	folded      bool             // for expandable group headers (tasks/agents)
+	parentIdx   int              // index of parent message in items slice
+	groupTag    string           // "tasks" or "agents" — for group header rows
+	count       int              // number of items in group (for header display)
+	label       string           // optional compact label for tree items
 }
 
 func (c convItem) FilterValue() string {
+	var parts []string
+	if c.label != "" {
+		parts = append(parts, c.label)
+	}
 	switch c.kind {
 	case convMsg:
-		return entryFilterText(c.merged.entry)
+		parts = append(parts, entryFilterText(c.merged.entry))
 	case convTask:
-		return c.task.Subject + " " + c.task.Status
+		parts = append(parts, c.task.Subject, c.task.Description, c.task.Status)
+		if c.bgTaskID != "" {
+			parts = append(parts, "is:bg", c.bgTaskID)
+		} else {
+			parts = append(parts, "is:task")
+		}
 	case convAgent:
-		return c.agent.FirstPrompt + " " + c.agent.ShortID + " " + c.agent.AgentType
+		parts = append(parts, c.agent.FirstPrompt, c.agent.ShortID, c.agent.AgentType)
+		parts = append(parts, "is:agent")
 	}
-	return ""
+	return strings.Join(parts, " ")
 }
 
 // convDelegate renders conversation list items.
@@ -68,4 +83,3 @@ func (d convDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		renderConvTaskOrAgent(w, ci, selected, width, clamp, filterTerm)
 	}
 }
-

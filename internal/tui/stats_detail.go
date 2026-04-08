@@ -22,9 +22,10 @@ const (
 	statsDetailCommands                 // commands
 	statsDetailErrors                   // error breakdown
 	statsDetailHooks                    // hooks
+	statsDetailProjects                 // per-project breakdown
 )
 
-const statsDetailLast = statsDetailHooks
+const statsDetailLast = statsDetailProjects
 
 func (m statsDetailMode) next() statsDetailMode {
 	n := m + 1
@@ -59,6 +60,8 @@ func renderStatsDetail(mode statsDetailMode, stats session.GlobalStats, width in
 		return renderErrorDetail(stats, width)
 	case statsDetailHooks:
 		return renderCategoryDetail("HOOKS", stats.HookCounts, nil, stats.HookTimestamps, nil, width)
+	case statsDetailProjects:
+		return renderProjectDetail(stats, width)
 	}
 	return ""
 }
@@ -80,6 +83,8 @@ func statsDetailTitle(mode statsDetailMode) string {
 		return "Errors"
 	case statsDetailHooks:
 		return "Hooks"
+	case statsDetailProjects:
+		return "Projects"
 	}
 	return ""
 }

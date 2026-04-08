@@ -2,8 +2,9 @@ package tui
 
 import (
 	"encoding/json"
-	"io"
 	"fmt"
+	"io"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -73,6 +74,59 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 	cursor := " "
 	if selected {
 		cursor = convCursorStyle.Render(">")
+	}
+
+	if ci.label != "" {
+		style := dimStyle
+		if selected {
+			style = selectedStyle
+		}
+		if ci.groupTag != "" {
+			fold := "▾"
+			if ci.folded {
+				fold = "▸"
+			}
+			line := fmt.Sprintf("%s%s %s", indent, cursor, style.Render(fmt.Sprintf("%s %s [%d]", fold, ci.label, ci.count)))
+			fmt.Fprint(w, clamp.Render(line))
+			return
+		}
+
+		status := "○"
+		switch ci.kind {
+		case convAgent:
+			status = agentBadgeStyle.Render("⊕")
+			switch ci.agentStatus {
+			case "completed":
+				status = taskDoneStyle.Render("✓")
+			case "stopped":
+				status = dimStyle.Render("⏹")
+			case "running":
+				status = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render("◉")
+			}
+		case convTask:
+			switch ci.task.Status {
+			case "completed":
+				status = taskDoneStyle.Render("✓")
+			case "in_progress":
+				status = taskInProgressStyle.Render("◉")
+			case "stopped":
+				status = dimStyle.Render("⏹")
+			}
+		}
+
+		maxW := width - len(indent) - 6
+		label := ci.label
+		if filterTerm != "" && maxW > 0 {
+			label = highlightSnippet(label, filterTerm, maxW, style)
+		} else {
+			if maxW > 3 && len(label) > maxW {
+				label = label[:maxW-3] + "..."
+			}
+			label = style.Render(label)
+		}
+		line := fmt.Sprintf("%s%s %s %s", indent, cursor, status, label)
+		fmt.Fprint(w, clamp.Render(line))
+		return
 	}
 
 	var line string
@@ -170,9 +224,19 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		}
 		a := ci.agent
 		badge := agentBadgeStyle.Render("⊕")
+		switch ci.agentStatus {
+		case "completed":
+			badge = taskDoneStyle.Render("✓")
+		case "stopped":
+			badge = dimStyle.Render("⏹")
+		case "running":
+			badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render("◉")
+		}
 		typeStr := ""
 		if a.AgentType == "aside_question" {
-			badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render("?")
+			if ci.agentStatus == "" {
+				badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render("?")
+			}
 			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render(":btw")
 		} else if a.AgentType != "" {
 			typeStr = dimStyle.Render(":" + a.AgentType)
@@ -243,23 +307,128 @@ func convMsgPreview(e session.Entry, maxW int) string {
 	return ""
 }
 
+// buildBgTaskMap scans merged messages for background bash tasks.
+// A background task is identified by a tool_result containing
+// "Command running in background with ID: <taskID>".
+// Returns taskID → short command description.
+func buildBgTaskMap(merged []mergedMsg) map[string]string {
+	// First pass: collect ALL Bash tool_use commands by block ID across all entries.
+	bashCmds := make(map[string]string) // tool_use block ID → command description
+	for _, m := range merged {
+		for _, b := range m.entry.Content {
+			if b.Type == "tool_use" && b.ToolName == "Bash" {
+				var input struct {
+					Command     string `json:"command"`
+					Description string `json:"description"`
+				}
+				json.Unmarshal([]byte(b.ToolInput), &input)
+				label := input.Description
+				if label == "" {
+					// Use first line of command, truncated
+					label = input.Command
+					if nl := strings.IndexByte(label, '\n'); nl > 0 {
+						label = label[:nl]
+					}
+				}
+				bashCmds[b.ID] = label
+			}
+		}
+	}
+
+	// Second pass: find tool_results that mention background task IDs.
+	bgTasks := make(map[string]string)
+	for _, m := range merged {
+		for _, b := range m.entry.Content {
+			if b.Type != "tool_result" || b.Text == "" {
+				continue
+			}
+			const prefix = "Command running in background with ID: "
+			idx := strings.Index(b.Text, prefix)
+			if idx < 0 {
+				continue
+			}
+			rest := b.Text[idx+len(prefix):]
+			taskID := rest
+			for i, c := range rest {
+				if c == '.' || c == ' ' || c == '\n' {
+					taskID = rest[:i]
+					break
+				}
+			}
+			if taskID == "" {
+				continue
+			}
+			// b.ID is the tool_use_id from the tool_result, matching the Bash tool_use
+			if cmd, ok := bashCmds[b.ID]; ok {
+				bgTasks[taskID] = cmd
+			} else {
+				bgTasks[taskID] = "bash"
+			}
+		}
+	}
+	return bgTasks
+}
+
+// inferAgentStatuses scans conversation entries to determine the last known status
+// of each agent: "running" (TaskOutput sent, no result yet), "completed" (result received),
+// or "stopped" (TaskStop sent).
+func inferAgentStatuses(merged []mergedMsg) map[string]string {
+	statuses := make(map[string]string)
+	pendingOutput := make(map[string]string) // tool_use block ID → taskID
+
+	for _, m := range merged {
+		for _, b := range m.entry.Content {
+			switch {
+			case b.Type == "tool_use" && b.ToolName == "TaskOutput":
+				var input struct {
+					TaskID string `json:"task_id"`
+				}
+				json.Unmarshal([]byte(b.ToolInput), &input)
+				if input.TaskID != "" {
+					statuses[input.TaskID] = "running"
+					pendingOutput[b.ID] = input.TaskID
+				}
+			case b.Type == "tool_use" && b.ToolName == "TaskStop":
+				var input struct {
+					TaskID string `json:"task_id"`
+				}
+				json.Unmarshal([]byte(b.ToolInput), &input)
+				if input.TaskID != "" {
+					statuses[input.TaskID] = "stopped"
+				}
+			case b.Type == "tool_result":
+				if taskID, ok := pendingOutput[b.ID]; ok {
+					// Result received — mark completed unless already stopped
+					if statuses[taskID] == "running" {
+						statuses[taskID] = "completed"
+					}
+					delete(pendingOutput, b.ID)
+				}
+			}
+		}
+	}
+
+	return statuses
+}
+
 // buildConvItems builds a flattened conversation item list from merged messages,
 // with inline task and agent sub-items under assistant messages.
 // A collapsible task group header appears at every task-touching message.
 // Individual task rows (expandable) are attached only under the LAST one.
 func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem) []convItem {
 	// First pass: find all task-touching message indices and the last one.
+	// Always scan for task operations (TaskCreate, TaskOutput, etc.) regardless
+	// of whether a resolved task list exists — operations should be visible as
+	// sub-items even without a task board.
 	var taskMsgIndices []int
-	if len(tasks) > 0 {
-		for i, m := range merged {
-			if m.entry.Role != "assistant" {
-				continue
-			}
-			for _, block := range m.entry.Content {
-				if block.Type == "tool_use" && isTaskTool(block.ToolName) {
-					taskMsgIndices = append(taskMsgIndices, i)
-					break
-				}
+	for i, m := range merged {
+		if m.entry.Role != "assistant" {
+			continue
+		}
+		for _, block := range m.entry.Content {
+			if block.Type == "tool_use" && isTaskTool(block.ToolName) {
+				taskMsgIndices = append(taskMsgIndices, i)
+				break
 			}
 		}
 	}
@@ -281,6 +450,19 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 		}
 		tasksByID[t.ID] = t
 	}
+
+	// Build agent lookup by both full ID and ShortID for resolving task references.
+	agentsByID := make(map[string]session.Subagent, len(agents)*2)
+	for _, a := range agents {
+		agentsByID[a.ID] = a
+		if a.ShortID != "" {
+			agentsByID[a.ShortID] = a
+		}
+	}
+
+	// Build background task lookup: taskID → command description.
+	// Background bash tasks produce tool_result with "Command running in background with ID: <taskID>".
+	bgTasks := buildBgTaskMap(merged)
 
 	// Pre-assign each agent to the last assistant message that precedes its timestamp.
 	// This places agents chronologically at the right position in the conversation.
@@ -311,6 +493,11 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 		}
 	}
 
+	// Infer agent status by scanning all entries for TaskOutput/TaskStop/TaskResult.
+	// Last operation per agent wins: TaskStop→"stopped", tool_result after TaskOutput→"completed",
+	// TaskOutput without result→"running".
+	agentStatuses := inferAgentStatuses(merged)
+
 	var items []convItem
 
 	for mi, m := range merged {
@@ -327,34 +514,89 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 
 		// Add agent sub-items assigned to this message
 		for _, a := range agentsByMsg[mi] {
+			status := agentStatuses[a.ID]
+			if status == "" {
+				status = agentStatuses[a.ShortID]
+			}
 			items = append(items, convItem{
-				kind:      convAgent,
-				agent:     a,
-				indent:    1,
-				parentIdx: parentIdx,
+				kind:        convAgent,
+				agent:       a,
+				agentStatus: status,
+				indent:      1,
+				parentIdx:   parentIdx,
 			})
 		}
 
-		// Attach task group header at every task-touching message.
-		// The last one is expandable (count > 0, has children); earlier ones are markers (count = 0).
+		// Attach task operations and task list items under assistant messages.
 		if taskMsgSet[mi] {
 			expandable := mi == lastTaskMsgIdx
-			headerCount := 0
-			if expandable {
-				headerCount = len(tasks)
+
+			// Add individual task operation lines as separate items.
+			for _, b := range m.entry.Content {
+				if b.Type != "tool_use" {
+					continue
+				}
+				var taskID, icon, verb, subject string
+				switch b.ToolName {
+				case "TaskCreate":
+					var input struct {
+						Subject string `json:"subject"`
+					}
+					json.Unmarshal([]byte(b.ToolInput), &input)
+					if input.Subject != "" {
+						icon, verb, subject = "📋", "Create", input.Subject
+					}
+				case "TaskOutput":
+					var input struct {
+						TaskID string `json:"task_id"`
+					}
+					json.Unmarshal([]byte(b.ToolInput), &input)
+					taskID, icon, verb = input.TaskID, "⏳", "Waiting"
+				case "TaskStop":
+					var input struct {
+						TaskID string `json:"task_id"`
+					}
+					json.Unmarshal([]byte(b.ToolInput), &input)
+					taskID, icon, verb = input.TaskID, "⏹", "Stop"
+				}
+				if taskID == "" && subject == "" {
+					continue
+				}
+				if subject != "" {
+					// TaskCreate: show subject directly
+					label := icon + " " + subject
+					if len(label) > 50 {
+						label = label[:47] + "..."
+					}
+					items = append(items, convItem{
+						kind:      convTask,
+						task:      session.TaskItem{Subject: label},
+						indent:    1,
+						parentIdx: parentIdx,
+					})
+				} else {
+					label, detail := resolveTaskLabel(icon, verb, taskID, agentsByID, bgTasks, 40)
+					items = append(items, convItem{
+						kind:      convTask,
+						task:      session.TaskItem{Subject: label, Description: detail, ID: taskID},
+						bgTaskID:  taskID,
+						indent:    1,
+						parentIdx: parentIdx,
+					})
+				}
 			}
-			// Build per-message operation summary
-			ops := taskOpSummaryResult(m.entry, tasksByID)
-			items = append(items, convItem{
-				kind:      convTask,
-				groupTag:  "tasks",
-				count:     headerCount,
-				folded:    true,
-				indent:    1,
-				parentIdx: parentIdx,
-				task:      session.TaskItem{Status: fmt.Sprintf("%d/%d", completed, len(tasks)), Subject: ops.compact, Description: ops.detailed},
-			})
-			if expandable {
+
+			// Expandable task list header (only on last task-touching message, and only if tasks exist)
+			if expandable && len(tasks) > 0 {
+				items = append(items, convItem{
+					kind:      convTask,
+					groupTag:  "tasks",
+					count:     len(tasks),
+					folded:    true,
+					indent:    1,
+					parentIdx: parentIdx,
+					task:      session.TaskItem{Status: fmt.Sprintf("%d/%d", completed, len(tasks))},
+				})
 				for _, t := range tasks {
 					items = append(items, convItem{
 						kind:      convTask,
@@ -370,11 +612,179 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 	return items
 }
 
+// buildEntityTree builds an entity-centric tree view: agents, background jobs,
+// and task board items grouped under collapsible section headers.
+func buildEntityTree(
+	merged []mergedMsg,
+	agents []session.Subagent,
+	tasks []session.TaskItem,
+	agentStatuses map[string]string,
+) []convItem {
+	var items []convItem
+
+	// --- Agents section ---
+	if len(agents) > 0 {
+		visibleAgents := make([]session.Subagent, 0, len(agents))
+		for _, a := range agents {
+			if !isSystemAgent(a) {
+				visibleAgents = append(visibleAgents, a)
+			}
+		}
+		if len(visibleAgents) > 0 {
+			items = append(items, convItem{
+				kind:     convTask,
+				groupTag: "agents",
+				count:    len(visibleAgents),
+				folded:   false,
+				indent:   0,
+				label:    "Agents",
+				task:     session.TaskItem{Subject: fmt.Sprintf("Agents (%d)", len(visibleAgents))},
+			})
+			for _, a := range visibleAgents {
+				status := agentStatuses[a.ID]
+				if status == "" {
+					status = agentStatuses[a.ShortID]
+				}
+				items = append(items, convItem{
+					kind:        convAgent,
+					agent:       a,
+					agentStatus: status,
+					indent:      1,
+					label:       compactTreeLabel("Agent", agentTreeName(a), 44),
+				})
+			}
+		}
+	}
+
+	// --- Background jobs section ---
+	bgTasks := buildBgTaskMap(merged)
+	if len(bgTasks) > 0 {
+		// Build job items with status from TaskOutput results
+		type bgJob struct {
+			id     string
+			desc   string
+			status string // "pending", "completed", "stopped"
+		}
+		var jobs []bgJob
+		for id, desc := range bgTasks {
+			status := "pending"
+			// Scan for TaskOutput results to determine status
+			for _, m := range merged {
+				for _, b := range m.entry.Content {
+					if b.Type == "tool_result" && strings.Contains(b.Text, id) {
+						if strings.Contains(b.Text, "<status>completed</status>") {
+							status = "completed"
+						} else if strings.Contains(b.Text, "<status>stopped</status>") {
+							status = "stopped"
+						}
+					}
+				}
+			}
+			jobs = append(jobs, bgJob{id: id, desc: desc, status: status})
+		}
+		// Sort: pending first, then by ID
+		sort.Slice(jobs, func(i, j int) bool {
+			if jobs[i].status != jobs[j].status {
+				if jobs[i].status == "pending" {
+					return true
+				}
+				if jobs[j].status == "pending" {
+					return false
+				}
+			}
+			return jobs[i].id < jobs[j].id
+		})
+
+		items = append(items, convItem{
+			kind:     convTask,
+			groupTag: "bgjobs",
+			count:    len(jobs),
+			folded:   false,
+			indent:   0,
+			label:    "BG Jobs",
+			task:     session.TaskItem{Subject: fmt.Sprintf("Background Jobs (%d)", len(jobs))},
+		})
+		for _, j := range jobs {
+			// Show just the first line of the command description
+			desc := j.desc
+			if nl := strings.IndexByte(desc, '\n'); nl > 0 {
+				desc = desc[:nl]
+			}
+			items = append(items, convItem{
+				kind:     convTask,
+				task:     session.TaskItem{Subject: desc, ID: j.id, Status: j.status},
+				bgTaskID: j.id,
+				indent:   1,
+				label:    compactTreeLabel("BG", j.id+" "+desc, 44),
+			})
+		}
+	}
+
+	// --- Task board section ---
+	if len(tasks) > 0 {
+		completed := 0
+		for _, t := range tasks {
+			if t.Status == "completed" {
+				completed++
+			}
+		}
+		items = append(items, convItem{
+			kind:     convTask,
+			groupTag: "tasks",
+			count:    len(tasks),
+			folded:   false,
+			indent:   0,
+			label:    "Tasks",
+			task:     session.TaskItem{Subject: fmt.Sprintf("Task Board (%d/%d)", completed, len(tasks))},
+		})
+		for _, t := range tasks {
+			idTag := ""
+			if t.ID != "" {
+				idTag = "#" + t.ID + " "
+			}
+			items = append(items, convItem{
+				kind:   convTask,
+				task:   t,
+				indent: 1,
+				label:  compactTreeLabel("Task", idTag+t.Subject, 44),
+			})
+		}
+	}
+
+	return items
+}
+
+func truncate(s string, maxW int) string {
+	if len(s) <= maxW || maxW <= 3 {
+		return s
+	}
+	return s[:maxW-3] + "..."
+}
+
+func compactTreeLabel(kind, text string, maxW int) string {
+	label := kind + ": " + strings.TrimSpace(text)
+	if len(label) <= maxW || maxW <= 3 {
+		return label
+	}
+	return label[:maxW-3] + "..."
+}
+
+func agentTreeName(a session.Subagent) string {
+	name := a.ShortID
+	if name == "" {
+		name = "agent"
+	}
+	if a.AgentType != "" {
+		name += " [" + a.AgentType + "]"
+	}
+	return name
+}
+
 // extractInlineTasks builds a task list from TaskCreate/TaskUpdate tool calls
 // in the conversation entries. Used as fallback when no file-based tasks exist.
 func extractInlineTasks(entries []session.Entry) []session.TaskItem {
 	tasks := make(map[string]*session.TaskItem) // keyed by task ID
-	var order []string                           // preserve creation order
+	var order []string                          // preserve creation order
 	nextID := 1
 
 	for _, e := range entries {
@@ -445,7 +855,56 @@ type taskOpResult struct {
 	detailed string // multi-line detail for preview
 }
 
-func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskItem) taskOpResult {
+// agentLabel returns a human-readable label for an agent, e.g. ":Explore (search for files)"
+func agentLabel(a session.Subagent, maxW int) string {
+	var parts []string
+	if a.AgentType != "" {
+		parts = append(parts, ":"+a.AgentType)
+	}
+	if a.FirstPrompt != "" {
+		prompt := a.FirstPrompt
+		remaining := maxW
+		for _, p := range parts {
+			remaining -= len(p) + 1
+		}
+		if remaining > 6 && len(prompt) > remaining {
+			prompt = prompt[:remaining-3] + "..."
+		}
+		parts = append(parts, prompt)
+	}
+	if len(parts) == 0 {
+		return "#" + a.ShortID
+	}
+	return strings.Join(parts, " ")
+}
+
+// taskOpItem holds extracted info for a single task operation (TaskOutput/TaskStop).
+type taskOpItem struct {
+	taskID  string
+	compact string
+	detail  string
+}
+
+// resolveTaskLabel returns compact and detail labels for a task/agent/background-task reference.
+func resolveTaskLabel(icon, verb, taskID string, agentsByID map[string]session.Subagent, bgTasks map[string]string, maxW int) (string, string) {
+	if ag, ok := agentsByID[taskID]; ok {
+		return icon + " " + agentLabel(ag, maxW), icon + " " + verb + ": " + agentLabel(ag, 80)
+	}
+	if cmd, ok := bgTasks[taskID]; ok {
+		short := cmd
+		if len(short) > maxW {
+			short = short[:maxW-3] + "..."
+		}
+		return icon + " " + short, icon + " " + verb + ": " + cmd
+	}
+	shortID := taskID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	return icon + " #" + shortID, icon + " " + verb + " #" + taskID
+}
+
+func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskItem, agentsByID map[string]session.Subagent, bgTasks map[string]string) taskOpResult {
 	var compactParts []string
 	var detailLines []string
 	for _, b := range entry.Content {
@@ -509,30 +968,25 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 				TaskID string `json:"task_id"`
 			}
 			json.Unmarshal([]byte(b.ToolInput), &input)
-			label := "⏳ waiting #" + input.TaskID
-			if len(input.TaskID) > 8 {
-				label = "⏳ waiting #" + input.TaskID[:8]
-			}
+			label, detail := resolveTaskLabel("⏳", "Waiting", input.TaskID, agentsByID, bgTasks, 25)
 			compactParts = append(compactParts, label)
-			detailLines = append(detailLines, "⏳ Waiting for agent output: "+input.TaskID)
+			detailLines = append(detailLines, detail)
 		case "TaskGet":
 			var input struct {
 				TaskID string `json:"taskId"`
 			}
 			json.Unmarshal([]byte(b.ToolInput), &input)
-			compactParts = append(compactParts, "get #"+input.TaskID)
-			detailLines = append(detailLines, "📋 Read task #"+input.TaskID)
+			label, detail := resolveTaskLabel("📋", "Read", input.TaskID, agentsByID, bgTasks, 25)
+			compactParts = append(compactParts, label)
+			detailLines = append(detailLines, detail)
 		case "TaskStop":
 			var input struct {
 				TaskID string `json:"task_id"`
 			}
 			json.Unmarshal([]byte(b.ToolInput), &input)
-			label := "⏹ stop #" + input.TaskID
-			if len(input.TaskID) > 8 {
-				label = "⏹ stop #" + input.TaskID[:8]
-			}
+			label, detail := resolveTaskLabel("⏹", "Stop", input.TaskID, agentsByID, bgTasks, 25)
 			compactParts = append(compactParts, label)
-			detailLines = append(detailLines, "⏹ Stopped agent: "+input.TaskID)
+			detailLines = append(detailLines, detail)
 		case "TaskList":
 			compactParts = append(compactParts, "list")
 			detailLines = append(detailLines, "📋 Listed tasks")
@@ -595,4 +1049,3 @@ func newConvList(items []convItem, width, height int) list.Model {
 	l.SetSize(width, height)
 	return l
 }
-

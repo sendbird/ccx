@@ -39,14 +39,21 @@ type liveCaptureMsg struct {
 	failed  bool
 }
 
-// Conversation preview detail levels (cycled with tab).
+// Conversation right-pane detail levels.
 const (
 	previewText = 0 // compact — text only, no tool blocks
 	previewTool = 1 // standard — text + tool blocks (hooks hidden)
 	previewHook = 2 // verbose — text + tool blocks + hook details
 )
 
+// Conversation left-pane list modes.
+const (
+	convPaneFlat = 0 // flat conversation list
+	convPaneTree = 1 // entity tree (agents, bg jobs, tasks)
+)
+
 var previewModeLabels = [3]string{"compact", "standard", "verbose"}
+var convPaneModeLabels = [2]string{"flat", "tree"}
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -208,13 +215,13 @@ type App struct {
 	editChoices []editChoice // available files to edit
 
 	// Tag menu (t key in actions)
-	tagMenu     bool
-	tagSessID   string   // single session ID
-	tagSessIDs  []string // multi-select session IDs
-	tagCursor   int
-	tagInput    textinput.Model
-	tagList     []string
-	badgeStore  *session.BadgeStore
+	tagMenu    bool
+	tagSessID  string   // single session ID
+	tagSessIDs []string // multi-select session IDs
+	tagCursor  int
+	tagInput   textinput.Model
+	tagList    []string
+	badgeStore *session.BadgeStore
 
 	// URL menu (u key in actions)
 	urlMenu        bool
@@ -262,20 +269,20 @@ type App struct {
 
 	// Remote execution
 	remoteSession       *remote.Session
-	remoteContent       string                 // progress view content (during setup)
+	remoteContent       string                  // progress view content (during setup)
 	remoteSetupSteps    <-chan remote.SetupStep // setup progress channel (nil after setup)
-	remoteProgressSteps []string               // completed setup step messages
-	remoteConfirmCfg    *remote.Config         // pending confirmation (nil = no pending)
-	remoteDefaults      remote.Config          // defaults from config.yaml
-	remoteJSONLFile     *os.File               // temp file accumulating streamed JSONL
-	remoteStreaming     bool                   // true once Claude output is streaming
+	remoteProgressSteps []string                // completed setup step messages
+	remoteConfirmCfg    *remote.Config          // pending confirmation (nil = no pending)
+	remoteDefaults      remote.Config           // defaults from config.yaml
+	remoteJSONLFile     *os.File                // temp file accumulating streamed JSONL
+	remoteStreaming     bool                    // true once Claude output is streaming
 	// Generic confirm modal
-	confirmMsg    string                      // message to show (empty = no modal)
+	confirmMsg string // message to show (empty = no modal)
 
 	// Conversation tooltip
-	convTooltipScroll int  // scroll offset in tooltip
-	convTooltipOn     bool // tooltip visible (toggle with t)
-	confirmAction func() (tea.Model, tea.Cmd) // action to run on "y"
+	convTooltipScroll int                         // scroll offset in tooltip
+	convTooltipOn     bool                        // tooltip visible (toggle with t)
+	confirmAction     func() (tea.Model, tea.Cmd) // action to run on "y"
 
 	// Worktree alignment
 	worktreeAlignActive bool
@@ -292,16 +299,20 @@ type App struct {
 
 	// Conversation split view (viewConversation)
 	conv struct {
-		sess     session.Session
-		messages []session.Entry
-		merged   []mergedMsg
-		agents   []session.Subagent
-		items    []convItem
-		split    SplitPane
-		agent    session.Subagent // non-zero when viewing agent conversation
-		task     session.TaskItem // non-zero when viewing task conversation
-		// Preview detail level: text → tool → hook (cycled with tab)
-		previewMode int // 0=text, 1=tool (no hooks), 2=hook (with hooks)
+		sess           session.Session
+		messages       []session.Entry
+		merged         []mergedMsg
+		agents         []session.Subagent
+		items          []convItem        // flat conversation items
+		treeItems      []convItem        // entity tree items (populated on demand)
+		toolUseToAgent map[string]string // tool_use_id → subagent ID (from toolUseResult.agentId)
+		split          SplitPane
+		agent          session.Subagent // non-zero when viewing agent conversation
+		task           session.TaskItem // non-zero when viewing task conversation
+		// Left pane mode: flat conversation list vs entity tree.
+		leftPaneMode int // 0=flat, 1=tree
+		// Right pane detail level: compact → standard → verbose.
+		rightPaneMode int // 0=text, 1=tool (no hooks), 2=hook (with hooks)
 
 		// Block filter for preview pane
 		blockFiltering bool            // true when filter input is active
@@ -453,6 +464,8 @@ type Config struct {
 	GroupMode    string  // initial group mode (flat|proj|tree|chain|fork)
 	PreviewMode  string  // initial preview mode (conv|stats|mem|tasks)
 	ViewMode     string  // initial view (sessions|config|plugins|stats)
+	JumpSession  string  // session ID to open and navigate to on launch
+	JumpUUID     string  // entry UUID to navigate to within the session
 }
 
 func NewApp(sessions []session.Session, cfg Config) *App {
@@ -558,13 +571,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = msg.Width
 		a.height = msg.Height
 		cmd := a.resizeAll()
-		// On first size, trigger deferred view init for -view flag
-		if first && a.state != viewSessions {
+		// On first size, trigger deferred view init for -view flag or picker jump
+		if first && (a.state != viewSessions || a.config.JumpSession != "") {
 			cmd = tea.Batch(cmd, func() tea.Msg { return initViewMsg{} })
 		}
 		return a, cmd
 
 	case initViewMsg:
+		// Jump to a specific session+message (from picker subcommand)
+		if a.config.JumpSession != "" {
+			return a.handleJumpFromPicker()
+		}
 		switch a.state {
 		case viewConfig:
 			return a.openConfigExplorer()
@@ -728,9 +745,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.config.SearchQuery != "" {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
 			}
-			// Restore cursor to previously selected session
+			// Restore cursor to previously selected session.
+			// Use VisibleItems() because Select() operates on the visible (filtered) index space.
 			if selectedID != "" {
-				for i, item := range a.sessionList.Items() {
+				for i, item := range a.sessionList.VisibleItems() {
 					if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
 						a.sessionList.Select(i)
 						return a, nil
@@ -966,20 +984,21 @@ func (a *App) View() string {
 		if a.conv.blockFiltering {
 			help = "  " + a.conv.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
 		} else {
-			h := "↵:open e:edit x:actions L:live R:refresh"
+			h := "↵:open e:edit x:actions L:live " + a.keymap.Session.Refresh + ":refresh"
 			if a.config.TmuxEnabled && tmux.InTmux() && a.currentSess.IsLive {
 				h += " I:input J:jump"
 			}
 			if sp.Show {
 				if sp.Focus {
-					if a.conv.previewMode == previewText {
+					if a.conv.rightPaneMode == previewText {
 						h += " ↑↓:scroll"
 					} else {
 						h += " ↑↓:blocks ←→:fold f/F:all /:filter"
 					}
+					next := previewModeLabels[(a.conv.rightPaneMode+1)%len(previewModeLabels)]
+					h += " tab:" + next
 				} else {
-					// Show next mode label for tab hint
-					next := previewModeLabels[(a.conv.previewMode+1)%3]
+					next := convPaneModeLabels[(a.conv.leftPaneMode+1)%len(convPaneModeLabels)]
 					h += " tab:" + next + " →:focus"
 				}
 				h += " esc:close []:resize"
@@ -1055,7 +1074,7 @@ func (a *App) View() string {
 			}
 			help = "  " + filterBadge.Render(badge) + formatHelp(" n/N:next/prev esc:clear")
 		} else {
-			h := "sp:sel x:actions p:page tab:filter P:project a:new /:search R:refresh v:views q:quit"
+			h := "sp:sel x:actions p:page tab:filter P:project a:new /:search " + a.keymap.Session.Refresh + ":refresh v:views q:quit"
 			if a.cfgHasSelection() {
 				h = "sp:sel x:actions p:page tab:filter esc:clear q:quit"
 			}
@@ -1095,7 +1114,7 @@ func (a *App) View() string {
 			} else if a.plgSearchTerm != "" {
 				help = "  " + filterBadge.Render(a.plgSearchTerm) + formatHelp(" n/N:next/prev esc:clear")
 			} else {
-				h := "↑↓:nav ↵:open →:preview sp:select x:actions /:search R:refresh v:views esc:back q:quit"
+				h := "↑↓:nav ↵:open →:preview sp:select x:actions /:search " + a.keymap.Session.Refresh + ":refresh v:views esc:back q:quit"
 				if a.plgSplit.Show && a.plgSplit.Focus {
 					h = "↑↓:scroll ←:unfocus q:quit"
 				}
@@ -1780,6 +1799,8 @@ func (a *App) handleGlobalStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case a.keymap.Session.Views:
 			a.viewsMenu = true
 			return a, nil
+		case a.keymap.Session.Refresh:
+			return a.openGlobalStats()
 		case "tab":
 			return a.openStatsDetail(a.statsDetail.next())
 		case "shift+tab":
@@ -1801,6 +1822,8 @@ func (a *App) handleGlobalStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case a.keymap.Session.Views:
 		a.viewsMenu = true
 		return a, nil
+	case a.keymap.Session.Refresh:
+		return a.openGlobalStats()
 	case "p":
 		a.statsPageMenu = true
 		return a, nil
@@ -1828,6 +1851,8 @@ func (a *App) handleStatsPageMenu(key string) (tea.Model, tea.Cmd) {
 		return a.openStatsDetail(statsDetailCommands)
 	case "e":
 		return a.openStatsDetail(statsDetailErrors)
+	case "p":
+		return a.openStatsDetail(statsDetailProjects)
 	case "o":
 		// back to overview
 		a.statsDetail = statsDetailNone
@@ -1843,7 +1868,7 @@ func (a *App) renderStatsPageHintBox() string {
 
 	line1 := hl.Render("t") + d.Render(":tools") + sp + hl.Render("m") + d.Render(":mcp") + sp + hl.Render("a") + d.Render(":agents")
 	line2 := hl.Render("s") + d.Render(":skills") + sp + hl.Render("c") + d.Render(":cmds") + sp + hl.Render("e") + d.Render(":errors")
-	line3 := hl.Render("o") + d.Render(":overview")
+	line3 := hl.Render("p") + d.Render(":projects") + sp + hl.Render("o") + d.Render(":overview")
 
 	body := strings.Join([]string{line1, line2, line3, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
@@ -3395,7 +3420,7 @@ func (a *App) refreshActivePreview() tea.Cmd {
 	case viewSessions:
 		return a.updateSessionPreview()
 	case viewConversation:
-		if a.conv.previewMode == previewText {
+		if a.conv.rightPaneMode == previewText {
 			a.conv.split.CacheKey = "" // force re-render
 			a.updateConvPreview()
 		} else {
@@ -3671,7 +3696,11 @@ func (a *App) updateSessionConvPreview(sess session.Session) {
 	}
 
 	// Reset state; start cursor at bottom for live sessions
-	a.sessConvExpanded = nil
+	// Default to all messages expanded (unfolded)
+	a.sessConvExpanded = make(map[int]bool)
+	for i := range a.sessConvEntries {
+		a.sessConvExpanded[i] = true
+	}
 	a.sessConvFiltered = nil
 	a.sessConvFilterTerm = ""
 	a.sessConvSearching = false
@@ -3800,7 +3829,10 @@ func (a *App) applyConvFilter(term string) {
 	if a.sessConvCursor >= len(visible) {
 		a.sessConvCursor = max(len(visible)-1, 0)
 	}
-	a.sessConvExpanded = nil
+	a.sessConvExpanded = make(map[int]bool)
+	for i := range visible {
+		a.sessConvExpanded[i] = true
+	}
 	a.refreshConvPreview()
 }
 
@@ -3809,7 +3841,10 @@ func (a *App) clearConvFilter() {
 	a.sessConvFilterTerm = ""
 	a.sessConvFiltered = nil
 	a.sessConvCursor = 0
-	a.sessConvExpanded = nil
+	a.sessConvExpanded = make(map[int]bool)
+	for i := range a.sessConvEntries {
+		a.sessConvExpanded[i] = true
+	}
 	a.refreshConvPreview()
 }
 
@@ -3979,6 +4014,46 @@ func (a *App) jumpToConvMessage() (tea.Model, tea.Cmd) {
 	a.updateConvPreview()
 
 	return a, cmd
+}
+
+// handleJumpFromPicker finds a session by ID and opens its conversation,
+// navigating to the entry matching JumpUUID.
+func (a *App) handleJumpFromPicker() (tea.Model, tea.Cmd) {
+	targetSessID := a.config.JumpSession
+	targetUUID := a.config.JumpUUID
+	a.config.JumpSession = "" // consume
+
+	// Find the session
+	for i, s := range a.sessions {
+		if s.ID != targetSessID {
+			continue
+		}
+		a.sessionList.Select(i)
+		a.currentSess = s
+		cmd := a.openConversation(s)
+
+		// Navigate to the target entry UUID
+		if targetUUID != "" {
+			items := a.convList.Items()
+			for j, li := range items {
+				ci, ok := li.(convItem)
+				if !ok || ci.kind != convMsg {
+					continue
+				}
+				for idx := ci.merged.startIdx; idx <= ci.merged.endIdx && idx < len(a.conv.messages); idx++ {
+					if a.conv.messages[idx].UUID == targetUUID {
+						a.convList.Select(j)
+						a.liveTail = false
+						a.conv.split.BottomAlign = false
+						a.updateConvPreview()
+						return a, cmd
+					}
+				}
+			}
+		}
+		return a, cmd
+	}
+	return a, nil
 }
 
 func (a *App) updateSessionStatsPreview(sess session.Session) {
@@ -4257,6 +4332,13 @@ func (a *App) refreshSessionPreviewLive() {
 		a.sessConvCursor = max(len(visible)-1, 0)
 	}
 
+	// Expand new messages by default (only add entries beyond old count)
+	if a.sessConvExpanded != nil {
+		for i := oldCount; i < len(visible); i++ {
+			a.sessConvExpanded[i] = true
+		}
+	}
+
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	content := renderConversationPreview(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, true)
 	a.sessSplit.Preview.SetContent(content)
@@ -4329,7 +4411,6 @@ func (a *App) renderActionsHintBox() string {
 func (a *App) renderSearchHintBox() string {
 	h := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
 	d := dimStyle
-	sp := " "
 
 	var lines []string
 	switch a.state {
@@ -4342,8 +4423,10 @@ func (a *App) renderSearchHintBox() string {
 		}
 	case viewConversation:
 		lines = []string{
-			h.Render("role:") + d.Render("user") + sp + h.Render("role:") + d.Render("asst"),
-			h.Render("tool:") + d.Render("Bash Read Edit Write"),
+			h.Render("role:") + d.Render("user asst"),
+			h.Render("tool:") + d.Render("Bash Read Edit Write Agent"),
+			h.Render("has:") + d.Render("image task bg agent thinking"),
+			h.Render("is:") + d.Render("error agent task bg"),
 		}
 	case viewConfig:
 		lines = []string{
@@ -4764,9 +4847,15 @@ func (a *App) rebuildSessionList() {
 		applyListFilter(&a.sessionList, filterTerm)
 	}
 
-	// Restore cursor to previously selected session
+	// Also re-apply startup search query if no interactive filter was active
+	if filterTerm == "" && a.config.SearchQuery != "" {
+		applyListFilter(&a.sessionList, a.config.SearchQuery)
+	}
+
+	// Restore cursor to previously selected session.
+	// Use VisibleItems() because Select() operates on the visible (filtered) index space.
 	if selectedID != "" {
-		for i, item := range a.sessionList.Items() {
+		for i, item := range a.sessionList.VisibleItems() {
 			if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
 				a.sessionList.Select(i)
 				break
@@ -4999,9 +5088,13 @@ func (a *App) breadcrumbRightStatus() string {
 	}
 
 	// Preview mode badge for conversation/message views
-	if a.state == viewConversation || a.state == viewMessageFull {
+	if a.state == viewConversation {
 		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
-		parts = append(parts, modeStyle.Render(strings.ToUpper(previewModeLabels[a.conv.previewMode])))
+		parts = append(parts, modeStyle.Render(strings.ToUpper(convPaneModeLabels[a.conv.leftPaneMode])))
+		parts = append(parts, modeStyle.Render(strings.ToUpper(previewModeLabels[a.conv.rightPaneMode])))
+	} else if a.state == viewMessageFull {
+		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+		parts = append(parts, modeStyle.Render(strings.ToUpper(previewModeLabels[a.conv.rightPaneMode])))
 	}
 
 	// Loading indicator

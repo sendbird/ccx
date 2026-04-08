@@ -136,6 +136,31 @@ func setupConvApp(t *testing.T, entries []session.Entry, width, height int) *App
 	return app
 }
 
+func setupTreeConvApp(t *testing.T, entries []session.Entry, tasks []session.TaskItem, agents []session.Subagent, width, height int) *App {
+	t.Helper()
+	app := setupConvApp(t, entries, width, height)
+	app.currentSess.Tasks = tasks
+	app.conv.sess.Tasks = tasks
+	app.conv.agents = agents
+	app.conv.items = buildConvItems(app.conv.merged, agents, tasks)
+	app.conv.leftPaneMode = convPaneTree
+	app.rebuildConversationList(0)
+	app.updateConvPreview()
+	return app
+}
+
+func selectConvItemBy(t *testing.T, app *App, match func(convItem) bool) {
+	t.Helper()
+	for i, item := range app.convList.Items() {
+		ci, ok := item.(convItem)
+		if ok && match(ci) {
+			app.convList.Select(i)
+			return
+		}
+	}
+	t.Fatal("matching conversation item not found")
+}
+
 func pressKey(app *App, key string) *App {
 	var msg tea.KeyMsg
 	switch key {
@@ -624,6 +649,195 @@ func TestTabOpensPreviewWithoutFocus(t *testing.T) {
 	}
 	if app.conv.split.Focus {
 		t.Error("tab should not focus preview (list stays focused)")
+	}
+}
+
+func TestLeftPaneTabTogglesTreeWithoutChangingRightMode(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.conv.leftPaneMode = convPaneFlat
+	app.conv.rightPaneMode = previewHook
+	app.conv.split.Focus = false
+
+	app = pressKey(app, "tab")
+
+	if app.conv.leftPaneMode != convPaneTree {
+		t.Fatalf("left pane tab should switch to tree mode, got %d", app.conv.leftPaneMode)
+	}
+	if app.conv.rightPaneMode != previewHook {
+		t.Fatalf("left pane tab should not change right pane mode, got %d", app.conv.rightPaneMode)
+	}
+}
+
+func TestRightPaneTabCyclesDetailWithoutChangingLeftMode(t *testing.T) {
+	tasks := []session.TaskItem{{ID: "42", Subject: "Refactor preview", Status: "in_progress"}}
+	app := setupTreeConvApp(t, testEntries(), tasks, nil, 160, 50)
+	app.conv.split.Focus = true
+	app.conv.rightPaneMode = previewText
+
+	app = pressKey(app, "tab")
+
+	if app.conv.rightPaneMode != previewTool {
+		t.Fatalf("right pane tab should cycle to standard mode, got %d", app.conv.rightPaneMode)
+	}
+	if app.conv.leftPaneMode != convPaneTree {
+		t.Fatalf("right pane tab should not change left pane mode, got %d", app.conv.leftPaneMode)
+	}
+}
+
+func TestBuildEntityTreeUsesCompactLabels(t *testing.T) {
+	merged := []mergedMsg{{
+		entry: session.Entry{
+			Role: "assistant",
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ID: "bash-1", ToolName: "Bash", ToolInput: `{"command":"npm test --watch --runInBand --color=always"}`},
+				{Type: "tool_result", ID: "bash-1", Text: "Command running in background with ID: bg-1."},
+			},
+		},
+	}}
+	agents := []session.Subagent{{
+		ID:          "agent-1",
+		ShortID:     "agent-1",
+		FirstPrompt: "This is a very long agent prompt that should not appear in the compact tree label",
+	}}
+	tasks := []session.TaskItem{{
+		ID:      "42",
+		Subject: "This is a very long task title that should be compacted in the tree",
+		Status:  "in_progress",
+	}}
+
+	items := buildEntityTree(merged, agents, tasks, map[string]string{"agent-1": "running"})
+
+	var agentLabel, bgLabel, taskLabel string
+	for _, item := range items {
+		switch {
+		case item.kind == convAgent:
+			agentLabel = item.label
+		case item.bgTaskID != "":
+			bgLabel = item.label
+		case item.kind == convTask && item.task.ID == "42":
+			taskLabel = item.label
+		}
+	}
+
+	if !strings.HasPrefix(agentLabel, "Agent: ") {
+		t.Fatalf("agent tree label = %q, want compact Agent prefix", agentLabel)
+	}
+	if strings.Contains(agentLabel, "very long agent prompt") {
+		t.Fatalf("agent tree label should not include full prompt: %q", agentLabel)
+	}
+	if !strings.HasPrefix(bgLabel, "BG: ") {
+		t.Fatalf("background job tree label = %q, want compact BG prefix", bgLabel)
+	}
+	if !strings.HasPrefix(taskLabel, "Task: ") {
+		t.Fatalf("task tree label = %q, want compact Task prefix", taskLabel)
+	}
+}
+
+func TestTreeAgentPreviewShowsConversationAndToolCalls(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	agentPath := writeSessionJSONL(t, []session.Entry{
+		makeTextEntry("user", base, "Investigate the failure"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ID: "read-1", ToolName: "Read", ToolInput: `{"path":"main.go"}`},
+				{Type: "tool_result", ID: "read-1", Text: "package main"},
+				{Type: "text", Text: "Found the issue in main.go"},
+			},
+		},
+	})
+	agents := []session.Subagent{{
+		ID:          "agent-1",
+		ShortID:     "agent-1",
+		FilePath:    agentPath,
+		AgentType:   "planner",
+		FirstPrompt: "Investigate the failure",
+	}}
+
+	app := setupTreeConvApp(t, []session.Entry{makeTextEntry("user", base, "parent")}, nil, agents, 160, 50)
+	app.conv.rightPaneMode = previewTool
+	selectConvItemBy(t, app, func(ci convItem) bool { return ci.kind == convAgent })
+	app.updateConvPreview()
+
+	if got := len(app.conv.split.Folds.Entry.Content); got < 3 {
+		t.Fatalf("agent tree preview should include rich content blocks, got %d", got)
+	}
+	if !strings.Contains(entryFullText(app.conv.split.Folds.Entry), "Investigate the failure") {
+		t.Fatalf("agent tree preview should include conversation text, got %q", entryFullText(app.conv.split.Folds.Entry))
+	}
+}
+
+func TestTreeBgJobPreviewShowsCommandAndOutput(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		{
+			Role:      "assistant",
+			Timestamp: base,
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Running tests in the background"},
+				{Type: "tool_use", ID: "bash-1", ToolName: "Bash", ToolInput: `{"command":"npm test --watch --runInBand"}`},
+				{Type: "tool_result", ID: "bash-1", Text: "Command running in background with ID: bg-1."},
+			},
+		},
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ID: "taskout-1", ToolName: "TaskOutput", ToolInput: `{"task_id":"bg-1"}`},
+				{Type: "tool_result", ID: "taskout-1", Text: "<status>completed</status>\n<output>all tests passed</output>"},
+			},
+		},
+	}
+
+	app := setupTreeConvApp(t, entries, nil, nil, 160, 50)
+	app.conv.rightPaneMode = previewTool
+	selectConvItemBy(t, app, func(ci convItem) bool { return ci.bgTaskID == "bg-1" })
+	app.updateConvPreview()
+
+	if got := len(app.conv.split.Folds.Entry.Content); got < 3 {
+		t.Fatalf("background job tree preview should include command and output blocks, got %d", got)
+	}
+	text := entryFullText(app.conv.split.Folds.Entry)
+	if !strings.Contains(text, "Command: npm test --watch --runInBand") {
+		t.Fatalf("background job preview should include command text, got %q", text)
+	}
+}
+
+func TestTreeTaskPreviewShowsActivityLog(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		{
+			Role:      "assistant",
+			Timestamp: base,
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Starting refactor"},
+				{Type: "tool_use", ToolName: "TaskUpdate", ToolInput: `{"taskId":"42","status":"in_progress"}`},
+			},
+		},
+		makeTextEntry("assistant", base.Add(time.Second), "Updated the renderer"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(2 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Finished refactor"},
+				{Type: "tool_use", ToolName: "TaskUpdate", ToolInput: `{"taskId":"42","status":"completed"}`},
+			},
+		},
+	}
+	tasks := []session.TaskItem{{ID: "42", Subject: "Refactor preview", Status: "completed", Description: "Make tree previews richer"}}
+
+	app := setupTreeConvApp(t, entries, tasks, nil, 160, 50)
+	app.conv.rightPaneMode = previewTool
+	selectConvItemBy(t, app, func(ci convItem) bool { return ci.kind == convTask && ci.task.ID == "42" })
+	app.updateConvPreview()
+
+	if got := len(app.conv.split.Folds.Entry.Content); got < 3 {
+		t.Fatalf("task tree preview should include activity log blocks, got %d", got)
+	}
+	text := entryFullText(app.conv.split.Folds.Entry)
+	if !strings.Contains(text, "Updated the renderer") {
+		t.Fatalf("task tree preview should include activity log text, got %q", text)
 	}
 }
 
