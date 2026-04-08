@@ -62,6 +62,10 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updatePreview()
 		return m, nil
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			m.quit = true
+			return m, tea.Quit
+		}
 		if m.refPicking {
 			return m.handleRefKey(msg)
 		}
