@@ -22,7 +22,14 @@ type Item struct {
 }
 
 // urlRegex matches http/https URLs in text.
-var urlRegex = regexp.MustCompile(`https?://[^\s<>"'\x60\x29\x5D]+`)
+// Excludes: whitespace, angle brackets, quotes, backtick, paren, bracket,
+// and common unicode chars that leak from markdown (bullets, dashes, quotes).
+var urlRegex = regexp.MustCompile(`https?://[^\s<>"'\x60\x29\x5D\x{2022}\x{2013}\x{2014}\x{2018}\x{2019}\x{201C}\x{201D}]+`)
+
+// trailingJunkRe strips capitalized words or markdown bold artifacts that appear
+// after a non-alpha character, indicating accidental concatenation from adjacent
+// prose (e.g. "1234Then", "59153**Fix**", "pull/1234GH").
+var trailingJunkRe = regexp.MustCompile(`([^a-zA-Z/])(?:\*{1,2}[^*]+\*{0,2}|[A-Z][a-zA-Z]*)$`)
 
 // Package-level vars to avoid per-call allocation.
 var (
@@ -95,6 +102,11 @@ func CleanURL(raw string) string {
 	raw = strings.TrimRight(raw, `\`)
 	// Strip trailing punctuation that leaks from prose/markdown
 	raw = strings.TrimRight(raw, ".,;:!?)'\"")
+	// Strip trailing capitalized words/markdown absorbed from adjacent text
+	// (e.g. "...1234GH", "...55Then", "...**Fix**"). Keep the preceding char ($1).
+	raw = trailingJunkRe.ReplaceAllString(raw, "$1")
+	// Re-strip punctuation that may be exposed after word removal
+	raw = strings.TrimRight(raw, ".,;:!?)'\"")
 
 	// Validate
 	u, err := url.Parse(raw)
@@ -103,6 +115,10 @@ func CleanURL(raw string) string {
 	}
 	// Reject URLs with control chars or obviously broken hosts
 	if strings.ContainsAny(u.Host, " \t\n\\") {
+		return ""
+	}
+	// Reject bare-domain URLs with no path, query, or fragment (e.g. "https://github.com/")
+	if strings.TrimRight(u.Path, "/") == "" && u.RawQuery == "" && u.Fragment == "" {
 		return ""
 	}
 	return raw
