@@ -39,10 +39,14 @@ func AggregateStats(sessions []Session) GlobalStats {
 		if projKey == "" {
 			projKey = "(no project)"
 		}
-		ps := projMap[projKey]
+		repoKey := ResolveBaseRepo(projKey)
+		if repoKey == "" {
+			repoKey = projKey
+		}
+		ps := projMap[repoKey]
 		if ps == nil {
-			ps = &ProjectStats{ProjectPath: projKey, ProjectName: sess.ProjectName}
-			projMap[projKey] = ps
+			ps = &ProjectStats{ProjectPath: projKey, RepoPath: repoKey, ProjectName: sess.ProjectName}
+			projMap[repoKey] = ps
 		}
 		ps.SessionCount++
 		ps.TotalInputTokens += stats.TotalInputTokens + stats.TotalCacheReadTokens + stats.TotalCacheCreationTokens

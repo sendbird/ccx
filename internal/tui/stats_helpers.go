@@ -329,12 +329,17 @@ func renderProjectDetail(stats session.GlobalStats, width int) string {
 	costStyle := statCostStyle
 	ruler := dimStyle.Render(strings.Repeat("─", min(width, 40)))
 
-	sb.WriteString(titleStyle.Render(fmt.Sprintf("PROJECTS (%d)", len(stats.ProjectStats))) + "\n")
+	sb.WriteString(titleStyle.Render(fmt.Sprintf("REPOS (%d)", len(stats.ProjectStats))) + "\n")
 	sb.WriteString(ruler + "\n\n")
 
 	maxCost := stats.ProjectStats[0].CostUSD
 	if maxCost <= 0 {
 		maxCost = 1
+	}
+
+	totalCost := stats.TotalCostUSD
+	if totalCost <= 0 {
+		totalCost = 1
 	}
 
 	barW := width - 36
@@ -343,33 +348,33 @@ func renderProjectDetail(stats session.GlobalStats, width int) string {
 	}
 
 	for i, ps := range stats.ProjectStats {
-		// Project path (shortened with ~ for home dir)
-		path := ps.ProjectPath
+		path := ps.RepoPath
+		if path == "" {
+			path = ps.ProjectPath
+		}
 		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
 			path = "~" + path[len(home):]
 		}
 
-		// Rank number
 		rank := fmt.Sprintf("%2d. ", i+1)
-
 		maxPathW := width - len(rank) - 2
 		if len(path) > maxPathW {
 			path = "..." + path[len(path)-maxPathW+3:]
 		}
 		sb.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render(rank), path))
 
-		// Cost bar
 		barLen := int(float64(barW) * ps.CostUSD / maxCost)
 		if barLen < 1 && ps.CostUSD > 0 {
 			barLen = 1
 		}
 		bar := strings.Repeat("█", barLen)
+		ratio := ps.CostUSD * 100 / totalCost
 
-		sb.WriteString(fmt.Sprintf("      %s %s\n",
+		sb.WriteString(fmt.Sprintf("      %s %s  %s\n",
 			costStyle.Render(fmt.Sprintf("%7s", fmtCost(ps.CostUSD))),
-			labelStyle.Render(bar)))
+			labelStyle.Render(bar),
+			labelStyle.Render(fmt.Sprintf("%.0f%%", ratio))))
 
-		// Token details
 		sb.WriteString(fmt.Sprintf("      %s out   %s sess   %s msgs   %s duration\n",
 			numStyle.Render(fmtNum(ps.TotalOutputTokens)),
 			labelStyle.Render(fmt.Sprintf("%d", ps.SessionCount)),

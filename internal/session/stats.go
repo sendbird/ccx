@@ -150,6 +150,7 @@ type GlobalStats struct {
 type ProjectStats struct {
 	ProjectName              string
 	ProjectPath              string
+	RepoPath                 string
 	SessionCount             int
 	TotalInputTokens         int64
 	TotalOutputTokens        int64
