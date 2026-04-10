@@ -22,17 +22,18 @@ const (
 // convItem represents a single row in the conversation list.
 type convItem struct {
 	kind        convItemKind
-	merged      mergedMsg        // for convMsg
-	task        session.TaskItem // for convTask
-	agent       session.Subagent // for convAgent
-	agentStatus string           // "running", "completed", "stopped" for convAgent
-	bgTaskID    string           // background task ID for individual task op items
-	indent      int              // 0=message, 1=sub-item
-	folded      bool             // for expandable group headers (tasks/agents)
-	parentIdx   int              // index of parent message in items slice
-	groupTag    string           // "tasks" or "agents" — for group header rows
-	count       int              // number of items in group (for header display)
-	label       string           // optional compact label for tree items
+	merged      mergedMsg         // for convMsg
+	task        session.TaskItem  // for convTask
+	cron        session.CronItem  // for cron-related convTask rows
+	agent       session.Subagent  // for convAgent
+	agentStatus string            // "running", "completed", "stopped" for convAgent
+	bgTaskID    string            // background task ID for individual task op items
+	indent      int               // 0=message, 1=sub-item
+	folded      bool              // for expandable group headers (tasks/agents)
+	parentIdx   int               // index of parent message in items slice
+	groupTag    string            // "tasks", "agents", "bgjobs", "crons"
+	count       int               // number of items in group (for header display)
+	label       string            // optional compact label for tree items
 }
 
 func (c convItem) FilterValue() string {
@@ -45,8 +46,11 @@ func (c convItem) FilterValue() string {
 		parts = append(parts, entryFilterText(c.merged.entry))
 	case convTask:
 		parts = append(parts, c.task.Subject, c.task.Description, c.task.Status)
+		parts = append(parts, c.cron.ID, c.cron.Cron, c.cron.Prompt, c.cron.Status)
 		if c.bgTaskID != "" {
 			parts = append(parts, "is:bg", c.bgTaskID)
+		} else if c.cron.ID != "" || c.groupTag == "crons" {
+			parts = append(parts, "is:cron")
 		} else {
 			parts = append(parts, "is:task")
 		}

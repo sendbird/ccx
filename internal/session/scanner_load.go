@@ -218,6 +218,124 @@ func LoadTasksFromEntries(entries []Entry) []TaskItem {
 	return result
 }
 
+func LoadCronsFromEntries(entries []Entry) []CronItem {
+	crons := make(map[string]*CronItem)
+	var order []string
+	pendingCreateByToolUse := make(map[string]*CronItem)
+
+	for _, e := range entries {
+		for _, b := range e.Content {
+			if b.Type == "tool_use" {
+				switch b.ToolName {
+				case "CronCreate":
+					var input struct {
+						Cron      string `json:"cron"`
+						Prompt    string `json:"prompt"`
+						Recurring bool   `json:"recurring"`
+					}
+					if json.Unmarshal([]byte(b.ToolInput), &input) != nil {
+						continue
+					}
+					pendingCreateByToolUse[b.ID] = &CronItem{
+						Cron:      input.Cron,
+						Prompt:    input.Prompt,
+						Recurring: input.Recurring,
+						Status:    "active",
+						CreatedAt: e.Timestamp,
+					}
+				case "CronDelete":
+					var input struct {
+						ID string `json:"id"`
+					}
+					if json.Unmarshal([]byte(b.ToolInput), &input) != nil || input.ID == "" {
+						continue
+					}
+					cron := crons[input.ID]
+					if cron == nil {
+						cron = &CronItem{ID: input.ID}
+						crons[input.ID] = cron
+						order = append(order, input.ID)
+					}
+					cron.Status = "deleted"
+					cron.DeletedAt = e.Timestamp
+				}
+				continue
+			}
+			if b.Type != "tool_result" || b.ID == "" {
+				continue
+			}
+			pending := pendingCreateByToolUse[b.ID]
+			if pending == nil {
+				continue
+			}
+			delete(pendingCreateByToolUse, b.ID)
+			id := extractCronID(b.Text)
+			if id == "" {
+				id = pending.ID
+			}
+			if id == "" {
+				continue
+			}
+			existing := crons[id]
+			if existing == nil {
+				pending.ID = id
+				crons[id] = pending
+				order = append(order, id)
+				continue
+			}
+			if pending.Cron != "" {
+				existing.Cron = pending.Cron
+			}
+			if pending.Prompt != "" {
+				existing.Prompt = pending.Prompt
+			}
+			existing.Recurring = pending.Recurring
+			if existing.CreatedAt.IsZero() {
+				existing.CreatedAt = pending.CreatedAt
+			}
+			if existing.Status == "" {
+				existing.Status = "active"
+			}
+		}
+	}
+
+	var result []CronItem
+	for _, id := range order {
+		if cron := crons[id]; cron != nil {
+			if cron.Status == "" {
+				cron.Status = "active"
+			}
+			result = append(result, *cron)
+		}
+	}
+	return result
+}
+
+func extractCronID(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	var payload struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal([]byte(text), &payload) == nil && payload.ID != "" {
+		return payload.ID
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "id:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "id:"))
+		}
+		if strings.Contains(line, "\"id\"") {
+			if json.Unmarshal([]byte(line), &payload) == nil && payload.ID != "" {
+				return payload.ID
+			}
+		}
+	}
+	return ""
+}
+
 func loadFileTasks(sessionID, home string) []TaskItem {
 	dir := filepath.Join(home, ".claude", "tasks", sessionID)
 	entries, err := os.ReadDir(dir)

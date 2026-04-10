@@ -40,6 +40,8 @@ var (
 	bMCPToolS          = []byte(`"name": "mcp__`)
 	bTaskCreate        = []byte(`"name":"TaskCreate"`)
 	bTaskCreateS       = []byte(`"name": "TaskCreate"`)
+	bCronCreate        = []byte(`"name":"CronCreate"`)
+	bCronCreateS       = []byte(`"name": "CronCreate"`)
 
 	// Fork detection markers
 	bForkedFrom = []byte(`"forkedFrom"`)

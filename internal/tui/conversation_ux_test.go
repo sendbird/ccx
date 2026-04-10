@@ -121,7 +121,7 @@ func setupConvApp(t *testing.T, entries []session.Entry, width, height int) *App
 	app.conv.sess = sess
 	app.conv.messages = entries
 	app.conv.merged = filterConversation(mergeConversationTurns(entries))
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil)
+	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
 
 	contentH := ContentHeight(height)
 	app.conv.split.Focus = false
@@ -142,7 +142,7 @@ func setupTreeConvApp(t *testing.T, entries []session.Entry, tasks []session.Tas
 	app.currentSess.Tasks = tasks
 	app.conv.sess.Tasks = tasks
 	app.conv.agents = agents
-	app.conv.items = buildConvItems(app.conv.merged, agents, tasks)
+	app.conv.items = buildConvItems(app.conv.merged, agents, tasks, nil)
 	app.conv.leftPaneMode = convPaneTree
 	app.rebuildConversationList(0)
 	app.updateConvPreview()
@@ -277,7 +277,7 @@ func TestConvPreviewGrowBlocksOnSameEntry(t *testing.T) {
 	// Simulate growing: add more blocks to the same entry
 	grown := makeGrowingEntry(base.Add(time.Second), 6)
 	app.conv.merged[1] = mergedMsg{entry: grown, startIdx: 1, endIdx: 1}
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil)
+	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
 
 	// Update preview — should use GrowBlocks, preserving existing folds
 	app.conv.split.CacheKey = fmt.Sprintf("%d:%d", 1, 3) // old block count
@@ -339,7 +339,7 @@ func TestLiveTailTracksNewMessages(t *testing.T) {
 	entries = append(entries, newEntry)
 	app.conv.messages = entries
 	app.conv.merged = filterConversation(mergeConversationTurns(entries))
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil)
+	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
 
 	contentH := ContentHeight(app.height)
 	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
@@ -377,7 +377,7 @@ func TestLiveTailGrowingContent(t *testing.T) {
 	// Grow the entry
 	grown := makeGrowingEntry(base.Add(time.Second), 8)
 	app.conv.merged[len(app.conv.merged)-1] = mergedMsg{entry: grown, startIdx: 1, endIdx: 1}
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil)
+	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
 	app.conv.split.CacheKey = fmt.Sprintf("%d:%d", 1, 2) // old count
 
 	app.updateConvPreview()
@@ -405,7 +405,7 @@ func TestLiveTailAlwaysSelectsLastItem(t *testing.T) {
 
 	// Simulate handleLiveTail inline (refreshConversation needs file I/O,
 	// so rebuild manually)
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil)
+	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
 	contentH := ContentHeight(app.height)
 	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
 	app.conv.split.List = &app.convList
@@ -470,7 +470,7 @@ func TestLiveTailRefreshNoCachePoisoning(t *testing.T) {
 	grown := makeGrowingEntry(base.Add(time.Second), 8)
 	app.conv.messages = []session.Entry{entries[0], grown}
 	app.conv.merged = filterConversation(mergeConversationTurns(app.conv.messages))
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil)
+	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
 
 	// Simulate what refreshConversation does (minus LoadMessages I/O)
 	oldIdx := app.convList.Index()
@@ -705,7 +705,7 @@ func TestBuildEntityTreeUsesCompactLabels(t *testing.T) {
 		Status:  "in_progress",
 	}}
 
-	items := buildEntityTree(merged, agents, tasks, map[string]string{"agent-1": "running"})
+	items := buildEntityTree(merged, agents, tasks, nil, map[string]string{"agent-1": "running"})
 
 	var agentLabel, bgLabel, taskLabel string
 	for _, item := range items {

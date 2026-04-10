@@ -212,7 +212,7 @@ func entryFilterText(e session.Entry) string {
 	} else if e.Role == "assistant" {
 		parts = append(parts, "role:asst")
 	}
-	hasImage, hasTask, hasBg, hasAgent, hasThinking := false, false, false, false, false
+	hasImage, hasTask, hasBg, hasAgent, hasThinking, hasCron := false, false, false, false, false, false
 	for _, b := range e.Content {
 		switch b.Type {
 		case "text":
@@ -227,6 +227,9 @@ func entryFilterText(e session.Entry) string {
 			}
 			if isTaskTool(b.ToolName) {
 				hasTask = true
+			}
+			if isCronTool(b.ToolName) {
+				hasCron = true
 			}
 		case "tool_result":
 			if b.IsError {
@@ -255,6 +258,9 @@ func entryFilterText(e session.Entry) string {
 	}
 	if hasThinking {
 		parts = append(parts, "has:thinking")
+	}
+	if hasCron {
+		parts = append(parts, "has:cron")
 	}
 	return strings.Join(parts, " ")
 }

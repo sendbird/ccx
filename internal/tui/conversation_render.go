@@ -415,12 +415,13 @@ func inferAgentStatuses(merged []mergedMsg) map[string]string {
 // with inline task and agent sub-items under assistant messages.
 // A collapsible task group header appears at every task-touching message.
 // Individual task rows (expandable) are attached only under the LAST one.
-func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem) []convItem {
+func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem, crons []session.CronItem) []convItem {
 	// First pass: find all task-touching message indices and the last one.
 	// Always scan for task operations (TaskCreate, TaskOutput, etc.) regardless
 	// of whether a resolved task list exists — operations should be visible as
 	// sub-items even without a task board.
 	var taskMsgIndices []int
+	var cronMsgIndices []int
 	for i, m := range merged {
 		if m.entry.Role != "assistant" {
 			continue
@@ -431,14 +432,28 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 				break
 			}
 		}
+		for _, block := range m.entry.Content {
+			if block.Type == "tool_use" && isCronTool(block.ToolName) {
+				cronMsgIndices = append(cronMsgIndices, i)
+				break
+			}
+		}
 	}
 	lastTaskMsgIdx := -1
 	if len(taskMsgIndices) > 0 {
 		lastTaskMsgIdx = taskMsgIndices[len(taskMsgIndices)-1]
 	}
+	lastCronMsgIdx := -1
+	if len(cronMsgIndices) > 0 {
+		lastCronMsgIdx = cronMsgIndices[len(cronMsgIndices)-1]
+	}
 	taskMsgSet := make(map[int]bool, len(taskMsgIndices))
 	for _, idx := range taskMsgIndices {
 		taskMsgSet[idx] = true
+	}
+	cronMsgSet := make(map[int]bool, len(cronMsgIndices))
+	for _, idx := range cronMsgIndices {
+		cronMsgSet[idx] = true
 	}
 
 	// Pre-compute task completion stats and ID lookup
@@ -449,6 +464,10 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 			completed++
 		}
 		tasksByID[t.ID] = t
+	}
+	cronsByID := make(map[string]session.CronItem, len(crons))
+	for _, c := range crons {
+		cronsByID[c.ID] = c
 	}
 
 	// Build agent lookup by both full ID and ShortID for resolving task references.
@@ -607,6 +626,81 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 				}
 			}
 		}
+
+		if cronMsgSet[mi] {
+			expandable := mi == lastCronMsgIdx
+			for _, b := range m.entry.Content {
+				if b.Type != "tool_use" || !isCronTool(b.ToolName) {
+					continue
+				}
+				cron := session.CronItem{}
+				label := "Cron"
+				switch b.ToolName {
+				case "CronCreate":
+					var input struct {
+						Cron      string `json:"cron"`
+						Prompt    string `json:"prompt"`
+						Recurring bool   `json:"recurring"`
+					}
+					if json.Unmarshal([]byte(b.ToolInput), &input) != nil {
+						continue
+					}
+					cron = session.CronItem{Cron: input.Cron, Prompt: input.Prompt, Recurring: input.Recurring, Status: "active"}
+					label = "◉ Create " + strings.TrimSpace(input.Cron)
+					if label == "◉ Create" {
+						label = "◉ Create cron"
+					}
+				case "CronDelete":
+					var input struct {
+						ID string `json:"id"`
+					}
+					if json.Unmarshal([]byte(b.ToolInput), &input) != nil || input.ID == "" {
+						continue
+					}
+					cron = cronsByID[input.ID]
+					if cron.ID == "" {
+						cron.ID = input.ID
+						cron.Status = "deleted"
+					}
+					label = "⏹ Delete #" + input.ID
+					if cron.Cron != "" {
+						label += "  " + cron.Cron
+					}
+				case "CronGet":
+					label = "📋 Read cron"
+				case "CronList":
+					label = "📋 List crons"
+				case "CronUpdate":
+					label = "◉ Update cron"
+				}
+				items = append(items, convItem{
+					kind:      convTask,
+					cron:      cron,
+					indent:    1,
+					parentIdx: parentIdx,
+					label:     truncate(label, 50),
+				})
+			}
+			if expandable && len(crons) > 0 {
+				items = append(items, convItem{
+					kind:      convTask,
+					groupTag:  "crons",
+					count:     len(crons),
+					folded:    true,
+					indent:    1,
+					parentIdx: parentIdx,
+					label:     "Crons",
+				})
+				for _, c := range crons {
+					items = append(items, convItem{
+						kind:      convTask,
+						cron:      c,
+						indent:    2,
+						parentIdx: parentIdx,
+					})
+				}
+			}
+		}
 	}
 
 	return items
@@ -618,6 +712,7 @@ func buildEntityTree(
 	merged []mergedMsg,
 	agents []session.Subagent,
 	tasks []session.TaskItem,
+	crons []session.CronItem,
 	agentStatuses map[string]string,
 ) []convItem {
 	var items []convItem
@@ -747,6 +842,33 @@ func buildEntityTree(
 				task:   t,
 				indent: 1,
 				label:  compactTreeLabel("Task", idTag+t.Subject, 44),
+			})
+		}
+	}
+
+	// --- Cron section ---
+	if len(crons) > 0 {
+		items = append(items, convItem{
+			kind:     convTask,
+			groupTag: "crons",
+			count:    len(crons),
+			folded:   false,
+			indent:   0,
+			label:    "Crons",
+		})
+		for _, c := range crons {
+			text := c.ID
+			if c.Cron != "" {
+				if text != "" {
+					text += " "
+				}
+				text += c.Cron
+			}
+			items = append(items, convItem{
+				kind:   convTask,
+				cron:   c,
+				indent: 1,
+				label:  compactTreeLabel("Cron", text, 44),
 			})
 		}
 	}
@@ -1004,6 +1126,14 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 func isTaskTool(name string) bool {
 	switch name {
 	case "TaskCreate", "TaskUpdate", "TaskGet", "TaskOutput", "TaskStop", "TaskList", "TodoWrite":
+		return true
+	}
+	return false
+}
+
+func isCronTool(name string) bool {
+	switch name {
+	case "CronCreate", "CronDelete", "CronList", "CronUpdate", "CronGet":
 		return true
 	}
 	return false

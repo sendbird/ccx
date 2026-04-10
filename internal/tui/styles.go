@@ -35,6 +35,7 @@ var (
 	memoryBadge         = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true)
 	todoBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 	taskBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB923C")).Bold(true)
+	cronBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
 	planBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 	liveBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
 	busyBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)

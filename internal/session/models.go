@@ -17,6 +17,16 @@ type TaskItem struct {
 	BlockedBy   []string `json:"blockedBy"`
 }
 
+type CronItem struct {
+	ID          string
+	Cron        string
+	Prompt      string
+	Recurring   bool
+	Status      string // active, deleted
+	CreatedAt   time.Time
+	DeletedAt   time.Time
+}
+
 type Session struct {
 	ID          string
 	ShortID     string
@@ -35,10 +45,12 @@ type Session struct {
 	HasTodos    bool
 	Todos       []TodoItem
 	HasTasks    bool
+	HasCrons    bool
 	HasPlan     bool
 	PlanSlug    string   // first plan slug (kept for compat)
 	PlanSlugs   []string // all distinct plan slugs in order
 	Tasks       []TaskItem
+	Crons       []CronItem
 	TeamName     string // e.g. "supports-build"
 	TeamRole     string // "leader", "teammate", ""
 	TeammateName string // e.g. "build-deploy" (teammate only)

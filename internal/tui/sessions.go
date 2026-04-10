@@ -949,6 +949,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{worktreeBadge, "[W]", "Git worktree"},
 		{todoBadge, "[T]", "Has todos"},
 		{taskBadge, "[K]", "Has tasks"},
+		{cronBadge, "[R]", "Has cron jobs"},
 		{planBadge, "[P]", "Has plan"},
 		{agentBadgeStyle, "[A]", "Has subagents"},
 		{compactBadgeStyle, "[C]", "Compacted"},

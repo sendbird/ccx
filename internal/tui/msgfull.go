@@ -22,6 +22,7 @@ type navFrame struct {
 	listIdx  int // cursor position to restore
 	agent    session.Subagent
 	task     session.TaskItem
+	cron     session.CronItem
 	fromView viewState // which view pushed this frame
 }
 
@@ -430,6 +431,7 @@ func (a *App) pushNavFrame() {
 		listIdx:  a.convList.Index(),
 		agent:    a.conv.agent,
 		task:     a.conv.task,
+		cron:     a.conv.cron,
 		fromView: a.state,
 	}
 	a.navStack = append(a.navStack, frame)
@@ -459,8 +461,10 @@ func (a *App) popNavFrame() (tea.Model, tea.Cmd) {
 			a.updateConvPreview()
 			return a, nil
 		}
-		// viewConversation with agent → back to sessions
+		// viewConversation with agent/task/cron drilldown → back to sessions
 		a.conv.agent = session.Subagent{}
+		a.conv.task = session.TaskItem{}
+		a.conv.cron = session.CronItem{}
 		a.state = viewSessions
 		return a, nil
 	}
@@ -477,6 +481,7 @@ func (a *App) popNavFrame() (tea.Model, tea.Cmd) {
 		a.conv.items = frame.items
 		a.conv.agent = frame.agent
 		a.conv.task = frame.task
+		a.conv.cron = frame.cron
 		a.msgFull.allMessages = false
 
 		contentH := ContentHeight(a.height)

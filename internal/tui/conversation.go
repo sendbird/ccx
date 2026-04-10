@@ -44,21 +44,27 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.conv.merged = filterConversation(mergeConversationTurns(entries))
 	a.conv.agent = session.Subagent{}
 	a.conv.task = session.TaskItem{}
+	a.conv.cron = session.CronItem{}
 	a.conv.toolUseToAgent = buildToolUseToAgentMap(entries)
 
 	// Load agents
 	agents, _ := session.FindSubagents(sess.FilePath)
 	a.conv.agents = agents
 
-	// Build conversation items — use file-based tasks, or extract from JSONL
+	// Build conversation items — use file-based tasks/crons, or extract from JSONL
 	tasks := sess.Tasks
 	if len(tasks) == 0 {
 		tasks = extractInlineTasks(entries)
 		sess.Tasks = tasks
-		a.conv.sess = sess
-		a.currentSess = sess
 	}
-	a.conv.items = buildConvItems(a.conv.merged, agents, tasks)
+	crons := sess.Crons
+	if len(crons) == 0 && sess.HasCrons {
+		crons = session.LoadCronsFromEntries(entries)
+		sess.Crons = crons
+	}
+	a.conv.sess = sess
+	a.currentSess = sess
+	a.conv.items = buildConvItems(a.conv.merged, agents, tasks, crons)
 
 	if info, err := os.Stat(sess.FilePath); err == nil {
 		a.lastMsgLoadTime = info.ModTime()
@@ -130,7 +136,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !sp.Show {
 			a.liveTail = false
 			a.conv.split.BottomAlign = false
-			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" {
+			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
 				return a.popNavFrame()
 			}
 			a.state = viewSessions
@@ -300,7 +306,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if key == "left" {
 			a.liveTail = false
 			a.conv.split.BottomAlign = false
-			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" {
+			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
 				return a.popNavFrame()
 			}
 			a.state = viewSessions
@@ -581,6 +587,8 @@ func convPreviewBaseKey(item convItem) string {
 		return "agent:" + item.agent.ShortID
 	case item.bgTaskID != "":
 		return "bg:" + item.bgTaskID
+	case item.cron.ID != "":
+		return "cron:" + item.cron.ID
 	case item.kind == convTask && item.task.ID != "":
 		return "task:" + item.task.ID
 	case item.groupTag != "":
@@ -745,6 +753,87 @@ func (a *App) buildTaskPreviewEntry(task session.TaskItem) session.Entry {
 		header += "\n\n" + task.Description
 	}
 	return buildConversationPreviewEntry(header, time.Time{}, extractTaskEntries(a.conv.messages, task.ID))
+}
+
+func extractCronEntries(entries []session.Entry, cron session.CronItem) []session.Entry {
+	if cron.ID == "" && cron.Cron == "" {
+		return nil
+	}
+	var result []session.Entry
+	for _, e := range entries {
+		for _, b := range e.Content {
+			match := false
+			if b.Type == "tool_use" && isCronTool(b.ToolName) {
+				if cron.ID != "" && strings.Contains(b.ToolInput, cron.ID) {
+					match = true
+				}
+				if cron.Cron != "" && strings.Contains(b.ToolInput, cron.Cron) {
+					match = true
+				}
+			}
+			if b.Type == "tool_result" {
+				if cron.ID != "" && strings.Contains(b.Text, cron.ID) {
+					match = true
+				}
+				if cron.Cron != "" && strings.Contains(b.Text, cron.Cron) {
+					match = true
+				}
+			}
+			if match {
+				result = append(result, e)
+				break
+			}
+		}
+	}
+	return result
+}
+
+func (a *App) buildCronPreviewEntry(cron session.CronItem) session.Entry {
+	header := "Cron"
+	if cron.ID != "" {
+		header += ": " + cron.ID
+	}
+	if cron.Cron != "" {
+		header += "\nSchedule: " + cron.Cron
+	}
+	if cron.Status != "" {
+		header += "\nStatus: " + cron.Status
+	}
+	if cron.Recurring {
+		header += "\nMode: recurring"
+	} else {
+		header += "\nMode: once"
+	}
+	if cron.Prompt != "" {
+		header += "\n\n" + cron.Prompt
+	}
+	return buildConversationPreviewEntry(header, cron.CreatedAt, extractCronEntries(a.conv.messages, cron))
+}
+
+func renderCronSummary(cron session.CronItem, width int) string {
+	var sb strings.Builder
+	status := "◉ active"
+	if cron.Status == "deleted" {
+		status = "⏹ deleted"
+	}
+	name := cron.ID
+	if name == "" {
+		name = "(unknown)"
+	}
+	sb.WriteString(taskBadgeStyle.Render("Cron: "+name) + "  " + status + "\n")
+	if cron.Cron != "" {
+		sb.WriteString("\nSchedule: " + cron.Cron + "\n")
+	}
+	mode := "once"
+	if cron.Recurring {
+		mode = "recurring"
+	}
+	sb.WriteString("Mode: " + mode + "\n")
+	if cron.Prompt != "" {
+		sb.WriteString("\n" + dimStyle.Render("Prompt:") + "\n")
+		sb.WriteString(wrapText(cron.Prompt, width-2) + "\n")
+	}
+	return sb.String()
 }
 
 // renderTaskMarkerPreview renders the preview for a task marker header (non-expandable).
@@ -1012,7 +1101,7 @@ func (a *App) rebuildConversationList(selectIdx int) {
 	contentH := ContentHeight(a.height)
 	items := a.conv.items
 	if a.conv.leftPaneMode == convPaneTree {
-		a.conv.treeItems = buildEntityTree(a.conv.merged, a.conv.agents, a.conv.sess.Tasks, inferAgentStatuses(a.conv.merged))
+		a.conv.treeItems = buildEntityTree(a.conv.merged, a.conv.agents, a.conv.sess.Tasks, a.conv.sess.Crons, inferAgentStatuses(a.conv.merged))
 		items = a.conv.treeItems
 	}
 	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
@@ -1046,7 +1135,12 @@ func (a *App) refreshConversation() tea.Cmd {
 		tasks = extractInlineTasks(entries)
 		a.conv.sess.Tasks = tasks
 	}
-	a.conv.items = buildConvItems(a.conv.merged, agents, tasks)
+	crons := a.conv.sess.Crons
+	if len(crons) == 0 && a.conv.sess.HasCrons {
+		crons = session.LoadCronsFromEntries(entries)
+		a.conv.sess.Crons = crons
+	}
+	a.conv.items = buildConvItems(a.conv.merged, agents, tasks, crons)
 	a.conv.sess.Tasks = tasks
 
 	// Preserve cursor position
@@ -1104,6 +1198,25 @@ func (a *App) renderConvTaskBoard(width int) string {
 			sb.WriteString(dimStyle.Render(wrapText("    "+t.Description, descW)) + "\n")
 		}
 		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func (a *App) renderConvCronBoard(width int) string {
+	crons := a.conv.sess.Crons
+	if len(crons) == 0 {
+		return dimStyle.Render("No cron jobs")
+	}
+	active := 0
+	for _, c := range crons {
+		if c.Status != "deleted" {
+			active++
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString(dimStyle.Render(fmt.Sprintf("── Cron Jobs [%d/%d active] ──", active, len(crons))) + "\n\n")
+	for _, c := range crons {
+		sb.WriteString(renderCronSummary(c, width) + "\n")
 	}
 	return sb.String()
 }
@@ -1450,6 +1563,35 @@ func extractTaskEntries(entries []session.Entry, taskID string) []session.Entry 
 	return result
 }
 
+func (a *App) openCronConversation(cron session.CronItem) (tea.Model, tea.Cmd) {
+	cronEntries := extractCronEntries(a.conv.messages, cron)
+	if len(cronEntries) == 0 {
+		a.copiedMsg = "No entries for cron " + cron.ID
+		return a, nil
+	}
+
+	merged := filterConversation(mergeConversationTurns(cronEntries))
+	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
+	items := buildConvItems(merged, agents, nil, nil)
+
+	a.conv.sess = a.currentSess
+	a.conv.messages = cronEntries
+	a.conv.merged = merged
+	a.conv.agents = agents
+	a.conv.items = items
+	a.conv.agent = session.Subagent{}
+	a.conv.task = session.TaskItem{}
+	a.conv.cron = cron
+
+	a.conv.split.Focus = false
+	a.conv.split.CacheKey = ""
+	a.rebuildConversationList(0)
+
+	a.state = viewConversation
+	a.updateConvPreview()
+	return a, nil
+}
+
 // openTaskConversation opens a conversation view filtered to entries related to a task.
 func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 	taskEntries := extractTaskEntries(a.conv.messages, task.ID)
@@ -1460,7 +1602,7 @@ func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 
 	merged := filterConversation(mergeConversationTurns(taskEntries))
 	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
-	items := buildConvItems(merged, agents, nil)
+	items := buildConvItems(merged, agents, nil, nil)
 
 	a.conv.sess = a.currentSess
 	a.conv.messages = taskEntries
@@ -1469,6 +1611,7 @@ func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 	a.conv.items = items
 	a.conv.agent = session.Subagent{}
 	a.conv.task = task
+	a.conv.cron = session.CronItem{}
 
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
@@ -1498,7 +1641,7 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 
 	merged := filterConversation(mergeConversationTurns(entries))
 	agents, _ := session.FindSubagents(agent.FilePath)
-	items := buildConvItems(merged, agents, nil)
+	items := buildConvItems(merged, agents, nil, nil)
 
 	a.conv.sess = a.currentSess
 	a.conv.messages = entries
@@ -1507,6 +1650,7 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	a.conv.items = items
 	a.conv.agent = agent
 	a.conv.task = session.TaskItem{}
+	a.conv.cron = session.CronItem{}
 
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""

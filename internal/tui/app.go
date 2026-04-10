@@ -309,6 +309,7 @@ type App struct {
 		split          SplitPane
 		agent          session.Subagent // non-zero when viewing agent conversation
 		task           session.TaskItem // non-zero when viewing task conversation
+		cron           session.CronItem // non-zero when viewing cron conversation
 		// Left pane mode: flat conversation list vs entity tree.
 		leftPaneMode int // 0=flat, 1=tree
 		// Right pane detail level: compact → standard → verbose.
@@ -2403,6 +2404,7 @@ func (a *App) bulkDelete(selected []session.Session) (tea.Model, tea.Cmd) {
 	a.sessions = remaining
 	if a.hasFilterApplied() {
 		a.sessionList.ResetFilter()
+			a.config.SearchQuery = ""
 	}
 	items := buildGroupedItems(remaining, a.sessGroupMode)
 	a.sessionList.SetItems(items)
@@ -4105,13 +4107,19 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 
 	// Tasks — try file-based tasks first, fall back to JSONL parsing
 	tasks := sess.Tasks
+	crons := sess.Crons
 	fromConv := false
-	if len(tasks) == 0 && sess.HasTasks {
-		// Task files cleaned up — parse from conversation entries
+	if (len(tasks) == 0 && sess.HasTasks) || (len(crons) == 0 && sess.HasCrons) {
 		entries, err := session.LoadMessages(sess.FilePath)
 		if err == nil {
-			tasks = session.LoadTasksFromEntries(entries)
-			fromConv = true
+			if len(tasks) == 0 && sess.HasTasks {
+				tasks = session.LoadTasksFromEntries(entries)
+				fromConv = true
+			}
+			if len(crons) == 0 && sess.HasCrons {
+				crons = session.LoadCronsFromEntries(entries)
+				fromConv = true
+			}
 		}
 	}
 	if len(tasks) > 0 {
@@ -4152,6 +4160,56 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 		sb.WriteString("\n")
 	}
 
+	if len(crons) > 0 {
+		active := 0
+		for _, c := range crons {
+			if c.Status != "deleted" {
+				active++
+			}
+		}
+		label := fmt.Sprintf("── Cron Jobs [%d/%d active] ──", active, len(crons))
+		if fromConv {
+			label += " (from conversation)"
+		}
+		sb.WriteString(dimStyle.Render(label) + "\n\n")
+		for _, c := range crons {
+			icon := "◉"
+			style := lipgloss.NewStyle().Foreground(colorAssistant)
+			status := "active"
+			if c.Status == "deleted" {
+				icon = "⏹"
+				style = dimStyle
+				status = "deleted"
+			}
+			recurring := "once"
+			if c.Recurring {
+				recurring = "recurring"
+			}
+			headline := strings.TrimSpace(strings.Join([]string{c.ID, c.Cron}, "  "))
+			if headline == "" {
+				headline = "(unknown cron)"
+			}
+			sb.WriteString(style.Render(fmt.Sprintf("  %s %s", icon, headline)) + dimStyle.Render(fmt.Sprintf("  [%s, %s]", recurring, status)) + "\n")
+			if c.Prompt != "" {
+				prompt := c.Prompt
+				if idx := strings.Index(prompt, "\n"); idx > 0 {
+					prompt = prompt[:idx]
+				}
+				if len(prompt) > 120 {
+					prompt = prompt[:117] + "..."
+				}
+				sb.WriteString(dimStyle.Render("    "+prompt) + "\n")
+			}
+			if !c.CreatedAt.IsZero() {
+				sb.WriteString(dimStyle.Render("    created: "+c.CreatedAt.Format(time.RFC3339)) + "\n")
+			}
+			if c.Status == "deleted" && !c.DeletedAt.IsZero() {
+				sb.WriteString(dimStyle.Render("    deleted: "+c.DeletedAt.Format(time.RFC3339)) + "\n")
+			}
+			sb.WriteString("\n")
+		}
+	}
+
 	// Plans (show all distinct plans in order)
 	for i, slug := range sess.PlanSlugs {
 		path := filepath.Join(home, ".claude", "plans", slug+".md")
@@ -4168,7 +4226,7 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 	}
 
 	if sb.Len() == 0 {
-		return dimStyle.Render("No tasks or plans found for this session.")
+		return dimStyle.Render("No tasks, cron jobs, or plans found for this session.")
 	}
 	return sb.String()
 }

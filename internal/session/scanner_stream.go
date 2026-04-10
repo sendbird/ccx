@@ -130,6 +130,11 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 				sess.HasTasks = true
 			}
 		}
+		if !sess.HasCrons {
+			if bytes.Contains(line, bCronCreate) || bytes.Contains(line, bCronCreateS) {
+				sess.HasCrons = true
+			}
+		}
 
 		// Team detection (check any line for teamName/agentName)
 		if sess.TeamName == "" {
@@ -186,6 +191,16 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 		if t.Status == "pending" || t.Status == "in_progress" {
 			sess.HasTasks = true
 			break
+		}
+	}
+
+	// Load crons from conversation entries only when cron activity was detected
+	if sess.HasCrons {
+		if entries, err := LoadMessages(path); err == nil {
+			sess.Crons = LoadCronsFromEntries(entries)
+			if len(sess.Crons) > 0 {
+				sess.HasCrons = true
+			}
 		}
 	}
 
