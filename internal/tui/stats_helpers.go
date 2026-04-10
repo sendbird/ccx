@@ -286,8 +286,11 @@ func renderProjectStats(sb *strings.Builder, projects []session.ProjectStats, wi
 
 	limit := min(len(projects), 15)
 	for _, ps := range projects[:limit] {
-		// Line 1: project path (shortened with ~ for home dir)
-		path := ps.ProjectPath
+		// Line 1: repo path (shortened with ~ for home dir)
+		path := ps.RepoPath
+		if path == "" {
+			path = ps.ProjectPath
+		}
 		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
 			path = "~" + path[len(home):]
 		}
