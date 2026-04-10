@@ -4581,6 +4581,7 @@ func (a *App) resetActiveFilter() {
 			selID = sess.ID
 		}
 		a.sessionList.ResetFilter()
+		a.config.SearchQuery = ""
 		// Re-select the same session
 		if selID != "" {
 			for i, item := range a.sessionList.Items() {
