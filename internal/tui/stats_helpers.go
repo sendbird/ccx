@@ -389,3 +389,73 @@ func renderProjectDetail(stats session.GlobalStats, width int) string {
 	return sb.String()
 }
 
+
+func renderProjectPathDetail(stats session.GlobalStats, width int) string {
+	if len(stats.ProjectStats) == 0 {
+		return dimStyle.Render("(no project data)")
+	}
+
+	var sb strings.Builder
+	titleStyle := statTitleStyle
+	numStyle := statNumStyle
+	labelStyle := dimStyle
+	costStyle := statCostStyle
+	ruler := dimStyle.Render(strings.Repeat("─", min(width, 40)))
+
+	sb.WriteString(titleStyle.Render(fmt.Sprintf("PROJECTS (%d)", len(stats.ProjectStats))) + "\n")
+	sb.WriteString(ruler + "\n\n")
+
+	maxCost := stats.ProjectStats[0].CostUSD
+	if maxCost <= 0 {
+		maxCost = 1
+	}
+
+	totalCost := stats.TotalCostUSD
+	if totalCost <= 0 {
+		totalCost = 1
+	}
+
+	barW := width - 36
+	if barW < 5 {
+		barW = 5
+	}
+
+	for i, ps := range stats.ProjectStats {
+		path := ps.ProjectPath
+		if path == "" {
+			path = ps.RepoPath
+		}
+		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
+			path = "~" + path[len(home):]
+		}
+
+		rank := fmt.Sprintf("%2d. ", i+1)
+		maxPathW := width - len(rank) - 2
+		if len(path) > maxPathW {
+			path = "..." + path[len(path)-maxPathW+3:]
+		}
+		sb.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render(rank), path))
+
+		barLen := int(float64(barW) * ps.CostUSD / maxCost)
+		if barLen < 1 && ps.CostUSD > 0 {
+			barLen = 1
+		}
+		bar := strings.Repeat("█", barLen)
+		ratio := ps.CostUSD * 100 / totalCost
+
+		sb.WriteString(fmt.Sprintf("      %s %s  %s\n",
+			costStyle.Render(fmt.Sprintf("%7s", fmtCost(ps.CostUSD))),
+			labelStyle.Render(bar),
+			labelStyle.Render(fmt.Sprintf("%.0f%%", ratio))))
+
+		sb.WriteString(fmt.Sprintf("      %s out   %s sess   %s msgs   %s duration\n",
+			numStyle.Render(fmtNum(ps.TotalOutputTokens)),
+			labelStyle.Render(fmt.Sprintf("%d", ps.SessionCount)),
+			labelStyle.Render(fmt.Sprintf("%d", ps.TotalMessages)),
+			labelStyle.Render(fmtDuration(ps.TotalDuration))))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+

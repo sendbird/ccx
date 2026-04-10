@@ -1852,6 +1852,8 @@ func (a *App) handleStatsPageMenu(key string) (tea.Model, tea.Cmd) {
 		return a.openStatsDetail(statsDetailCommands)
 	case "e":
 		return a.openStatsDetail(statsDetailErrors)
+	case "r":
+		return a.openStatsDetail(statsDetailRepos)
 	case "p":
 		return a.openStatsDetail(statsDetailProjects)
 	case "o":
@@ -1869,7 +1871,7 @@ func (a *App) renderStatsPageHintBox() string {
 
 	line1 := hl.Render("t") + d.Render(":tools") + sp + hl.Render("m") + d.Render(":mcp") + sp + hl.Render("a") + d.Render(":agents")
 	line2 := hl.Render("s") + d.Render(":skills") + sp + hl.Render("c") + d.Render(":cmds") + sp + hl.Render("e") + d.Render(":errors")
-	line3 := hl.Render("p") + d.Render(":projects") + sp + hl.Render("o") + d.Render(":overview")
+	line3 := hl.Render("r") + d.Render(":repos") + sp + hl.Render("p") + d.Render(":projects") + sp + hl.Render("o") + d.Render(":overview")
 
 	body := strings.Join([]string{line1, line2, line3, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().

@@ -22,6 +22,7 @@ const (
 	statsDetailCommands                 // commands
 	statsDetailErrors                   // error breakdown
 	statsDetailHooks                    // hooks
+	statsDetailRepos                    // per-repo breakdown
 	statsDetailProjects                 // per-project breakdown
 )
 
@@ -60,8 +61,10 @@ func renderStatsDetail(mode statsDetailMode, stats session.GlobalStats, width in
 		return renderErrorDetail(stats, width)
 	case statsDetailHooks:
 		return renderCategoryDetail("HOOKS", stats.HookCounts, nil, stats.HookTimestamps, nil, width)
-	case statsDetailProjects:
+	case statsDetailRepos:
 		return renderProjectDetail(stats, width)
+	case statsDetailProjects:
+		return renderProjectPathDetail(stats, width)
 	}
 	return ""
 }
@@ -83,6 +86,8 @@ func statsDetailTitle(mode statsDetailMode) string {
 		return "Errors"
 	case statsDetailHooks:
 		return "Hooks"
+	case statsDetailRepos:
+		return "Repos"
 	case statsDetailProjects:
 		return "Projects"
 	}
