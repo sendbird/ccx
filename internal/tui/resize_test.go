@@ -17,11 +17,7 @@ func TestListSetSizePreservesSelection(t *testing.T) {
 
 	delegate := sessionDelegate{timeW: 8, msgW: 3}
 	l := list.New(items, delegate, 80, 40) // width=80, height=40
-	l.SetShowTitle(false)
-	l.SetShowStatusBar(false)
-	l.SetShowFilter(false)
-	l.SetShowPagination(false)
-	l.SetShowHelp(false)
+	initListBase(&l)
 
 	// Select item 30
 	l.Select(30)

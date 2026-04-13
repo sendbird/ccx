@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/extract"
@@ -27,6 +28,11 @@ func (a *App) handleConvActionsMenu(key string) (tea.Model, tea.Cmd) {
 			return a.openMsgFullFilesMenu()
 		}
 		return a.openConvFilesMenu()
+	case "g":
+		if a.state == viewMessageFull {
+			return a.openMsgFullChangesMenu()
+		}
+		return a.openConvChangesMenu()
 	}
 	return a, nil
 }
@@ -37,7 +43,7 @@ func renderConvActionsHintBox() string {
 	d := dimStyle
 	sp := "  "
 
-	line := hl.Render("u") + d.Render(":urls") + sp + hl.Render("f") + d.Render(":files")
+	line := hl.Render("u") + d.Render(":urls") + sp + hl.Render("f") + d.Render(":files") + sp + hl.Render("g") + d.Render(":changes")
 	body := line + "\n" + d.Render("esc:cancel")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -61,6 +67,148 @@ func (a *App) openMsgFullURLMenu() (tea.Model, tea.Cmd) {
 // openConvFilesMenu opens the file paths menu scoped by conversation context.
 func (a *App) openConvFilesMenu() (tea.Model, tea.Cmd) {
 	return a.openScopedMenu(extract.BlockFilePaths, extract.SessionFilePaths, "files")
+}
+
+func changeItemLabel(ch extract.ChangeItem) string {
+	label := ch.Item.Label + "  " + ch.Summary
+	if !ch.Timestamp.IsZero() {
+		label += "  " + timeAgo(ch.Timestamp)
+	}
+	return label
+}
+
+func changeItemsFromSlice(changes []extract.ChangeItem) ([]extract.Item, map[string]extract.ChangeItem) {
+	items := make([]extract.Item, 0, len(changes))
+	cmap := make(map[string]extract.ChangeItem, len(changes))
+	for _, ch := range changes {
+		cmap[ch.Item.URL] = ch
+		items = append(items, extract.Item{
+			URL:      ch.Item.URL,
+			Label:    changeItemLabel(ch),
+			Category: "change",
+		})
+	}
+	return items, cmap
+}
+
+func blockChangeItems(blocks []session.ContentBlock) []extract.Item {
+	items, _ := changeItemsFromSlice(extract.BlockChanges(blocks))
+	return items
+}
+
+func sessionChangeItems(filePath string) []extract.Item {
+	items, _ := changeItemsFromSlice(extract.SessionChanges(filePath))
+	return items
+}
+
+func (a *App) openConvChangesMenu() (tea.Model, tea.Cmd) {
+	return a.openScopedChangesMenu()
+}
+
+func (a *App) openMsgFullChangesMenu() (tea.Model, tea.Cmd) {
+	return a.openScopedChangesMenu()
+}
+
+// openScopedChangesMenu is like openScopedMenu but preserves ChangeItem data for diff preview.
+func (a *App) openScopedChangesMenu() (tea.Model, tea.Cmd) {
+	scopeLabel := func(base string) string { return base + " changes" }
+
+	tryOpen := func(changes []extract.ChangeItem, scope string) (tea.Model, tea.Cmd, bool) {
+		if len(changes) == 0 {
+			return nil, nil, false
+		}
+		items, cmap := changeItemsFromSlice(changes)
+		a.urlChangeMap = cmap
+		a.initDiffViewport()
+		m, cmd := a.openURLMenuFromItems(items, scope)
+		return m, cmd, true
+	}
+
+	if a.state == viewMessageFull {
+		fs := &a.msgFull.folds
+		if fs.Entry.Role != "" {
+			if m, cmd, ok := tryOpen(extract.BlockChanges(fs.Entry.Content), scopeLabel("message")); ok {
+				return m, cmd
+			}
+		}
+	} else {
+		sp := &a.conv.split
+		if sp.Show && sp.Folds != nil && sp.Folds.Entry.Role != "" {
+			if m, cmd, ok := tryOpen(extract.BlockChanges(sp.Folds.Entry.Content), scopeLabel("message")); ok {
+				return m, cmd
+			}
+		}
+		if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
+			if m, cmd, ok := tryOpen(extract.BlockChanges(item.merged.entry.Content), scopeLabel("message")); ok {
+				return m, cmd
+			}
+		}
+	}
+
+	// Fall back: entire session with timestamps
+	changes := extract.SessionChanges(a.currentSess.FilePath)
+	items, cmap := changeItemsFromSlice(changes)
+	a.urlChangeMap = cmap
+	a.initDiffViewport()
+	return a.openURLMenuFromItems(items, scopeLabel("session"))
+}
+
+func (a *App) initDiffViewport() {
+	h := ContentHeight(a.height) - 4
+	if h < 5 {
+		h = 5
+	}
+	w := a.width/2 - 4
+	if w < 20 {
+		w = 20
+	}
+	a.urlDiffVP = viewport.New(w, h)
+	a.urlDiffReady = true
+	a.updateChangeDiffPreview()
+}
+
+func (a *App) updateChangeDiffPreview() {
+	if !a.urlDiffReady || a.urlChangeMap == nil {
+		return
+	}
+	if a.urlCursor < 0 || a.urlCursor >= len(a.urlItems) {
+		a.urlDiffVP.SetContent(dimStyle.Render("(no selection)"))
+		return
+	}
+	filePath := a.urlItems[a.urlCursor].URL
+	ch, ok := a.urlChangeMap[filePath]
+	if !ok {
+		a.urlDiffVP.SetContent(dimStyle.Render("(no diff data)"))
+		return
+	}
+	w := a.urlDiffVP.Width
+	if w < 20 {
+		w = 60
+	}
+	var buf strings.Builder
+	for i, toolInput := range ch.ToolInputs {
+		toolName := ""
+		if i < len(ch.ToolNames) {
+			toolName = ch.ToolNames[i]
+		}
+		block := session.ContentBlock{
+			Type:      "tool_use",
+			ToolName:  toolName,
+			ToolInput: toolInput,
+		}
+		diff := toolDiffOutput(block, w)
+		if diff != "" {
+			if buf.Len() > 0 {
+				buf.WriteString("\n")
+			}
+			buf.WriteString(diff)
+		}
+	}
+	if buf.Len() == 0 {
+		a.urlDiffVP.SetContent(dimStyle.Render("(no diff)"))
+	} else {
+		a.urlDiffVP.SetContent(buf.String())
+	}
 }
 
 // openMsgFullFilesMenu opens the file paths menu scoped by message-full context.
@@ -118,7 +266,7 @@ func (a *App) openScopedMenu(
 // openURLMenuFromItems opens the URL menu with pre-extracted items and a scope label.
 func (a *App) openURLMenuFromItems(items []extract.Item, scope string) (tea.Model, tea.Cmd) {
 	if len(items) == 0 {
-		if strings.Contains(scope, "files") {
+		if strings.Contains(scope, "files") || strings.Contains(scope, "changes") {
 			a.copiedMsg = "No files found"
 		} else {
 			a.copiedMsg = "No URLs found"
@@ -171,27 +319,33 @@ func (a *App) handleURLMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.urlCursor = 0
 			return a, nil
 		}
-		a.urlMenu = false
-		a.memImportActive = false
-		a.memRemoveActive = false
-		a.worktreeAlignActive = false
+		a.closeURLMenu()
 		return a, nil
 	case "q":
-		a.urlMenu = false
-		a.memImportActive = false
-		a.memRemoveActive = false
-		a.worktreeAlignActive = false
+		a.closeURLMenu()
 		return a, nil
 	case "up", "k":
 		if a.urlCursor > 0 {
 			a.urlCursor--
+			a.updateChangeDiffPreview()
 		}
 		return a, nil
 	case "down", "j":
 		if a.urlCursor < len(a.urlItems)-1 {
 			a.urlCursor++
+			a.updateChangeDiffPreview()
 		}
 		return a, nil
+	case "ctrl+d":
+		if a.isChangesScope() {
+			a.urlDiffVP.HalfViewDown()
+			return a, nil
+		}
+	case "ctrl+u":
+		if a.isChangesScope() {
+			a.urlDiffVP.HalfViewUp()
+			return a, nil
+		}
 	case "/":
 		a.urlSearching = true
 		ti := textinput.New()
@@ -221,7 +375,7 @@ func (a *App) handleURLMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(urls) == 0 {
 			return a, nil
 		}
-		a.urlMenu = false
+		a.closeURLMenu()
 		// Memory import: copy selected files instead of opening
 		if a.memImportActive {
 			a.commitMemoryImport()
@@ -256,7 +410,7 @@ func (a *App) handleURLMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		copyToClipboard(strings.Join(urls, "\n"))
 		a.copiedMsg = fmt.Sprintf("Copied %d URL(s)", len(urls))
-		a.urlMenu = false
+		a.closeURLMenu()
 		return a, nil
 	}
 	return a, nil
@@ -280,9 +434,23 @@ func (a *App) selectedURLs() []string {
 	return nil
 }
 
-// isFileScope returns true when the URL menu is showing file paths, not URLs.
+func (a *App) closeURLMenu() {
+	a.urlMenu = false
+	a.memImportActive = false
+	a.memRemoveActive = false
+	a.worktreeAlignActive = false
+	a.urlChangeMap = nil
+	a.urlDiffReady = false
+}
+
+// isFileScope returns true when the URL menu is showing file-like paths, not URLs.
 func (a *App) isFileScope() bool {
-	return strings.Contains(a.urlScope, "files")
+	return strings.Contains(a.urlScope, "files") || strings.Contains(a.urlScope, "changes")
+}
+
+// isChangesScope returns true when the URL menu is showing change diffs.
+func (a *App) isChangesScope() bool {
+	return strings.Contains(a.urlScope, "changes")
 }
 
 // filterURLItems filters urlItems based on the search term.
@@ -312,6 +480,7 @@ func (a *App) filterURLItems() {
 	if a.urlCursor >= len(a.urlItems) {
 		a.urlCursor = max(len(a.urlItems)-1, 0)
 	}
+	a.updateChangeDiffPreview()
 }
 
 // renderURLMenu renders the URL selection menu as a hint box.
@@ -323,7 +492,9 @@ func (a *App) renderURLMenu() string {
 	if len(items) == 0 && a.urlSearchTerm != "" {
 		d := dimStyle
 		t := "URLs"
-		if a.isFileScope() {
+		if strings.Contains(a.urlScope, "changes") {
+			t = "Changes"
+		} else if a.isFileScope() {
 			t = "Files"
 		}
 		body := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(t) + "\n" +
@@ -361,6 +532,8 @@ func (a *App) renderURLMenu() string {
 			return catStyle.Render("WRITE")
 		case "Edit":
 			return catStyle.Render("EDIT ")
+		case "change":
+			return catStyle.Render("CHG  ")
 		case "Glob":
 			return catStyle.Render("GLOB ")
 		case "Grep":
@@ -395,7 +568,9 @@ func (a *App) renderURLMenu() string {
 		scopeLabel = " [" + a.urlScope + "]"
 	}
 	title := "URLs"
-	if isFiles {
+	if strings.Contains(a.urlScope, "changes") {
+		title = "Changes"
+	} else if isFiles {
 		title = "Files"
 	}
 	header := fmt.Sprintf("%s%s (%d", title, scopeLabel, len(items))
@@ -440,16 +615,33 @@ func (a *App) renderURLMenu() string {
 		lines = append(lines, d.Render(fmt.Sprintf("%d selected", selCount)))
 	}
 
-	if isFiles {
+	if a.isChangesScope() {
+		lines = append(lines, d.Render("↵:edit  y:copy  /:search  ^d/^u:scroll  esc:close"))
+	} else if isFiles {
 		lines = append(lines, d.Render("↵:edit  y:copy  space:select  /:search  esc:close"))
 	} else {
 		lines = append(lines, d.Render("↵:open  y:copy  space:select  /:search  esc:close"))
 	}
 
-	body := strings.Join(lines, "\n")
+	listBody := strings.Join(lines, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDim).
 		Padding(0, 1)
-	return boxStyle.Render(body)
+
+	// Split pane with diff preview for changes scope
+	if a.isChangesScope() && a.urlDiffReady {
+		listBox := boxStyle.Render(listBody)
+
+		diffBoxStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorDim).
+			Padding(0, 1)
+		diffContent := a.urlDiffVP.View()
+		diffBox := diffBoxStyle.Render(diffContent)
+
+		return lipgloss.JoinHorizontal(lipgloss.Top, listBox, diffBox)
+	}
+
+	return boxStyle.Render(listBody)
 }

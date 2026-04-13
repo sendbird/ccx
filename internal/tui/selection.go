@@ -12,6 +12,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// initListBase applies standard ccx styling to a list.Model:
+// hides title, status bar, filter UI, pagination, and help; disables quit keybindings.
+func initListBase(l *list.Model) {
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetShowFilter(false)
+	l.SetShowPagination(false)
+	l.SetShowHelp(false)
+	l.DisableQuitKeybindings()
+}
+
 // configureListSearch customizes list search: changes prompt to "Search: ",
 // removes vim j/k from cursor navigation, and prevents arrow/navigation keys
 // from closing the search input.

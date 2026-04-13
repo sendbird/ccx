@@ -1167,14 +1167,9 @@ func newConvList(items []convItem, width, height int) list.Model {
 	}
 
 	l := list.New(listItems, convDelegate{}, width, height)
-	l.SetShowTitle(false)
-	l.SetShowStatusBar(false)
-	l.SetShowFilter(false)
-	l.SetShowPagination(false)
+	initListBase(&l)
 	l.SetFilteringEnabled(true)
-	l.SetShowHelp(false)
 	l.Filter = substringFilter
-	l.DisableQuitKeybindings()
 	configureListSearch(&l)
 	l.SetSize(width, height)
 	return l

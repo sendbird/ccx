@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,8 @@ type ItemRef struct {
 	Timestamp time.Time
 	Role      string // user|assistant
 	Preview   string // 3-5 lines of conversation context
+	ToolName  string // for changes: Edit, Write, etc.
+	ToolInput string // for changes: raw JSON tool input for diff rendering
 }
 
 // PickerItem is a deduplicated item with all its references.
@@ -108,6 +111,74 @@ func extractFilesWithContext(entries []session.Entry, sessID string) []PickerIte
 		}
 	}
 	return items
+}
+
+func extractChangesWithContext(entries []session.Entry, sessID string) []PickerItem {
+	index := make(map[string]int)
+	var items []PickerItem
+	for _, e := range entries {
+		ctx := entryContext(e)
+		for _, item := range extract.BlockChanges(e.Content) {
+			toolName, toolInput := "", ""
+			if len(item.ToolNames) > 0 {
+				toolName = item.ToolNames[0]
+			}
+			if len(item.ToolInputs) > 0 {
+				toolInput = item.ToolInputs[0]
+			}
+			ref := ItemRef{
+				EntryUUID: e.UUID,
+				Timestamp: e.Timestamp,
+				Role:      e.Role,
+				Preview:   ctx,
+				ToolName:  toolName,
+				ToolInput: toolInput,
+			}
+			tsLabel := ""
+			if !e.Timestamp.IsZero() {
+				tsLabel = "  " + shortTimeAgo(e.Timestamp)
+			}
+			if idx, ok := index[item.Item.URL]; ok {
+				items[idx].Refs = append(items[idx].Refs, ref)
+				items[idx].Item.Category = item.Item.Category
+				items[idx].Item.Label = item.Item.Label + "  " + extract.SummarizeChangeCount(item.Summary, len(items[idx].Refs)) + tsLabel
+			} else {
+				index[item.Item.URL] = len(items)
+				items = append(items, PickerItem{
+					Item: extract.Item{
+						URL:      item.Item.URL,
+						Label:    item.Item.Label + "  " + item.Summary + tsLabel,
+						Category: "change",
+					},
+					SessionID: sessID,
+					Refs:      []ItemRef{ref},
+				})
+			}
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if len(items[i].Refs) == 0 || len(items[j].Refs) == 0 {
+			return items[i].Item.URL < items[j].Item.URL
+		}
+		return items[i].Refs[0].Timestamp.After(items[j].Refs[0].Timestamp)
+	})
+	return items
+}
+
+func shortTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("Jan 02")
+	}
 }
 
 func extractImagesWithContext(entries []session.Entry, sessID, homeDir string) []PickerItem {

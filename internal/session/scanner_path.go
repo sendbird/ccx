@@ -201,7 +201,7 @@ func isGitWorktree(projectPath string) bool {
 		return !info.IsDir()
 	}
 	// Fallback: detect by path pattern (worktree dir may no longer exist on disk)
-	return strings.Contains(projectPath, "/.worktree/")
+	return strings.Contains(projectPath, "/.worktree/") || strings.Contains(projectPath, "/.worktrees/")
 }
 
 // ResolveBaseRepo returns the main repository root for a project path.

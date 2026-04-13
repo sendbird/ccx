@@ -17,6 +17,7 @@ func newTestApp(sessions []session.Session) *App {
 	// persisted preferences (~/.config/ccx/config.yaml), which would break
 	// tests that assume the sessions view is active.
 	a.state = viewSessions
+	a.sessPreviewMode = sessPreviewConversation
 	return a
 }
 

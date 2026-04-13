@@ -218,18 +218,29 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.openMessageImage()
 	}
 
-	// Fold navigation
-	fs := &a.msgFull.folds
-	fr := fs.HandleKey(key)
-	if fr == foldCursorMoved || fr == foldHandled {
+	// Fold navigation (with snap + boundary crossing)
+	switch HandleFoldNav(&a.msgFull.folds, &a.msgFull.vp, key) {
+	case NavCursorMoved, NavFoldChanged:
 		a.refreshMsgFullPreview()
 		return a, nil
-	}
-
-	// Scroll viewport
-	switch key {
-	case "up", "down", "pgup", "pgdown", "home", "end":
-		scrollPreview(&a.msgFull.vp, key)
+	case NavBoundaryDown:
+		if a.msgFull.idx < len(a.msgFull.merged)-1 {
+			a.navToMsgFull(a.msgFull.idx + 1)
+			a.refreshMsgFullPreview()
+		}
+		return a, nil
+	case NavBoundaryUp:
+		if a.msgFull.idx > 0 {
+			a.navToMsgFull(a.msgFull.idx - 1)
+			// Position cursor at last block
+			fs := &a.msgFull.folds
+			if last := fs.lastVisibleBlock(); last >= 0 {
+				fs.BlockCursor = last
+			}
+			a.refreshMsgFullPreview()
+		}
+		return a, nil
+	case NavScrolled:
 		return a, nil
 	}
 

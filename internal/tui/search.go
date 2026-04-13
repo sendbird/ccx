@@ -52,10 +52,8 @@ func (a *App) enterSearchMode() {
 	a.searchInput = ti
 
 	a.searchResultList = list.New(nil, list.NewDefaultDelegate(), 0, 0)
-	a.searchResultList.SetShowTitle(false)
-	a.searchResultList.SetShowStatusBar(false)
+	initListBase(&a.searchResultList)
 	a.searchResultList.SetFilteringEnabled(false)
-	a.searchResultList.SetShowHelp(false)
 }
 
 func (a *App) exitSearchMode() {

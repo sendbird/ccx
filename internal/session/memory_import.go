@@ -93,9 +93,21 @@ func ImportMemoryFiles(srcPath, dstPath string, fileNames []string) (int, error)
 // worktree project path. It strips the worktree dir suffix (e.g. .worktree/{name}).
 // Returns the path unchanged if the pattern is not found.
 func ResolveMainProjectPath(worktreePath string, worktreeDirs ...string) string {
-	patterns := worktreeDirs
-	if len(patterns) == 0 {
-		patterns = []string{".worktree"}
+	patterns := []string{".worktree", ".worktrees"}
+	for _, dir := range worktreeDirs {
+		if dir == "" {
+			continue
+		}
+		found := false
+		for _, existing := range patterns {
+			if existing == dir {
+				found = true
+				break
+			}
+		}
+		if !found {
+			patterns = append(patterns, dir)
+		}
 	}
 	for _, dir := range patterns {
 		needle := "/" + dir + "/"

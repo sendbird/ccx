@@ -195,6 +195,16 @@ func (a *App) keymapConfigItems() []session.ConfigItem {
 		{"views", []kv{
 			{"stats", km.Views.Stats}, {"config", km.Views.Config}, {"plugins", km.Views.Plugins},
 		}},
+		{"conversation", []kv{
+			{"jump_to_tree", km.Conversation.JumpToTree}, {"live_toggle", km.Conversation.LiveToggle},
+			{"edit", km.Conversation.Edit}, {"actions", km.Conversation.Actions},
+			{"input", km.Conversation.Input},
+		}},
+		{"preview", []kv{
+			{"fold_all", km.Preview.FoldAll}, {"expand_all", km.Preview.ExpandAll},
+			{"filter", km.Preview.Filter}, {"copy_mode", km.Preview.CopyMode},
+			{"copy_all", km.Preview.CopyAll},
+		}},
 	}
 	var items []session.ConfigItem
 	for _, sec := range sections {
@@ -663,13 +673,8 @@ func appendGroupedItems(items []list.Item, catItems []session.ConfigItem) []list
 
 func newConfigList(items []list.Item, width, height int) list.Model {
 	l := list.New(items, cfgDelegate{}, width, height)
-	l.SetShowTitle(false)
-	l.SetShowStatusBar(false)
-	l.SetShowFilter(false)
-	l.SetShowPagination(false)
+	initListBase(&l)
 	l.SetFilteringEnabled(false)
-	l.SetShowHelp(false)
-	l.DisableQuitKeybindings()
 	// Unbind the filter key so the list never enters filtering mode
 	l.KeyMap.Filter.SetEnabled(false)
 	l.KeyMap.ClearFilter.SetEnabled(false)

@@ -6,7 +6,7 @@ import (
 )
 
 // AggregateStats scans all session files and aggregates their statistics.
-func AggregateStats(sessions []Session) GlobalStats {
+func AggregateStats(sessions []Session, worktreeDirs ...string) GlobalStats {
 	g := GlobalStats{
 		ToolCounts:             make(map[string]int),
 		MCPToolCounts:          make(map[string]int),
@@ -39,7 +39,7 @@ func AggregateStats(sessions []Session) GlobalStats {
 		if projKey == "" {
 			projKey = "(no project)"
 		}
-		repoKey := ResolveBaseRepo(projKey)
+		repoKey := ResolveBaseRepo(projKey, worktreeDirs...)
 		if repoKey == "" {
 			repoKey = projKey
 		}

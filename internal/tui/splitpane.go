@@ -120,6 +120,8 @@ const (
 	splitKeySearchFromPreview                 // "/" pressed while preview focused
 	splitKeyCursorMoved                       // block cursor moved, no content change
 	splitKeyScrolled                          // viewport scrolled, no re-render needed
+	splitKeyBoundaryDown                      // block cursor hit bottom boundary
+	splitKeyBoundaryUp                        // block cursor hit top boundary
 )
 
 // HandleSplitKey processes common split pane keys (esc, left, right, tab, shift+tab, [, ]).
@@ -257,21 +259,23 @@ func (sp *SplitPane) HandleFocusedKeys(key string) SplitKeyResult {
 		return splitKeySearchFromPreview
 	}
 	if sp.Folds != nil {
-		result := sp.Folds.HandleKey(key)
-		if result == foldCursorMoved {
+		switch HandleFoldNav(sp.Folds, &sp.Preview, key) {
+		case NavCursorMoved:
 			sp.ScrollToBlock()
 			return splitKeyCursorMoved
-		}
-		if result == foldHandled {
-			// Sync format prefs only for keys that explicitly change format state.
-			// "left" removes formatting as a navigation step, not user intent.
+		case NavFoldChanged:
 			sp.SyncTypePrefs(key != "left")
 			sp.ScrollToBlock()
 			return splitKeyHandled
-		}
-		if result == foldSwitchToList {
+		case NavSwitchToList:
 			sp.Focus = false
 			return splitKeyUnfocused
+		case NavBoundaryDown:
+			return splitKeyBoundaryDown
+		case NavBoundaryUp:
+			return splitKeyBoundaryUp
+		case NavScrolled:
+			return splitKeyScrolled
 		}
 	}
 	if sp.HandlePreviewScroll(key) {
@@ -593,6 +597,8 @@ const (
 	foldHandled                // key was consumed, content changed (fold/unfold/format)
 	foldCursorMoved            // key was consumed, only cursor position changed
 	foldSwitchToList           // left on already-folded block
+	foldBoundaryDown           // down at last visible block
+	foldBoundaryUp             // up at first visible block
 )
 
 // HandleKey processes fold navigation keys.
@@ -612,14 +618,14 @@ func (fs *FoldState) HandleKey(key string) foldResult {
 			fs.BlockCursor = next
 			return foldCursorMoved
 		}
-		return foldUnhandled
+		return foldBoundaryUp
 	case "down":
 		next := fs.nextVisibleBlock(fs.BlockCursor)
 		if next >= 0 {
 			fs.BlockCursor = next
 			return foldCursorMoved
 		}
-		return foldUnhandled
+		return foldBoundaryDown
 	case "left":
 		// Remove formatting first, then fold, then switch to list
 		if fs.Formatted != nil && fs.Formatted[fs.BlockCursor] {

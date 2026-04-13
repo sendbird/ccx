@@ -98,6 +98,13 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	return nil
 }
 
+func (a *App) pauseLiveTail() {
+	if a.liveTail {
+		a.liveTail = false
+		a.conv.split.BottomAlign = false
+	}
+}
+
 // handleConversationKeys handles keyboard input for the conversation split view.
 func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	sp := &a.conv.split
@@ -225,18 +232,13 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a.openMsgFullForEntry(item.merged)
 		}
 		return a, nil
-	case "L":
+	case a.keymap.Conversation.LiveToggle:
 		return a.toggleConvLiveTail()
-	default:
-		// Jump to entity tree with selected item
-		if key == a.keymap.Conversation.JumpToTree && a.conv.leftPaneMode != convPaneTree {
-			return a.jumpToEntityTree()
-		}
 	case a.keymap.Session.Refresh:
 		cmd := a.refreshConversation()
 		a.copiedMsg = "Refreshed"
 		return a, cmd
-	case "e":
+	case a.keymap.Conversation.Edit:
 		return a.openEditMenu(a.currentSess)
 	case "t":
 		a.convTooltipOn = !a.convTooltipOn
@@ -244,17 +246,23 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case "i":
 		return a.openMessageImage()
-	case "I":
+	case a.keymap.Conversation.Input:
 		if !a.config.TmuxEnabled {
 			return a, nil
 		}
 		return a.openLiveInput(a.currentSess.ProjectPath, a.currentSess.ID)
-	case "J":
-		if !a.config.TmuxEnabled {
-			return a, nil
+	case a.keymap.Conversation.JumpToTree:
+		// In tree mode: jump to origin message in flat view
+		if a.conv.leftPaneMode == convPaneTree {
+			return a.jumpToOriginMessage()
 		}
-		return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
-	case "x":
+		// In flat mode with tmux: jump to tmux pane
+		if a.config.TmuxEnabled {
+			return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
+		}
+		// In flat mode without tmux: jump to tree
+		return a.jumpToEntityTree()
+	case a.keymap.Conversation.Actions:
 		a.convActionsMenu = true
 		return a, nil
 	}
@@ -316,6 +324,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Focused preview keys
 	if sp.Focus && sp.Show {
+		if key == "up" || key == "pgup" || key == "home" {
+			a.pauseLiveTail()
+		}
 		if key == "up" || key == "down" {
 			if a.conv.rightPaneMode == previewText {
 				// Text mode: scroll viewport directly
@@ -323,15 +334,16 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			if sp.Folds != nil {
-				fr := sp.Folds.HandleKey(key)
-				if fr == foldCursorMoved {
+				switch HandleFoldNav(sp.Folds, &sp.Preview, key) {
+				case NavCursorMoved:
 					sp.RefreshFoldCursor(a.width, a.splitRatio)
 					sp.ScrollToBlock()
-					return a, nil
-				}
-				if fr == foldHandled {
+				case NavFoldChanged:
 					sp.RefreshFoldCursor(a.width, a.splitRatio)
-					return a, nil
+				case NavBoundaryDown:
+					return a.convPreviewBoundaryCross("down")
+				case NavBoundaryUp:
+					return a.convPreviewBoundaryCross("up")
 				}
 				return a, nil
 			}
@@ -345,6 +357,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return a, startListSearch(&a.convList)
 		case splitKeyCursorMoved:
+			if key == "up" {
+				a.pauseLiveTail()
+			}
 			sp.RefreshFoldCursor(a.width, a.splitRatio)
 			sp.ScrollToBlock()
 			return a, nil
@@ -352,18 +367,23 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			sp.RefreshFoldPreview(a.width, a.splitRatio)
 			return a, nil
 		case splitKeyScrolled:
+			if key == "pgup" || key == "home" {
+				a.pauseLiveTail()
+			}
 			return a, nil
 		case splitKeyUnfocused:
 			return a, nil
+		case splitKeyBoundaryDown:
+			return a.convPreviewBoundaryCross("down")
+		case splitKeyBoundaryUp:
+			a.pauseLiveTail()
+			return a.convPreviewBoundaryCross("up")
 		}
 	}
 
 	// List boundary
 	if !sp.Focus && sp.HandleListBoundary(key) {
-		if a.liveTail {
-			a.liveTail = false
-			a.conv.split.BottomAlign = false
-		}
+		a.pauseLiveTail()
 		if sp.Show {
 			a.updateConvPreview()
 		}
@@ -376,8 +396,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a.convList = m
 	newIdx := a.convList.Index()
 	if oldIdx != newIdx && a.liveTail {
-		a.liveTail = false
-		a.conv.split.BottomAlign = false
+		a.pauseLiveTail()
 	}
 	if sp.Show {
 		if oldIdx == newIdx {
@@ -390,6 +409,55 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.updateConvPreview()
 	}
 	return a, cmd
+}
+
+// convPreviewBoundaryCross advances to the next/prev list item when the block
+// cursor hits the top or bottom boundary of the current preview.
+func (a *App) convPreviewBoundaryCross(key string) (tea.Model, tea.Cmd) {
+	sp := &a.conv.split
+	idx := a.convList.Index()
+	items := a.convList.Items()
+	n := len(items)
+
+	switch key {
+	case "down":
+		// Find next convMsg item after current index
+		for i := idx + 1; i < n; i++ {
+			if ci, ok := items[i].(convItem); ok && ci.kind == convMsg {
+				a.convList.Select(i)
+				sp.CacheKey = ""
+				a.updateConvPreview()
+				// Position cursor at first block
+				if sp.Folds != nil {
+					if first := sp.Folds.firstVisibleBlock(); first >= 0 {
+						sp.Folds.BlockCursor = first
+					}
+				}
+				sp.RefreshFoldCursor(a.width, a.splitRatio)
+				sp.ScrollToBlock()
+				return a, nil
+			}
+		}
+	case "up":
+		// Find prev convMsg item before current index
+		for i := idx - 1; i >= 0; i-- {
+			if ci, ok := items[i].(convItem); ok && ci.kind == convMsg {
+				a.convList.Select(i)
+				sp.CacheKey = ""
+				a.updateConvPreview()
+				// Position cursor at last block
+				if sp.Folds != nil {
+					if last := sp.Folds.lastVisibleBlock(); last >= 0 {
+						sp.Folds.BlockCursor = last
+					}
+				}
+				sp.RefreshFoldCursor(a.width, a.splitRatio)
+				sp.ScrollToBlock()
+				return a, nil
+			}
+		}
+	}
+	return a, nil
 }
 
 // updateConvPreview refreshes the right-pane preview for the selected conversation item.
@@ -1089,6 +1157,71 @@ func (a *App) jumpToEntityTree() (tea.Model, tea.Cmd) {
 				a.convList.Select(i)
 				break
 			}
+		}
+	}
+
+	a.updateConvPreview()
+	return a, nil
+}
+
+// jumpToOriginMessage switches from tree mode to flat mode, jumping to the
+// parent message that spawned the currently selected agent or task.
+func (a *App) jumpToOriginMessage() (tea.Model, tea.Cmd) {
+	item, ok := a.convList.SelectedItem().(convItem)
+	if !ok {
+		return a, nil
+	}
+
+	// Find the parent message's UUID from the tree items
+	var targetUUID string
+	switch item.kind {
+	case convAgent:
+		// parentIdx points to the parent convMsg in the current items slice
+		if item.parentIdx >= 0 && item.parentIdx < len(a.convList.Items()) {
+			if parent, ok := a.convList.Items()[item.parentIdx].(convItem); ok && parent.kind == convMsg {
+				targetUUID = parent.merged.entry.UUID
+			}
+		}
+		// Fallback: search by agent timestamp — find assistant message just before agent
+		if targetUUID == "" {
+			for _, ci := range a.conv.items {
+				if ci.kind == convMsg && ci.merged.entry.Role == "assistant" {
+					for _, b := range ci.merged.entry.Content {
+						if b.ToolName == "Agent" {
+							targetUUID = ci.merged.entry.UUID
+						}
+					}
+				}
+			}
+		}
+	case convTask:
+		if item.parentIdx >= 0 && item.parentIdx < len(a.convList.Items()) {
+			if parent, ok := a.convList.Items()[item.parentIdx].(convItem); ok && parent.kind == convMsg {
+				targetUUID = parent.merged.entry.UUID
+			}
+		}
+	case convMsg:
+		// Already a message, just switch to flat at this position
+		targetUUID = item.merged.entry.UUID
+	}
+
+	if targetUUID == "" {
+		a.copiedMsg = "no parent message found"
+		return a, nil
+	}
+
+	// Switch to flat mode
+	a.setConvLeftPaneMode(convPaneFlat)
+
+	// Find the matching message in flat items and select it
+	for i, li := range a.convList.Items() {
+		ci, ok := li.(convItem)
+		if !ok {
+			continue
+		}
+		if ci.kind == convMsg && ci.merged.entry.UUID == targetUUID {
+			a.convList.Select(i)
+			break
 		}
 	}
 

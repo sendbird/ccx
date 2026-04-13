@@ -176,6 +176,14 @@ func pressKey(app *App, key string) *App {
 		msg = tea.KeyMsg{Type: tea.KeyTab}
 	case "shift+tab":
 		msg = tea.KeyMsg{Type: tea.KeyShiftTab}
+	case "pgup":
+		msg = tea.KeyMsg{Type: tea.KeyPgUp}
+	case "pgdown":
+		msg = tea.KeyMsg{Type: tea.KeyPgDown}
+	case "home":
+		msg = tea.KeyMsg{Type: tea.KeyHome}
+	case "end":
+		msg = tea.KeyMsg{Type: tea.KeyEnd}
 	case "esc":
 		msg = tea.KeyMsg{Type: tea.KeyEscape}
 	default:
@@ -390,6 +398,85 @@ func TestLiveTailGrowingContent(t *testing.T) {
 		if app.conv.split.Preview.YOffset != expected {
 			t.Errorf("after grow, YOffset should be at bottom (%d), got %d", expected, app.conv.split.Preview.YOffset)
 		}
+	}
+}
+
+func TestLiveTailPausesOnManualPreviewUp(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.liveTail = true
+	app.conv.split.BottomAlign = true
+	app.conv.split.Focus = true
+
+	items := app.convList.Items()
+	app.convList.Select(len(items) - 1)
+	app.updateConvPreview()
+	app.scrollConvPreviewToTail()
+
+	selectedBefore := app.convList.Index()
+	app = pressKey(app, "up")
+
+	if app.liveTail {
+		t.Fatal("live tail should pause after manual preview up navigation")
+	}
+	if app.conv.split.BottomAlign {
+		t.Fatal("bottom align should be cleared when live tail pauses")
+	}
+	if app.convList.Index() != selectedBefore {
+		t.Fatalf("manual preview navigation should not change list selection: got %d want %d", app.convList.Index(), selectedBefore)
+	}
+}
+
+func TestLiveTailPausesOnPreviewPageUp(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.liveTail = true
+	app.conv.split.BottomAlign = true
+	app.conv.split.Focus = true
+
+	items := app.convList.Items()
+	app.convList.Select(len(items) - 1)
+	app.updateConvPreview()
+	app.scrollConvPreviewToTail()
+
+	app = pressKey(app, "pgup")
+
+	if app.liveTail {
+		t.Fatal("live tail should pause after manual preview pgup")
+	}
+}
+
+func TestLiveTailPausedDoesNotJumpBackOnTick(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "Hello"),
+		makeTextEntry("assistant", base.Add(time.Second), strings.Repeat("Long reply line.\n", 30)),
+		makeTextEntry("user", base.Add(2*time.Second), "Inspect older content"),
+		makeTextEntry("assistant", base.Add(3*time.Second), strings.Repeat("Newest line.\n", 30)),
+	}
+	app := setupConvApp(t, entries, 160, 30)
+	app.liveTail = true
+	app.conv.split.BottomAlign = true
+	app.conv.split.Focus = true
+
+	items := app.convList.Items()
+	app.convList.Select(len(items) - 1)
+	app.updateConvPreview()
+	app.scrollConvPreviewToTail()
+
+	app = pressKey(app, "up")
+	selectedBefore := app.convList.Index()
+	offsetBefore := app.conv.split.Preview.YOffset
+
+	m, cmd := app.Update(liveTickMsg{})
+	app = m.(*App)
+
+	if cmd != nil {
+		t.Fatal("paused live tail should not schedule another live tick")
+	}
+	if app.convList.Index() != selectedBefore {
+		t.Fatalf("selection should stay put when live tail is paused: got %d want %d", app.convList.Index(), selectedBefore)
+	}
+	if app.conv.split.Preview.YOffset != offsetBefore {
+		t.Fatalf("preview offset should stay put when live tail is paused: got %d want %d", app.conv.split.Preview.YOffset, offsetBefore)
 	}
 }
 

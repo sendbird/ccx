@@ -43,6 +43,7 @@ type ActionsKeymap struct {
 	Jump      string `yaml:"jump"`
 	URLs      string `yaml:"urls"`
 	Files     string `yaml:"files"`
+	Changes   string `yaml:"changes"`
 	Tags      string `yaml:"tags"`
 	ImportMem string `yaml:"import_mem"`
 	RemoveMem string `yaml:"remove_mem"`
@@ -74,6 +75,19 @@ type NavigationKeymap struct {
 // ConvKeymap defines configurable keybindings for the conversation view.
 type ConvKeymap struct {
 	JumpToTree string `yaml:"jump_to_tree"`
+	LiveToggle string `yaml:"live_toggle"`
+	Edit       string `yaml:"edit"`
+	Actions    string `yaml:"actions"`
+	Input      string `yaml:"input"`
+}
+
+// PreviewKeymap defines configurable keybindings for focused preview panes.
+type PreviewKeymap struct {
+	FoldAll   string `yaml:"fold_all"`
+	ExpandAll string `yaml:"expand_all"`
+	Filter    string `yaml:"filter"`
+	CopyMode  string `yaml:"copy_mode"`
+	CopyAll   string `yaml:"copy_all"`
 }
 
 // Keymap holds all configurable keybindings.
@@ -82,6 +96,7 @@ type Keymap struct {
 	Actions      ActionsKeymap    `yaml:"actions"`
 	Views        ViewsKeymap      `yaml:"views"`
 	Conversation ConvKeymap       `yaml:"conversation"`
+	Preview      PreviewKeymap    `yaml:"preview"`
 	Navigation   NavigationKeymap `yaml:"navigation"`
 }
 
@@ -135,6 +150,17 @@ func DefaultKeymap() Keymap {
 		},
 		Conversation: ConvKeymap{
 			JumpToTree: "J",
+			LiveToggle: "L",
+			Edit:       "e",
+			Actions:    "x",
+			Input:      "I",
+		},
+		Preview: PreviewKeymap{
+			FoldAll:   "f",
+			ExpandAll: "F",
+			Filter:    "/",
+			CopyMode:  "v",
+			CopyAll:   "y",
 		},
 		Navigation: NavigationKeymap{
 			Up:       []string{"k"},
@@ -265,6 +291,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	if src.Actions.Files != "" {
 		dst.Actions.Files = src.Actions.Files
 	}
+	if src.Actions.Changes != "" {
+		dst.Actions.Changes = src.Actions.Changes
+	}
 	if src.Actions.ImportMem != "" {
 		dst.Actions.ImportMem = src.Actions.ImportMem
 	}
@@ -295,6 +324,35 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	// Conversation
 	if src.Conversation.JumpToTree != "" {
 		dst.Conversation.JumpToTree = src.Conversation.JumpToTree
+	}
+	if src.Conversation.LiveToggle != "" {
+		dst.Conversation.LiveToggle = src.Conversation.LiveToggle
+	}
+	if src.Conversation.Edit != "" {
+		dst.Conversation.Edit = src.Conversation.Edit
+	}
+	if src.Conversation.Actions != "" {
+		dst.Conversation.Actions = src.Conversation.Actions
+	}
+	if src.Conversation.Input != "" {
+		dst.Conversation.Input = src.Conversation.Input
+	}
+
+	// Preview
+	if src.Preview.FoldAll != "" {
+		dst.Preview.FoldAll = src.Preview.FoldAll
+	}
+	if src.Preview.ExpandAll != "" {
+		dst.Preview.ExpandAll = src.Preview.ExpandAll
+	}
+	if src.Preview.Filter != "" {
+		dst.Preview.Filter = src.Preview.Filter
+	}
+	if src.Preview.CopyMode != "" {
+		dst.Preview.CopyMode = src.Preview.CopyMode
+	}
+	if src.Preview.CopyAll != "" {
+		dst.Preview.CopyAll = src.Preview.CopyAll
 	}
 
 	// Navigation (append, don't replace)

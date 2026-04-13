@@ -19,6 +19,7 @@ var Commands = []struct {
 }{
 	{"urls", "List URLs from the Claude session (interactive on TTY)"},
 	{"files", "List file paths touched by the session (interactive on TTY)"},
+	{"changes", "List file changes made by the session (interactive on TTY)"},
 	{"images", "List image paths from the session (interactive on TTY)"},
 	{"help", "Show available commands and usage"},
 }
@@ -57,6 +58,8 @@ func runPlain(command, filePath, sessID, claudeDir string) error {
 		return printItems(extract.SessionURLs(filePath), "urls")
 	case "files":
 		return printItems(extract.SessionFilePaths(filePath), "files")
+	case "changes":
+		return printChanges(extract.SessionChanges(filePath))
 	case "images":
 		return printImages(filePath, sessID, claudeDir)
 	default:
@@ -77,6 +80,8 @@ func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, er
 		items = extractURLsWithContext(entries, sessID)
 	case "files":
 		items = extractFilesWithContext(entries, sessID)
+	case "changes":
+		items = extractChangesWithContext(entries, sessID)
 	case "images":
 		items = extractImagesWithContext(entries, sessID, home)
 	default:
@@ -117,6 +122,7 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "  ccx urls --plain      Plain tab-separated output\n")
 	fmt.Fprintf(os.Stderr, "  ccx urls | fzf        Pipe to fzf (auto plain)\n")
 	fmt.Fprintf(os.Stderr, "  ccx files             Interactive file picker\n")
+	fmt.Fprintf(os.Stderr, "  ccx changes           Interactive changed-files picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx images            Interactive image picker\n\n")
 	fmt.Fprintf(os.Stderr, "Picker keys:\n")
 	fmt.Fprintf(os.Stderr, "  ↵ enter    Jump to message in full ccx TUI\n")
@@ -145,6 +151,23 @@ func printItems(items []extract.Item, kind string) error {
 			cat += strings.Repeat(" ", 5-len(cat))
 		}
 		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", cat, item.Label, item.URL)
+	}
+	return nil
+}
+
+func printChanges(items []extract.ChangeItem) error {
+	if len(items) == 0 {
+		return fmt.Errorf("no changes found in session")
+	}
+	for _, item := range items {
+		cat := ""
+		if len(item.ToolNames) > 0 {
+			cat = strings.ToUpper(item.ToolNames[0])
+		}
+		if len(cat) < 5 {
+			cat += strings.Repeat(" ", 5-len(cat))
+		}
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", cat, item.Item.Label, item.Summary)
 	}
 	return nil
 }

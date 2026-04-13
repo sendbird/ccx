@@ -14,6 +14,7 @@ func TestResolveBaseRepo_PathFallback(t *testing.T) {
 		want  string
 	}{
 		{"/Users/me/src/repo/.worktree/feat-x", "/Users/me/src/repo"},
+		{"/Users/me/src/repo/.worktrees/feat-x/service", "/Users/me/src/repo"},
 		{"/Users/me/src/repo", "/Users/me/src/repo"},
 		{"/tmp/plain-dir", "/tmp/plain-dir"},
 	}

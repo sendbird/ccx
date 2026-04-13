@@ -189,6 +189,8 @@ type App struct {
 	sessMemoryCacheKey string
 	sessTasksCache     string
 	sessTasksCacheKey  string
+	sessPreviewAgents  []session.Subagent // agents shown in Tasks/Plan preview
+	sessAgentCursor    int                // cursor within agents list
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -233,6 +235,11 @@ type App struct {
 	urlSearchInput textinput.Model
 	urlSearchTerm  string
 	urlScope       string // context label: "session", "message", "block"
+
+	// Changes-specific state for diff preview
+	urlChangeMap map[string]extract.ChangeItem // file path → ChangeItem (for diff rendering)
+	urlDiffVP    viewport.Model                // scrollable diff viewport
+	urlDiffReady bool                          // whether diff viewport is initialized
 
 	// Conversation/message-full actions menu (x key)
 	convActionsMenu bool
@@ -900,57 +907,12 @@ func (a *App) View() string {
 		content = a.renderSessionSplit()
 		if a.confirmMsg != "" {
 			content = renderConfirmModal(content, a.confirmMsg, a.width, ContentHeight(a.height))
-			help = formatHelp("y:confirm  any:cancel")
 		} else if a.sessConvFullText != "" {
 			content = renderFullTextModal(content, a.sessConvFullText, a.sessConvFullScroll, a.width, ContentHeight(a.height))
-			help = formatHelp("↑↓:scroll pgup/pgdn:page esc/c:close")
 		} else if a.showHelp {
 			content = renderHelpModal(content, a.width, ContentHeight(a.height), a.keymap, a.shortcutHint())
-			help = formatHelp("press any key to close")
-		} else if a.tagMenu {
-			help = "" // Tag menu has its own help text inside the modal
-		} else if a.moveMode {
-			help = "  " + a.moveInput.View() + helpStyle.Render("  enter:move esc:cancel")
-		} else if a.worktreeMode {
-			hint := "  enter:create esc:cancel"
-			if a.worktreeNewMode {
-				hint = "  enter:new session (empty=main) esc:cancel"
-			}
-			help = "  " + a.worktreeInput.View() + helpStyle.Render(hint)
-		} else if a.sessConvSearching {
-			help = "  " + a.sessConvSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
-		} else {
-			// Pane proxy focused: show proxy-specific help with indicator
-			if a.sessSplit.Focus && a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive {
-				indicator := a.paneProxyIndicator()
-				h := "keys→pane ^G:jump ^N:newline ^Q:unfocus"
-				help = "  " + indicator + " " + formatHelp(h)
-			} else if a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive && !a.sessSplit.Focus {
-				indicator := a.paneProxyIndicator()
-				h := "→:focus esc:close []:resize"
-				help = "  " + indicator + " " + formatHelp(h)
-			} else {
-				sk := a.keymap.Session
-				h := fmtKey(sk.Open, "open") + " " + fmtKey(sk.Edit, "edit") + " " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Views, "views") + " " + fmtKey(sk.Refresh, "refresh")
-				if !a.sessSplit.Show {
-					h += " →:preview tab:group"
-				} else if a.sessSplit.Focus && a.sessPreviewMode == sessPreviewConversation {
-					h += " ↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " →←:fold f/F:all " + fmtKey(sk.Search, "search") + " tab:mode"
-				} else if a.sessSplit.Focus {
-					h += " tab:mode ←:unfocus " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
-				} else {
-					h += " tab:group →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
-				}
-				if a.config.TmuxEnabled && tmux.InTmux() {
-					h += " " + fmtKey(sk.Live, "live")
-				}
-				scHint := a.shortcutHint()
-				if scHint != "" {
-					h += " " + dimStyle.Render(scHint)
-				}
-				help = formatHelp(h + " " + fmtKey(sk.Search, "search") + " " + fmtKey(sk.Help, "help") + " " + fmtKey(sk.Quit, "quit"))
-			}
 		}
+		help = a.sessHelpLine()
 
 	case viewGlobalStats:
 		title = a.renderBreadcrumb()
@@ -981,152 +943,29 @@ func (a *App) View() string {
 			}
 			badges = badgeStyle.Render(a.liveBadgeText()) + "  "
 		}
-		sp := &a.conv.split
-		if a.conv.blockFiltering {
-			help = "  " + a.conv.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
-		} else {
-			h := "↵:open e:edit x:actions L:live " + a.keymap.Session.Refresh + ":refresh"
-			if a.config.TmuxEnabled && tmux.InTmux() && a.currentSess.IsLive {
-				h += " I:input J:jump"
-			}
-			if sp.Show {
-				if sp.Focus {
-					if a.conv.rightPaneMode == previewText {
-						h += " ↑↓:scroll"
-					} else {
-						h += " ↑↓:blocks ←→:fold f/F:all /:filter"
-					}
-					next := previewModeLabels[(a.conv.rightPaneMode+1)%len(previewModeLabels)]
-					h += " tab:" + next
-				} else {
-					next := convPaneModeLabels[(a.conv.leftPaneMode+1)%len(convPaneModeLabels)]
-					h += " tab:" + next + " →:focus"
-				}
-				h += " esc:close []:resize"
-			} else {
-				h += " tab:preview →:preview"
-			}
-			// Show active block filter badge
-			if sp.Folds != nil && sp.Folds.BlockFilter != "" {
-				vis := countVisibleBlocks(sp.Folds.BlockVisible)
-				total := len(sp.Folds.Entry.Content)
-				filterInfo := filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, sp.Folds.BlockFilter))
-				help = filterInfo + " " + badges + formatHelp(h+" /:search esc:back q:quit")
-			} else {
-				help = badges + formatHelp(h+" /:search esc:back q:quit")
-			}
-		}
+		help = a.convHelpLine(badges)
 
 	case viewMessageFull:
 		title = a.renderBreadcrumb()
 		content = a.renderMessageFull()
-		if a.msgFull.blockFiltering {
-			help = "  " + a.msgFull.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
-		} else if a.msgFull.searching {
-			help = "  " + a.msgFull.searchInput.View() + helpStyle.Render("  enter:search esc:cancel")
-		} else if a.msgFull.allMessages {
-			if a.copyModeActive {
-				help = formatHelp("all messages  ↑↓:move v/sp:sel y/↵:copy home/end esc:cancel")
-			} else {
-				sh := "all messages  ↑↓:scroll v:copy y:all x:actions /:search"
-				if a.msgFull.searchTerm != "" {
-					sh += fmt.Sprintf(" [%d/%d] n/N:match", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
-				}
-				help = formatHelp(sh + " esc:back q:quit")
-			}
-		} else {
-			pos := fmt.Sprintf("#%d/%d", a.msgFull.idx+1, len(a.msgFull.merged))
-			if a.copyModeActive {
-				help = formatHelp(pos + "  ↑↓:move v/sp:sel y/↵:copy home/end esc:cancel")
-			} else {
-				selCount := len(a.msgFull.folds.Selected)
-				sh := pos + "  ↑↓:blocks ←→:fold sp:select n/N:msg f/F:all v:copy y:all x:actions /:filter"
-				if selCount > 0 {
-					sh = pos + fmt.Sprintf("  [%d sel] ↑↓:blocks sp:select y:copy esc:clear", selCount)
-				} else if a.msgFull.searchTerm != "" {
-					sh = pos + fmt.Sprintf("  [%d/%d] n/N:match ↑↓:blocks ←→:fold sp:select f/F:all v:copy y:all", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
-				}
-				// Show active block filter badge
-				if a.msgFull.folds.BlockFilter != "" {
-					vis := countVisibleBlocks(a.msgFull.folds.BlockVisible)
-					total := len(a.msgFull.folds.Entry.Content)
-					filterInfo := filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, a.msgFull.folds.BlockFilter))
-					help = filterInfo + " " + formatHelp(sh+" esc:back q:quit")
-				} else {
-					help = formatHelp(sh + " esc:back q:quit")
-				}
-			}
-		}
+		help = a.msgFullHelpLine()
 
 	case viewConfig:
 		title = a.renderBreadcrumb()
 		content = a.renderConfigSplit()
 		if a.cfgProjectPicker {
 			content = a.renderProjectPickerOverlay(content)
-			help = formatHelp("/:filter ↵:select esc:cancel")
-		} else if a.cfgNaming {
-			help = "  " + a.cfgNamingInput.View() + helpStyle.Render("  enter:create esc:cancel")
-		} else if a.cfgSearching {
-			help = "  " + a.cfgSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
-		} else if a.cfgSearchTerm != "" {
-			badge := fmt.Sprintf("[%d/%d]", a.cfgSearchIdx+1, len(a.cfgSearchMatch))
-			if len(a.cfgSearchMatch) == 0 {
-				badge = "[0/0]"
-			}
-			help = "  " + filterBadge.Render(badge) + formatHelp(" n/N:next/prev esc:clear")
-		} else {
-			h := "sp:sel x:actions p:page tab:filter P:project a:new /:search " + a.keymap.Session.Refresh + ":refresh v:views q:quit"
-			if a.cfgHasSelection() {
-				h = "sp:sel x:actions p:page tab:filter esc:clear q:quit"
-			}
-			if a.cfgSplit.Show {
-				if a.cfgSplit.Focus {
-					h = "↑↓:scroll esc:unfocus q:quit"
-				} else if a.cfgHasSelection() {
-					h = "↑↓:nav →:focus sp:sel x:actions p:page esc:clear q:quit"
-				} else {
-					h = "↑↓:nav →:focus sp:sel x:actions p:page tab:filter P:project a:new v:views q:quit"
-				}
-			}
-			// Badges: filter + selection count
-			var badges string
-			if fl := a.cfgFilterLabel(); fl != "" {
-				badges += filterBadge.Render(fl) + " "
-			}
-			if a.cfgHasSelection() {
-				badges += filterBadge.Render(fmt.Sprintf("%d selected", len(a.cfgSelectedSet))) + " "
-			}
-			help = "  " + badges + formatHelp(h)
 		}
+		help = a.configHelpLine()
 
 	case viewPlugins:
 		title = a.renderBreadcrumb()
 		if a.plgDetailActive {
 			content = a.renderPluginDetailSplit()
-			h := "↑↓:nav →:preview sp:sel x:actions e:edit c:copy-path o:shell esc:back q:quit"
-			if a.plgDetailSplit.Show && a.plgDetailSplit.Focus {
-				h = "↑↓:scroll ←:unfocus q:quit"
-			}
-			help = "  " + formatHelp(h)
 		} else {
 			content = a.renderPluginSplit()
-			if a.plgSearching {
-				help = "  " + a.plgSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
-			} else if a.plgSearchTerm != "" {
-				help = "  " + filterBadge.Render(a.plgSearchTerm) + formatHelp(" n/N:next/prev esc:clear")
-			} else {
-				h := "↑↓:nav ↵:open →:preview sp:select x:actions /:search " + a.keymap.Session.Refresh + ":refresh v:views esc:back q:quit"
-				if a.plgSplit.Show && a.plgSplit.Focus {
-					h = "↑↓:scroll ←:unfocus q:quit"
-				}
-				if a.plgHasSelection() {
-					badges := filterBadge.Render(fmt.Sprintf("%d sel", len(a.plgSelectedSet)))
-					help = "  " + badges + formatHelp(" "+h)
-				} else {
-					help = "  " + formatHelp(h)
-				}
-			}
 		}
+		help = a.pluginsHelpLine()
 	}
 
 	// Command mode help — overrides view-specific help in any view
@@ -1425,6 +1264,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 			return a.jumpToConvMessage()
 		}
+		// If Tasks/Plan preview is focused with agents, jump to selected agent
+		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewTasksPlan && len(a.sessPreviewAgents) > 0 {
+			m, cmd, _ := a.jumpToAgentConversation()
+			return m, cmd
+		}
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
@@ -1624,6 +1468,9 @@ func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, te
 	if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 		return a.handleConvPreviewKeys(sp, key)
 	}
+	if a.sessPreviewMode == sessPreviewTasksPlan && len(a.sessPreviewAgents) > 0 {
+		return a.handleTasksPreviewKeys(sp, key)
+	}
 	switch key {
 	case "/":
 		sp.Focus = false
@@ -1634,6 +1481,102 @@ func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, te
 		return a, nil, true
 	}
 	return a, nil, false
+}
+
+// handleTasksPreviewKeys handles keys for navigating agents in the Tasks/Plan preview.
+func (a *App) handleTasksPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
+	case "enter":
+		return a.jumpToAgentConversation()
+	case "/":
+		sp.Focus = false
+		return a, startListSearch(&a.sessionList), true
+	}
+	// Flat cursor navigation over agents
+	switch HandleFlatCursorNav(&a.sessAgentCursor, len(a.sessPreviewAgents), key) {
+	case NavCursorMoved:
+		a.rebuildTasksPreviewContent()
+		return a, nil, true
+	case NavBoundaryDown:
+		a.sessPreviewBoundaryCross("down")
+		return a, nil, true
+	case NavBoundaryUp:
+		a.sessPreviewBoundaryCross("up")
+		return a, nil, true
+	}
+	// pgup/pgdown/home/end: scroll viewport
+	if scrollViewport(&sp.Preview, key) {
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// jumpToAgentConversation opens the conversation view and jumps to the selected agent.
+func (a *App) jumpToAgentConversation() (tea.Model, tea.Cmd, bool) {
+	if a.sessAgentCursor < 0 || a.sessAgentCursor >= len(a.sessPreviewAgents) {
+		return a, nil, true
+	}
+	agent := a.sessPreviewAgents[a.sessAgentCursor]
+	sess, ok := a.selectedSession()
+	if !ok {
+		return a, nil, true
+	}
+	a.currentSess = sess
+	cmd := a.openConversation(sess)
+
+	// Switch to tree view and find the agent
+	a.setConvLeftPaneMode(convPaneTree)
+	for i, item := range a.convList.Items() {
+		ci, ok := item.(convItem)
+		if !ok {
+			continue
+		}
+		if ci.kind == convAgent && (ci.agent.ID == agent.ID || ci.agent.ShortID == agent.ShortID) {
+			a.convList.Select(i)
+			break
+		}
+	}
+	a.updateConvPreview()
+	return a, cmd, true
+}
+
+// rebuildTasksPreviewContent re-renders the Tasks/Plan content with the current agent cursor.
+func (a *App) rebuildTasksPreviewContent() {
+	sess, ok := a.selectedSession()
+	if !ok {
+		return
+	}
+	a.sessTasksCacheKey = "" // force rebuild
+	a.sessTasksCache = a.buildTasksPlanContent(sess)
+	a.sessSplit.Preview.SetContent(a.sessTasksCache)
+}
+
+// sessPreviewBoundaryCross moves to the next/prev session when the preview
+// cursor hits the boundary, and reloads the preview for the new session.
+func (a *App) sessPreviewBoundaryCross(dir string) {
+	idx := a.sessionList.Index()
+	n := len(a.sessionList.Items())
+	switch dir {
+	case "down":
+		if idx < n-1 {
+			a.sessionList.Select(idx + 1)
+			a.sessSplit.CacheKey = ""
+			a.updateSessionPreview()
+			// Position cursor at first item in new preview
+			a.sessConvCursor = 0
+		}
+	case "up":
+		if idx > 0 {
+			a.sessionList.Select(idx - 1)
+			a.sessSplit.CacheKey = ""
+			a.updateSessionPreview()
+			// Position cursor at last item in new preview
+			visible := a.convVisibleEntries()
+			if len(visible) > 0 {
+				a.sessConvCursor = len(visible) - 1
+			}
+		}
+	}
 }
 
 // handleConvPreviewKeys handles keys for the conversation preview navigation.
@@ -1665,6 +1608,9 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 			}
 			a.sessPreviewPinned = true
 			a.refreshConvPreview()
+		} else {
+			// At top boundary: move to previous session
+			a.sessPreviewBoundaryCross("up")
 		}
 		return a, nil, true
 	case "down":
@@ -1683,6 +1629,9 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 				a.sessConvCursor++
 			}
 			a.refreshConvPreview()
+		} else {
+			// At bottom boundary: move to next session
+			a.sessPreviewBoundaryCross("down")
 		}
 		a.sessPreviewPinned = a.sessConvCursor < len(visible)-1
 		return a, nil, true
@@ -1770,7 +1719,7 @@ func (a *App) openGlobalStats() (tea.Model, tea.Cmd) {
 	return a, tea.Batch(
 		spinnerTickCmd(),
 		func() tea.Msg {
-			return globalStatsMsg(session.AggregateStats(sessions))
+			return globalStatsMsg(session.AggregateStats(sessions, a.config.WorktreeDir))
 		},
 	)
 }
@@ -2356,6 +2305,21 @@ func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
 }
 
 // openBulkURLMenu merges URLs or file paths from multiple sessions into the URL menu.
+func (a *App) openBulkChangesMenu(selected []session.Session) (tea.Model, tea.Cmd) {
+	seen := make(map[string]bool)
+	var merged []extract.Item
+	for _, s := range selected {
+		items := sessionChangeItems(s.FilePath)
+		for _, item := range items {
+			if !seen[item.URL] {
+				seen[item.URL] = true
+				merged = append(merged, item)
+			}
+		}
+	}
+	return a.openURLMenuFromItems(merged, fmt.Sprintf("%d sessions changes", len(selected)))
+}
+
 func (a *App) openBulkURLMenu(selected []session.Session, files bool) (tea.Model, tea.Cmd) {
 	seen := make(map[string]bool)
 	var merged []extract.Item
@@ -4212,6 +4176,66 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 		}
 	}
 
+	// Agents/teammates
+	if sess.HasAgents {
+		agents, err := session.FindSubagents(sess.FilePath)
+		a.sessPreviewAgents = agents
+		if a.sessAgentCursor >= len(agents) {
+			a.sessAgentCursor = 0
+		}
+		if err == nil && len(agents) > 0 {
+			running := 0
+			for _, ag := range agents {
+				if ag.MsgCount > 0 && ag.MsgCount%2 == 1 {
+					running++
+				}
+			}
+			label := fmt.Sprintf("── Agents [%d] ↵:jump ──", len(agents))
+			if running > 0 {
+				label = fmt.Sprintf("── Agents [%d, %d active] ↵:jump ──", len(agents), running)
+			}
+			sb.WriteString(dimStyle.Render(label) + "\n\n")
+			sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+			for i, ag := range agents {
+				icon := "⊕"
+				style := dimStyle
+				if ag.MsgCount > 0 && ag.MsgCount%2 == 1 {
+					icon = "◉"
+					style = lipgloss.NewStyle().Foreground(colorAssistant)
+				} else if ag.MsgCount > 0 {
+					icon = "✓"
+					style = lipgloss.NewStyle().Foreground(colorAccent)
+				}
+				typeBadge := ag.AgentType
+				if typeBadge == "" {
+					typeBadge = "agent"
+				}
+				headline := fmt.Sprintf("%s %s", icon, typeBadge)
+				if ag.ShortID != "" {
+					headline += "  " + ag.ShortID
+				}
+				cursor := "  "
+				if i == a.sessAgentCursor && a.sessSplit.Focus {
+					cursor = sel.Render("> ")
+					sb.WriteString(cursor + sel.Render(headline) + "\n")
+				} else {
+					sb.WriteString(cursor + style.Render(headline) + "\n")
+				}
+				if ag.FirstPrompt != "" {
+					prompt := ag.FirstPrompt
+					if len(prompt) > 100 {
+						prompt = prompt[:97] + "..."
+					}
+					sb.WriteString(dimStyle.Render("    "+prompt) + "\n")
+				}
+				if !ag.Timestamp.IsZero() {
+					sb.WriteString(dimStyle.Render("    "+timeAgo(ag.Timestamp)) + "\n")
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
 	// Plans (show all distinct plans in order)
 	for i, slug := range sess.PlanSlugs {
 		path := filepath.Join(home, ".claude", "plans", slug+".md")
@@ -4228,7 +4252,7 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 	}
 
 	if sb.Len() == 0 {
-		return dimStyle.Render("No tasks, cron jobs, or plans found for this session.")
+		return dimStyle.Render("No tasks, agents, cron jobs, or plans found for this session.")
 	}
 	return sb.String()
 }
@@ -4438,11 +4462,11 @@ func (a *App) renderActionsHintBox() string {
 		header := fmt.Sprintf("%d selected", len(a.selectedSet))
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
-		lines = append(lines, hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
+		lines = append(lines, hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Changes))+d.Render(":changes")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
 	} else {
 		sess := a.actionsSess
 		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
-		line2 := hl.Render(displayKey(akm.Worktree)) + d.Render(":worktree") + sp + hl.Render(displayKey(akm.URLs)) + d.Render(":urls") + sp + hl.Render(displayKey(akm.Files)) + d.Render(":files") + sp + hl.Render(displayKey(akm.Tags)) + d.Render(":tags")
+		line2 := hl.Render(displayKey(akm.Worktree)) + d.Render(":worktree") + sp + hl.Render(displayKey(akm.URLs)) + d.Render(":urls") + sp + hl.Render(displayKey(akm.Files)) + d.Render(":files") + sp + hl.Render(displayKey(akm.Changes)) + d.Render(":changes") + sp + hl.Render(displayKey(akm.Tags)) + d.Render(":tags")
 		if sess.HasMemory {
 			line2 += sp + hl.Render(displayKey(akm.RemoveMem)) + d.Render(":rm-mem")
 		}
