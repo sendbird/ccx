@@ -463,19 +463,34 @@ func (m *pickerModel) updatePreview() {
 // --- View ---
 
 func renderConversationListRow(item PickerItem, selected bool, selectedMark, plainMark, badge string, listW int, selStyle, dimStyle lipgloss.Style) []string {
-	headerPrefix := " " + plainMark + badge + " "
-	bodyPrefix := strings.Repeat(" ", lipgloss.Width(headerPrefix))
+	plainBadge := strings.ToUpper(item.Item.Category)
+	if len(plainBadge) > 5 {
+		plainBadge = plainBadge[:5]
+	}
+	plainBadge = padRight(plainBadge, 5)
+	badgeStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366F1")).Bold(true).Render(plainBadge)
+
+	cursorPlain := " "
+	cursorStyled := " "
+	markPlain := plainMark
+	markStyled := plainMark
 	if selected {
-		headerPrefix = selStyle.Render(">") + selectedMark + badge + " "
-		bodyPrefix = strings.Repeat(" ", lipgloss.Width(" "+plainMark+badge+" "))
+		cursorPlain = ">"
+		cursorStyled = selStyle.Render(">")
+		markPlain = "  "
+		markStyled = selectedMark
 	}
 
+	plainPrefix := cursorPlain + markPlain + plainBadge + " "
+	styledPrefix := cursorStyled + markStyled + badgeStyled + " "
+	textPrefix := strings.Repeat(" ", lipgloss.Width(plainPrefix))
+
 	label := item.Item.Label
-	maxHeader := max(listW-lipgloss.Width(headerPrefix), 12)
+	maxHeader := max(listW-lipgloss.Width(plainPrefix), 12)
 	if len(label) > maxHeader {
 		label = label[:maxHeader-3] + "..."
 	}
-	lines := []string{headerPrefix + func() string {
+	lines := []string{styledPrefix + func() string {
 		if selected {
 			return selStyle.Render(label)
 		}
@@ -490,14 +505,14 @@ func renderConversationListRow(item PickerItem, selected bool, selectedMark, pla
 		if i >= 2 {
 			break
 		}
-		maxBody := max(listW-lipgloss.Width(bodyPrefix), 12)
+		maxBody := max(listW-lipgloss.Width(textPrefix), 12)
 		if len(line) > maxBody {
 			line = line[:maxBody-3] + "..."
 		}
 		if selected {
-			lines = append(lines, bodyPrefix+selStyle.Render(line))
+			lines = append(lines, textPrefix+selStyle.Render(line))
 		} else {
-			lines = append(lines, bodyPrefix+dimStyle.Render(line))
+			lines = append(lines, textPrefix+dimStyle.Render(line))
 		}
 	}
 	return lines
@@ -548,7 +563,7 @@ func (m pickerModel) View() string {
 			maxLabel = 10
 		}
 		if m.kind == "conversation" {
-			rows := renderConversationListRow(item, i == m.cursor, check, "  ", badge, listW, sel, dim)
+			rows := renderConversationListRow(item, i == m.cursor, check, "  ", "", listW, sel, dim)
 			if len(listLines)+len(rows) > maxListLines && len(listLines) > 0 {
 				break
 			}
