@@ -1138,7 +1138,8 @@ func TestFocusedArtifactTooltipForChangeBlock(t *testing.T) {
 		}}},
 		BlockCursor: 0,
 	}
-	tooltip := focusedArtifactTooltip(sp, 120)
+	app := &App{currentSess: session.Session{ID: "test-sess"}}
+	tooltip := app.focusedArtifactTooltip(sp, 120)
 	if !strings.Contains(tooltip, "/tmp/x.go") {
 		t.Fatalf("expected change tooltip to include file path, got %q", tooltip)
 	}

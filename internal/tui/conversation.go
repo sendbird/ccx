@@ -1585,7 +1585,7 @@ func (a *App) scrollConvPreviewToTail() {
 	sp.Preview.YOffset = maxOffset
 }
 
-func focusedArtifactTooltip(sp *SplitPane, width int) string {
+func (a *App) focusedArtifactTooltip(sp *SplitPane, width int) string {
 	if sp == nil || sp.Folds == nil {
 		return ""
 	}
@@ -1597,7 +1597,15 @@ func focusedArtifactTooltip(sp *SplitPane, width int) string {
 	block := entry.Content[bc]
 	switch {
 	case block.Type == "image" && block.ImagePasteID > 0:
-		return fmt.Sprintf("Image\n\npaste #%d", block.ImagePasteID)
+		cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
+		label := block.Text
+		if label == "" {
+			label = "[Image]"
+		}
+		if cachePath != "" {
+			return fmt.Sprintf("Image\n\n%s\n\npaste #%d\n%s", label, block.ImagePasteID, cachePath)
+		}
+		return fmt.Sprintf("Image\n\n%s\n\npaste #%d\n(not cached for inline preview)", label, block.ImagePasteID)
 	case len(extract.BlockChanges([]session.ContentBlock{block})) > 0:
 		if diff := toolDiffOutput(block, max(width/2, 20)); diff != "" {
 			return diff
@@ -1625,7 +1633,7 @@ func (a *App) renderConvSplit() string {
 	// Show tooltip for selected item when list is focused and tooltip is on.
 	// When preview is focused, prefer a tooltip for the focused artifact/block.
 	if sp.Focus && sp.Show {
-		if tooltip := focusedArtifactTooltip(sp, a.width); tooltip != "" {
+		if tooltip := a.focusedArtifactTooltip(sp, a.width); tooltip != "" {
 			contentH := ContentHeight(a.height)
 			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage, a.convTooltipScroll)
 		}
