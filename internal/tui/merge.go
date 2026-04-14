@@ -109,7 +109,6 @@ func cloneEntry(e session.Entry) session.Entry {
 	return clone
 }
 
-
 // filterConversation keeps messages with visible conversation content:
 // real text (not system-generated) or tool calls.
 // Drops empty entries ("no content") and system-only messages.
@@ -128,6 +127,9 @@ func filterConversation(msgs []mergedMsg) []mergedMsg {
 func hasVisibleContent(e session.Entry) bool {
 	for _, b := range e.Content {
 		if b.Type == "tool_use" {
+			return true
+		}
+		if b.Type == "tool_result" && b.IsError {
 			return true
 		}
 		if b.Type == "text" {

@@ -282,6 +282,23 @@ func convMsgPreview(e session.Entry, maxW int) string {
 			return text
 		}
 	}
+	for _, block := range e.Content {
+		if block.Type == "tool_result" && block.IsError {
+			text := strings.TrimSpace(session.StripXMLTags(stripANSI(block.Text)))
+			text = strings.ReplaceAll(text, "\n", " ")
+			for strings.Contains(text, "  ") {
+				text = strings.ReplaceAll(text, "  ", " ")
+			}
+			if text == "" {
+				return errorStyle.Render("[error]")
+			}
+			text = "[error] " + text
+			if len(text) > maxW {
+				text = text[:maxW-3] + "..."
+			}
+			return errorStyle.Render(text)
+		}
+	}
 	// No text — check for images
 	var images int
 	for _, block := range e.Content {

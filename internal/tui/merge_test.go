@@ -227,7 +227,6 @@ func TestMerge_SystemTagPreserved(t *testing.T) {
 		t.Fatalf("got %d merged, want 2", len(merged))
 	}
 
-	// First merged entry (user) should preserve both blocks
 	userBlocks := merged[0].entry.Content
 	if len(userBlocks) != 2 {
 		t.Fatalf("user blocks = %d, want 2", len(userBlocks))
@@ -237,5 +236,23 @@ func TestMerge_SystemTagPreserved(t *testing.T) {
 	}
 	if userBlocks[1].Type != "text" {
 		t.Errorf("block[1] type = %q, want text", userBlocks[1].Type)
+	}
+}
+
+func TestFilterConversation_KeepsErrorToolResults(t *testing.T) {
+	entries := []session.Entry{
+		{
+			Role: "assistant",
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ToolName: "Bash"},
+				{Type: "tool_result", Text: "Exit code 1\nboom", IsError: true},
+			},
+		},
+	}
+
+	merged := mergeConversationTurns(entries)
+	filtered := filterConversation(merged)
+	if len(filtered) != 1 {
+		t.Fatalf("filtered len = %d, want 1", len(filtered))
 	}
 }

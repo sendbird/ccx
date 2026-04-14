@@ -305,6 +305,14 @@ func TestEntryPreview_ImagesOnly(t *testing.T) {
 	}
 }
 
+func TestEntryPreview_ToolResultErrorSummary(t *testing.T) {
+	e := Entry{Content: []ContentBlock{{Type: "tool_result", Text: "Exit code 1\nboom", IsError: true}}}
+	got := EntryPreview(e)
+	if got != "[error] Exit code 1 boom" {
+		t.Errorf("preview = %q, want %q", got, "[error] Exit code 1 boom")
+	}
+}
+
 func TestEntryPreview_NoContent(t *testing.T) {
 	e := Entry{}
 	got := EntryPreview(e)
@@ -343,9 +351,9 @@ func TestEntryPreview_SkipsEmptyTextBlocks(t *testing.T) {
 
 func TestToolSummary(t *testing.T) {
 	tests := []struct {
-		name   string
-		entry  Entry
-		want   string
+		name  string
+		entry Entry
+		want  string
 	}{
 		{"no tools", Entry{Content: []ContentBlock{{Type: "text", Text: "hi"}}}, ""},
 		{"one tool", Entry{Content: []ContentBlock{{Type: "tool_use", ToolName: "Read"}}}, "[Read]"},

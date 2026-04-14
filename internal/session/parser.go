@@ -101,17 +101,17 @@ func splitSystemTags(text string) []ContentBlock {
 }
 
 type rawEntry struct {
-	Type          string             `json:"type"`
-	Timestamp     string             `json:"timestamp"`
-	IsMeta        bool               `json:"isMeta"`
-	Message       json.RawMessage    `json:"message"`
-	UUID          string             `json:"uuid"`
-	ParentID      string             `json:"parentUuid"`
-	AgentID       string             `json:"agentId"`
-	CWD           string             `json:"cwd"`
-	GitBranch     string             `json:"gitBranch"`
-	ImagePasteIDs []int              `json:"imagePasteIds"`
-	ToolUseResult *rawToolUseResult  `json:"toolUseResult"`
+	Type          string            `json:"type"`
+	Timestamp     string            `json:"timestamp"`
+	IsMeta        bool              `json:"isMeta"`
+	Message       json.RawMessage   `json:"message"`
+	UUID          string            `json:"uuid"`
+	ParentID      string            `json:"parentUuid"`
+	AgentID       string            `json:"agentId"`
+	CWD           string            `json:"cwd"`
+	GitBranch     string            `json:"gitBranch"`
+	ImagePasteIDs []int             `json:"imagePasteIds"`
+	ToolUseResult *rawToolUseResult `json:"toolUseResult"`
 }
 
 // rawToolUseResult holds metadata from the toolUseResult field on tool_result entries.
@@ -331,6 +331,23 @@ func EntryPreview(e Entry) string {
 			text = strings.ReplaceAll(text, "\n", " ")
 			text = ansiRegex.ReplaceAllString(text, "")
 			text = xmlTagRegex.ReplaceAllString(text, "")
+			if len(text) > 100 {
+				return text[:97] + "..."
+			}
+			return text
+		}
+	}
+
+	for _, block := range e.Content {
+		if block.Type == "tool_result" && block.IsError {
+			text := strings.TrimSpace(block.Text)
+			text = strings.ReplaceAll(text, "\n", " ")
+			text = ansiRegex.ReplaceAllString(text, "")
+			text = xmlTagRegex.ReplaceAllString(text, "")
+			if text == "" {
+				return "[error]"
+			}
+			text = "[error] " + text
 			if len(text) > 100 {
 				return text[:97] + "..."
 			}
