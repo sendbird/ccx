@@ -516,24 +516,25 @@ func (m pickerModel) View() string {
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
 	cat := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366F1")).Bold(true)
 
-	visMax := contentH - 2
-	if m.kind == "conversation" {
-		visMax = max((contentH-2)/3, 1)
+	maxListLines := contentH - 2 // reserve for scrollInfo
+	if maxListLines < 3 {
+		maxListLines = 3
 	}
-	if visMax < 3 && m.kind != "conversation" {
-		visMax = 3
+
+	// For conversation mode, estimate items per page from actual line budget
+	var visMax int
+	if m.kind == "conversation" {
+		visMax = max(maxListLines/3, 1)
+	} else {
+		visMax = maxListLines
 	}
 	start := 0
 	if m.cursor >= start+visMax {
 		start = m.cursor - visMax + 1
 	}
-	end := start + visMax
-	if end > len(m.items) {
-		end = len(m.items)
-	}
 
 	var listLines []string
-	for i := start; i < end; i++ {
+	for i := start; i < len(m.items); i++ {
 		item := m.items[i]
 		ri := m.realIndex(i)
 		check := "  "
@@ -547,8 +548,15 @@ func (m pickerModel) View() string {
 			maxLabel = 10
 		}
 		if m.kind == "conversation" {
-			listLines = append(listLines, renderConversationListRow(item, i == m.cursor, check, "  ", badge, listW, sel, dim)...)
+			rows := renderConversationListRow(item, i == m.cursor, check, "  ", badge, listW, sel, dim)
+			if len(listLines)+len(rows) > maxListLines && len(listLines) > 0 {
+				break
+			}
+			listLines = append(listLines, rows...)
 			continue
+		}
+		if len(listLines) >= maxListLines {
+			break
 		}
 		if len(label) > maxLabel {
 			label = label[:maxLabel-3] + "..."
