@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/extract"
 )
 
@@ -519,10 +520,8 @@ func (m *pickerModel) updatePreview() {
 
 func renderConversationListRow(item PickerItem, selected bool, selectedMark, plainMark, badge string, listW int, selStyle, dimStyle lipgloss.Style) []string {
 	plainBadge := strings.ToUpper(item.Item.Category)
-	if len(plainBadge) > 5 {
-		plainBadge = plainBadge[:5]
-	}
-	plainBadge = padRight(plainBadge, 5)
+	plainBadge = truncateWidth(plainBadge, 5)
+	plainBadge = padRightWidth(plainBadge, 5)
 	badgeStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366F1")).Bold(true).Render(plainBadge)
 
 	cursorPlain := " "
@@ -542,8 +541,8 @@ func renderConversationListRow(item PickerItem, selected bool, selectedMark, pla
 
 	label := item.Item.Label
 	maxHeader := max(listW-lipgloss.Width(plainPrefix), 12)
-	if len(label) > maxHeader {
-		label = label[:maxHeader-3] + "..."
+	if runewidth.StringWidth(label) > maxHeader {
+		label = truncateWidth(label, maxHeader)
 	}
 	lines := []string{styledPrefix + func() string {
 		if selected {
@@ -561,8 +560,8 @@ func renderConversationListRow(item PickerItem, selected bool, selectedMark, pla
 			break
 		}
 		maxBody := max(listW-lipgloss.Width(textPrefix), 12)
-		if len(line) > maxBody {
-			line = line[:maxBody-3] + "..."
+		if runewidth.StringWidth(line) > maxBody {
+			line = truncateWidth(line, maxBody)
 		}
 		if selected {
 			lines = append(lines, textPrefix+selStyle.Render(line))
@@ -611,7 +610,7 @@ func (m pickerModel) View() string {
 		if m.selected[ri] {
 			check = sel.Render("* ")
 		}
-		badge := cat.Render(padRight(strings.ToUpper(item.Item.Category), 5))
+		badge := cat.Render(padRightWidth(strings.ToUpper(item.Item.Category), 5))
 		label := item.Item.Label
 		maxLabel := listW - 12
 		if maxLabel < 10 {
@@ -628,8 +627,8 @@ func (m pickerModel) View() string {
 		if len(listLines) >= maxListLines {
 			break
 		}
-		if len(label) > maxLabel {
-			label = label[:maxLabel-3] + "..."
+		if runewidth.StringWidth(label) > maxLabel {
+			label = truncateWidth(label, maxLabel)
 		}
 		// Show ref count for items with multiple references
 		refBadge := ""
@@ -815,6 +814,37 @@ func copyToClipboard(text string) {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)
 	cmd.Run()
+}
+
+func padRightWidth(s string, n int) string {
+	w := runewidth.StringWidth(s)
+	if w >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-w)
+}
+
+func truncateWidth(s string, maxW int) string {
+	if maxW <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(s) <= maxW {
+		return s
+	}
+	if maxW <= 3 {
+		return strings.Repeat(".", maxW)
+	}
+	out := ""
+	w := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxW-3 {
+			break
+		}
+		out += string(r)
+		w += rw
+	}
+	return out + "..."
 }
 
 func padRight(s string, n int) string {
