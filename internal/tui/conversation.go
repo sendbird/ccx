@@ -522,8 +522,7 @@ func (a *App) updateConvPreview() {
 			return
 		}
 		if a.conv.rightPaneMode == previewTool {
-			a.renderStandardPreview(item, entry)
-			return
+			entry = renderStandardPreview(item, entry)
 		}
 	}
 
@@ -706,6 +705,57 @@ func (a *App) renderStandardPreview(item convItem, entry session.Entry) {
 		sp.Folds.Entry = session.Entry{}
 		sp.Folds.BlockStarts = nil
 	}
+}
+
+func buildStandardPreviewEntry(entry session.Entry) session.Entry {
+	blocks := make([]session.ContentBlock, 0, len(entry.Content)+8)
+
+	for i, chunk := range previewTextChunks(entry) {
+		if i > 0 {
+			blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.Repeat("─", 24)})
+		}
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: chunk})
+	}
+
+	artifactLines := make([]session.ContentBlock, 0)
+	for _, b := range entry.Content {
+		if b.Type == "image" {
+			label := b.Text
+			if label == "" {
+				label = "[image]"
+			}
+			artifactLines = append(artifactLines, session.ContentBlock{Type: "text", Text: "[image] " + label})
+		}
+	}
+	for _, item := range extract.BlockFilePaths(entry.Content) {
+		artifactLines = append(artifactLines, session.ContentBlock{Type: "text", Text: "[file] " + item.URL})
+	}
+	for _, item := range extract.BlockURLs(entry.Content) {
+		artifactLines = append(artifactLines, session.ContentBlock{Type: "text", Text: "[url] " + item.URL})
+	}
+	for _, item := range extract.BlockChanges(entry.Content) {
+		artifactLines = append(artifactLines, session.ContentBlock{Type: "tool_use", ToolName: "Edit", ToolInput: firstChangeToolInput(item)})
+	}
+	if len(artifactLines) > 0 {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "Artifacts"})
+		blocks = append(blocks, artifactLines...)
+	}
+	if len(blocks) == 0 {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no text content)"})
+	}
+	entry.Content = blocks
+	return entry
+}
+
+func firstChangeToolInput(ch extract.ChangeItem) string {
+	if len(ch.ToolInputs) > 0 {
+		return ch.ToolInputs[0]
+	}
+	return ""
+}
+
+func renderStandardPreview(item convItem, entry session.Entry) session.Entry {
+	return buildStandardPreviewEntry(entry)
 }
 
 func (a *App) setConvPreviewText(content string) {
