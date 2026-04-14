@@ -646,7 +646,34 @@ func (a *App) renderStandardPreview(item convItem, entry session.Entry) {
 	if text == "" {
 		sb.WriteString(dimStyle.Render("(no text content)"))
 	} else {
-		sb.WriteString(wrapText(text, textW))
+		parts := strings.Split(text, "\n")
+		chunks := []string{strings.Join(parts, "\n")}
+		if len(parts) > 0 {
+			var splitChunks []string
+			var current []string
+			for _, line := range parts {
+				if strings.HasPrefix(line, "USER  ") || strings.HasPrefix(line, "ASSISTANT  ") || strings.HasPrefix(line, "ENTRY  ") {
+					if len(current) > 0 {
+						splitChunks = append(splitChunks, strings.Join(current, "\n"))
+					}
+					current = []string{line}
+					continue
+				}
+				current = append(current, line)
+			}
+			if len(current) > 0 {
+				splitChunks = append(splitChunks, strings.Join(current, "\n"))
+			}
+			if len(splitChunks) > 1 {
+				chunks = splitChunks
+			}
+		}
+		for i, chunk := range chunks {
+			if i > 0 {
+				sb.WriteString("\n\n" + dimStyle.Render(strings.Repeat("─", min(textW, 24))) + "\n\n")
+			}
+			sb.WriteString(wrapText(chunk, textW))
+		}
 	}
 
 	imageCount := 0
