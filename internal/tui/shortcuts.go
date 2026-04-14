@@ -28,6 +28,10 @@ func DefaultShortcuts() Shortcuts {
 		},
 		"conversation": {
 			Left: ShortcutMap{
+				"1": "pane:flat",
+				"2": "pane:tree",
+			},
+			Right: ShortcutMap{
 				"1": "detail:compact",
 				"2": "detail:standard",
 				"3": "detail:verbose",

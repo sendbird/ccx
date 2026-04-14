@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -43,6 +44,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.conv.merged = filterConversation(mergeConversationTurns(entries))
 	a.conv.agent = session.Subagent{}
 	a.conv.task = session.TaskItem{}
+	a.conv.toolUseToAgent = buildToolUseToAgentMap(entries)
 
 	// Load agents
 	agents, _ := session.FindSubagents(sess.FilePath)
@@ -62,20 +64,17 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 		a.lastMsgLoadTime = info.ModTime()
 	}
 
-	// Create list with preview auto-open (text-only mode by default)
-	contentH := ContentHeight(a.height)
+	// Create list with preview auto-open while keeping the current flat/tree mode.
 	a.conv.split.Show = true
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
-	// Keep the persisted detail level (don't reset to compact on every open)
-	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
-	a.conv.split.List = &a.convList
+	a.rebuildConversationList(0)
 
 	a.state = viewConversation
 
 	// Auto-enable live tail for live sessions
 	a.liveTail = false
-	if sess.IsLive {
+	if sess.IsLive && a.conv.leftPaneMode != convPaneTree {
 		a.liveTail = true
 		a.conv.split.BottomAlign = true
 		// Select last item
@@ -142,15 +141,45 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		// Toggle fold on expandable group headers; marker headers are no-op
+		// Toggle fold on expandable group headers; marker headers jump to agent
 		if item.groupTag != "" {
 			if item.count > 0 {
 				a.toggleConvGroupFold(item)
+				return a, nil
+			}
+			// Marker header (count==0): try to jump to an agent referenced in parent message
+			if agent, ok := a.findAgentInParentMsg(item); ok {
+				a.pushNavFrame()
+				return a.openAgentConversation(agent)
+			}
+			// No agent found (background task) — open parent message detail view
+			items := a.convList.Items()
+			if item.parentIdx >= 0 && item.parentIdx < len(items) {
+				if parent, ok := items[item.parentIdx].(convItem); ok && parent.kind == convMsg {
+					a.pushNavFrame()
+					return a.openMsgFullForEntry(parent.merged)
+				}
 			}
 			return a, nil
 		}
 		switch item.kind {
 		case convTask:
+			// Background task sub-item: find the message with TaskOutput result and open it
+			if item.bgTaskID != "" {
+				if m, blockIdx, ok := a.findBgTaskResultMsg(item.bgTaskID); ok {
+					a.pushNavFrame()
+					return a.openMsgFullForEntryAt(m, blockIdx)
+				}
+				// Fallback: open parent message
+				items := a.convList.Items()
+				if item.parentIdx >= 0 && item.parentIdx < len(items) {
+					if parent, ok := items[item.parentIdx].(convItem); ok && parent.kind == convMsg {
+						a.pushNavFrame()
+						return a.openMsgFullForEntry(parent.merged)
+					}
+				}
+				return a, nil
+			}
 			// If this task has a corresponding agent (via TaskOutput), jump to it
 			if item.groupTag == "" {
 				if agents := a.findTaskAgents(); len(agents) == 1 {
@@ -176,8 +205,8 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					if block.Type == "image" && block.ImagePasteID > 0 {
 						return a.openCachedImage(block.ImagePasteID)
 					}
-					// Jump to agent for Task blocks
-					if block.Type == "tool_use" && block.ToolName == "Task" {
+					// Jump to agent for Agent/Task tool_use blocks
+					if block.Type == "tool_use" && (block.ToolName == "Agent" || block.ToolName == "Task") {
 						if agent, found := a.findAgentForConv(entry); found {
 							a.pushNavFrame()
 							return a.openAgentConversation(agent)
@@ -192,7 +221,12 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case "L":
 		return a.toggleConvLiveTail()
-	case "R":
+	default:
+		// Jump to entity tree with selected item
+		if key == a.keymap.Conversation.JumpToTree && a.conv.leftPaneMode != convPaneTree {
+			return a.jumpToEntityTree()
+		}
+	case a.keymap.Session.Refresh:
 		cmd := a.refreshConversation()
 		a.copiedMsg = "Refreshed"
 		return a, cmd
@@ -219,16 +253,28 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Tab/shift+tab cycles detail level when preview is open: text → tool → hook
+	// Tab/shift+tab act on the focused pane: left toggles flat/tree, right cycles compact/standard/verbose.
 	if (key == "tab" || key == "shift+tab") && sp.Show {
-
-		if key == "shift+tab" {
-			a.conv.previewMode = (a.conv.previewMode + 2) % 3
+		if sp.Focus {
+			if key == "shift+tab" {
+				a.conv.rightPaneMode = (a.conv.rightPaneMode + len(previewModeLabels) - 1) % len(previewModeLabels)
+			} else {
+				a.conv.rightPaneMode = (a.conv.rightPaneMode + 1) % len(previewModeLabels)
+			}
+			if sp.Folds != nil {
+				sp.Folds.HideHooks = a.conv.rightPaneMode == previewTool
+			}
 		} else {
-			a.conv.previewMode = (a.conv.previewMode + 1) % 3
-		}
-		if sp.Folds != nil {
-			sp.Folds.HideHooks = a.conv.previewMode == previewTool
+			if a.conv.leftPaneMode == convPaneFlat {
+				a.conv.leftPaneMode = convPaneTree
+			} else {
+				a.conv.leftPaneMode = convPaneFlat
+			}
+			if a.conv.leftPaneMode == convPaneTree && a.liveTail {
+				a.liveTail = false
+				a.conv.split.BottomAlign = false
+			}
+			a.rebuildConversationList(0)
 		}
 		sp.CacheKey = "" // force re-render
 		a.updateConvPreview()
@@ -265,7 +311,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Focused preview keys
 	if sp.Focus && sp.Show {
 		if key == "up" || key == "down" {
-			if a.conv.previewMode == previewText {
+			if a.conv.rightPaneMode == previewText {
 				// Text mode: scroll viewport directly
 				scrollPreview(&sp.Preview, key)
 				return a, nil
@@ -287,7 +333,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		result = sp.HandleFocusedKeys(key)
 		switch result {
 		case splitKeySearchFromPreview:
-			if a.conv.previewMode != previewText {
+			if a.conv.rightPaneMode != previewText {
 				a.startBlockFilter()
 				return a, nil
 			}
@@ -361,47 +407,54 @@ func (a *App) updateConvPreview() {
 		entry = buildAgentPreviewEntry(item.agent)
 	case convTask:
 		pw := sp.PreviewWidth(a.width, a.splitRatio)
+		if item.groupTag == "agents" && item.count > 0 {
+			// Agents group header: show agent summary list
+			a.setConvPreviewText(a.renderAgentsSummary(pw))
+			return
+		}
+		if item.groupTag == "bgjobs" && item.count > 0 {
+			// Background jobs group header: show job summary
+			a.setConvPreviewText(a.renderBgJobsSummary(pw))
+			return
+		}
 		if item.groupTag != "" && item.count > 0 {
-			// Expandable group header: show full task board
+			// Expandable group header (tasks): show full task board
 			a.setConvPreviewText(a.renderConvTaskBoard(pw))
-		} else if item.groupTag != "" {
+			return
+		}
+		if item.groupTag != "" {
 			// Marker header: show per-message operation summary
 			a.setConvPreviewText(renderTaskMarkerPreview(item, pw))
+			return
+		}
+		if a.conv.leftPaneMode == convPaneTree && item.bgTaskID != "" {
+			entry = a.buildBgJobPreviewEntry(item.bgTaskID)
+		} else if a.conv.leftPaneMode == convPaneTree {
+			entry = a.buildTaskPreviewEntry(item.task)
 		} else {
 			// Individual task: show task details
 			a.setConvPreviewText(renderTaskSummary(item.task, pw))
+			return
 		}
-		return
 	}
 
-	// Text-only preview mode: show clean conversation text (no tool calls)
-	if a.conv.previewMode == previewText {
+	// Text-only preview mode: show clean conversation text (no tool calls).
+	// Exception: in tree mode, always show full content with tool blocks
+	// since the whole point of tree view is to inspect entity details.
+	if a.conv.rightPaneMode == previewText && a.conv.leftPaneMode != convPaneTree {
 		a.renderTextOnlyPreview(item, entry)
 		return
 	}
 
-	var cacheKey string
-	if item.kind == convAgent {
-		cacheKey = fmt.Sprintf("agent:%s:%d", item.agent.ShortID, len(entry.Content))
-	} else {
-		cacheKey = fmt.Sprintf("%d:%d", item.merged.startIdx, len(entry.Content))
-	}
+	baseKey := convPreviewBaseKey(item)
+	cacheKey := fmt.Sprintf("%s:%d", baseKey, len(entry.Content))
 	if cacheKey == sp.CacheKey {
 		debugLog.Printf("updateConvPreview: CACHE HIT key=%q", cacheKey)
 		return
 	}
 
 	oldCacheKey := sp.CacheKey
-	isNewEntry := true
-	if oldCacheKey != "" {
-		if item.kind == convAgent {
-			isNewEntry = !strings.HasPrefix(oldCacheKey, "agent:"+item.agent.ShortID+":")
-		} else {
-			var oldIdx int
-			fmt.Sscanf(oldCacheKey, "%d:", &oldIdx)
-			isNewEntry = oldIdx != item.merged.startIdx
-		}
-	}
+	isNewEntry := oldCacheKey == "" || !strings.HasPrefix(oldCacheKey, baseKey+":")
 
 	if isNewEntry {
 		debugLog.Printf("updateConvPreview: NEW ENTRY old=%q new=%q blocks=%d TypeFoldPrefs=%v TypeFmtPrefs=%v",
@@ -409,7 +462,7 @@ func (a *App) updateConvPreview() {
 		sp.CacheKey = cacheKey
 		if sp.Folds != nil {
 			sp.Folds.ResetWithPrefs(entry, sp.TypeFoldPrefs, sp.TypeFmtPrefs)
-			sp.Folds.HideHooks = a.conv.previewMode == previewTool
+			sp.Folds.HideHooks = a.conv.rightPaneMode == previewTool
 			// Re-apply block filter to new entry
 			if sp.Folds.BlockFilter != "" {
 				sp.Folds.BlockVisible = applyBlockFilter(sp.Folds.BlockFilter, entry)
@@ -445,12 +498,7 @@ func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
 	pw := sp.PreviewWidth(a.width, a.splitRatio)
 	textW := max(pw-2, 10)
 
-	var cacheKey string
-	if item.kind == convAgent {
-		cacheKey = fmt.Sprintf("text:agent:%s:%d", item.agent.ShortID, len(entry.Content))
-	} else {
-		cacheKey = fmt.Sprintf("text:%d:%d", item.merged.startIdx, len(entry.Content))
-	}
+	cacheKey := fmt.Sprintf("text:%s:%d", convPreviewBaseKey(item), len(entry.Content))
 	if cacheKey == sp.CacheKey {
 		return
 	}
@@ -492,7 +540,6 @@ func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
 	}
 }
 
-
 func (a *App) setConvPreviewText(content string) {
 	sp := &a.conv.split
 	sp.CacheKey = "text"
@@ -509,57 +556,196 @@ func (a *App) setConvPreviewText(content string) {
 // so the preview can use fold/unfold block cursor like regular messages.
 func buildAgentPreviewEntry(agent session.Subagent) session.Entry {
 	entries, err := session.LoadMessages(agent.FilePath)
-	if err != nil || len(entries) == 0 {
-		// Fallback: just show prompt as text
-		return session.Entry{
-			Role:      "assistant",
-			Timestamp: agent.Timestamp,
-			Content: []session.ContentBlock{
-				{Type: "text", Text: fmt.Sprintf("Agent: %s  Type: %s  Messages: %d\n\n%s",
-					agent.ShortID, agent.AgentType, agent.MsgCount, agent.FirstPrompt)},
-			},
+	if err == nil && len(entries) > 0 {
+		entries = filterAgentContextEntries(entries)
+		if agent.AgentType == "aside_question" {
+			entries = filterSideQuestionContext(entries)
 		}
 	}
 
-	entries = filterAgentContextEntries(entries)
-	if agent.AgentType == "aside_question" {
-		entries = filterSideQuestionContext(entries)
-	}
-
-	// Header block
 	header := fmt.Sprintf("Agent: %s", agent.ShortID)
 	if agent.AgentType != "" {
-		header += "  Type: " + agent.AgentType
+		header += "\nType: " + agent.AgentType
 	}
-	header += fmt.Sprintf("  Messages: %d", agent.MsgCount)
+	if agent.FirstPrompt != "" {
+		header += "\nPrompt: " + agent.FirstPrompt
+	}
+	return buildConversationPreviewEntry(header, agent.Timestamp, entries)
+}
 
-	var blocks []session.ContentBlock
-	blocks = append(blocks, session.ContentBlock{Type: "text", Text: header})
+func convPreviewBaseKey(item convItem) string {
+	switch {
+	case item.kind == convMsg:
+		return fmt.Sprintf("msg:%d", item.merged.startIdx)
+	case item.kind == convAgent:
+		return "agent:" + item.agent.ShortID
+	case item.bgTaskID != "":
+		return "bg:" + item.bgTaskID
+	case item.kind == convTask && item.task.ID != "":
+		return "task:" + item.task.ID
+	case item.groupTag != "":
+		return fmt.Sprintf("group:%s:%d", item.groupTag, item.parentIdx)
+	default:
+		return "preview:unknown"
+	}
+}
 
-	// Collect content blocks from all messages (skip system text)
+func buildConversationPreviewEntry(header string, fallbackTS time.Time, entries []session.Entry) session.Entry {
+	ts := fallbackTS
+	blocks := make([]session.ContentBlock, 0, len(entries)*2+1)
+	if header != "" {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: header})
+	}
+
 	for _, e := range entries {
+		if ts.IsZero() && !e.Timestamp.IsZero() {
+			ts = e.Timestamp
+		}
+		if msg := previewMessageText(e); msg != "" {
+			blocks = append(blocks, session.ContentBlock{Type: "text", Text: msg})
+		}
 		for _, b := range e.Content {
 			if b.Type == "text" {
-				text := strings.TrimSpace(session.StripXMLTags(b.Text))
-				if text == "" || isSystemText(text) {
-					continue
-				}
-				blocks = append(blocks, b)
-			} else {
-				blocks = append(blocks, b)
+				continue
 			}
+			// Truncate large tool_result content to keep the preview scannable.
+			// Show first few lines as a summary instead of the full output.
+			if b.Type == "tool_result" {
+				b = summarizeToolResult(b)
+			}
+			blocks = append(blocks, b)
 		}
+	}
+
+	if len(blocks) == 0 {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: header})
 	}
 
 	return session.Entry{
 		Role:      "assistant",
-		Timestamp: agent.Timestamp,
+		Timestamp: ts,
 		Content:   blocks,
 	}
 }
 
+// summarizeToolResult truncates long tool_result text to a preview-friendly
+// length, keeping the first and last few lines for context.
+func summarizeToolResult(b session.ContentBlock) session.ContentBlock {
+	const maxLines = 15
+	text := b.Text
+	if text == "" {
+		return b
+	}
+	// Strip XML wrapper tags for cleaner display
+	text = session.StripXMLTags(text)
+	text = strings.TrimSpace(text)
 
+	lines := strings.Split(text, "\n")
+	if len(lines) <= maxLines {
+		b.Text = text
+		return b
+	}
+	// Show first 10 lines + "..." + last 3 lines
+	head := strings.Join(lines[:10], "\n")
+	tail := strings.Join(lines[len(lines)-3:], "\n")
+	b.Text = head + "\n  ... (" + fmt.Sprintf("%d", len(lines)-13) + " more lines) ...\n" + tail
+	return b
+}
 
+func previewMessageText(e session.Entry) string {
+	role := strings.ToUpper(e.Role)
+	if role == "" {
+		role = "ENTRY"
+	}
+	header := role
+	if !e.Timestamp.IsZero() {
+		header += "  " + e.Timestamp.Format("15:04:05")
+	}
+
+	text := entryFullText(e)
+	if text == "" {
+		if summary := mergedToolSummary(e); summary != "" {
+			text = "[" + summary + "]"
+		}
+	}
+	if text == "" {
+		return header
+	}
+	// Truncate long text to keep preview scannable
+	const maxPreviewLines = 6
+	lines := strings.Split(text, "\n")
+	if len(lines) > maxPreviewLines {
+		text = strings.Join(lines[:maxPreviewLines], "\n") + "\n..."
+	}
+	return header + "\n" + text
+}
+
+func extractBgTaskEntries(merged []mergedMsg, taskID string) []session.Entry {
+	if taskID == "" {
+		return nil
+	}
+
+	pendingIDs := make(map[string]bool)
+	for _, m := range merged {
+		for _, b := range m.entry.Content {
+			if b.Type == "tool_use" && (b.ToolName == "TaskOutput" || b.ToolName == "TaskStop") && strings.Contains(b.ToolInput, taskID) {
+				if b.ID != "" {
+					pendingIDs[b.ID] = true
+				}
+			}
+		}
+	}
+
+	// Extract only the relevant blocks from each merged message,
+	// not the entire merged entry (which can be huge).
+	var entries []session.Entry
+	for _, m := range merged {
+		var relevant []session.ContentBlock
+		for _, b := range m.entry.Content {
+			switch {
+			case b.Type == "tool_use" && (b.ToolName == "TaskOutput" || b.ToolName == "TaskStop") && strings.Contains(b.ToolInput, taskID):
+				relevant = append(relevant, b)
+			case b.Type == "tool_result" && strings.Contains(b.Text, taskID):
+				relevant = append(relevant, b)
+			case b.Type == "tool_result" && b.ID != "" && pendingIDs[b.ID]:
+				relevant = append(relevant, b)
+			}
+		}
+		if len(relevant) > 0 {
+			entries = append(entries, session.Entry{
+				Role:      m.entry.Role,
+				Timestamp: m.entry.Timestamp,
+				Content:   relevant,
+			})
+		}
+	}
+	return entries
+}
+
+func (a *App) buildBgJobPreviewEntry(taskID string) session.Entry {
+	header := fmt.Sprintf("Background Job: %s", taskID)
+	if cmd := buildBgTaskMap(a.conv.merged)[taskID]; cmd != "" {
+		header += "\nCommand: " + cmd
+	}
+	return buildConversationPreviewEntry(header, time.Time{}, extractBgTaskEntries(a.conv.merged, taskID))
+}
+
+func (a *App) buildTaskPreviewEntry(task session.TaskItem) session.Entry {
+	header := "Task"
+	if task.ID != "" {
+		header += ": " + task.ID
+	}
+	if task.Subject != "" {
+		header += "\n" + task.Subject
+	}
+	if task.Status != "" {
+		header += "\nStatus: " + task.Status
+	}
+	if task.Description != "" {
+		header += "\n\n" + task.Description
+	}
+	return buildConversationPreviewEntry(header, time.Time{}, extractTaskEntries(a.conv.messages, task.ID))
+}
 
 // renderTaskMarkerPreview renders the preview for a task marker header (non-expandable).
 // item.task.Description holds newline-separated operation details from taskOpDetail().
@@ -601,9 +787,8 @@ func renderTaskSummary(task session.TaskItem, width int) string {
 	return sb.String()
 }
 
-// findAgentForConv finds the agent matching a message entry in the conversation.
-// findTaskAgents returns all subagents referenced by TaskOutput tool_use blocks
-// in the conversation. TaskOutput.task_id is the agent ID.
+// findTaskAgents returns all subagents referenced by Agent tool_use blocks
+// in the conversation, resolved via the toolUseToAgent map.
 func (a *App) findTaskAgents() []session.Subagent {
 	agents := a.conv.agents
 	if len(agents) == 0 {
@@ -617,64 +802,142 @@ func (a *App) findTaskAgents() []session.Subagent {
 
 	seen := make(map[string]bool)
 	var result []session.Subagent
-	for _, e := range a.conv.messages {
-		for _, b := range e.Content {
-			if b.Type != "tool_use" || b.ToolName != "TaskOutput" {
-				continue
-			}
-			var input struct {
-				TaskID string `json:"task_id"`
-			}
-			json.Unmarshal([]byte(b.ToolInput), &input)
-			if input.TaskID == "" || seen[input.TaskID] {
-				continue
-			}
-			seen[input.TaskID] = true
-			if ag, ok := agentByID[input.TaskID]; ok {
-				result = append(result, ag)
-			}
+	for _, agID := range a.conv.toolUseToAgent {
+		if seen[agID] {
+			continue
+		}
+		seen[agID] = true
+		if ag, ok := agentByID[agID]; ok {
+			result = append(result, ag)
 		}
 	}
 	return result
 }
 
+// findAgentInParentMsg finds a subagent referenced by Agent tool_use blocks
+// in the parent message. Used for jumping to agents from marker lines.
+func (a *App) findAgentInParentMsg(item convItem) (session.Subagent, bool) {
+	items := a.convList.Items()
+	if item.parentIdx < 0 || item.parentIdx >= len(items) {
+		return session.Subagent{}, false
+	}
+	parent, ok := items[item.parentIdx].(convItem)
+	if !ok || parent.kind != convMsg {
+		return session.Subagent{}, false
+	}
+
+	agents := a.conv.agents
+	if len(agents) == 0 {
+		return session.Subagent{}, false
+	}
+	agentByID := make(map[string]session.Subagent, len(agents))
+	for _, ag := range agents {
+		agentByID[ag.ID] = ag
+	}
+
+	// Look for Agent tool_use blocks and resolve via toolUseToAgent map
+	for _, b := range parent.merged.entry.Content {
+		if b.Type == "tool_use" && b.ToolName == "Agent" && b.ID != "" {
+			if agID, ok := a.conv.toolUseToAgent[b.ID]; ok {
+				if ag, ok := agentByID[agID]; ok {
+					return ag, true
+				}
+			}
+		}
+	}
+	return session.Subagent{}, false
+}
+
+// findBgTaskResultMsg finds the merged message and block index containing the
+// TaskOutput tool_result for a given background task ID.
+// It first looks for a TaskOutput tool_use with matching task_id, then finds
+// the corresponding tool_result by tool_use ID. Falls back to the background
+// "Command running in background" acknowledgement only if no TaskOutput exists.
+func (a *App) findBgTaskResultMsg(taskID string) (mergedMsg, int, bool) {
+	// Phase 1: Find TaskOutput tool_use blocks that reference this task_id,
+	// collect their tool_use IDs.
+	var taskOutputIDs []string
+	for _, m := range a.conv.merged {
+		for _, b := range m.entry.Content {
+			if b.Type == "tool_use" && b.ToolName == "TaskOutput" && b.ToolInput != "" {
+				if strings.Contains(b.ToolInput, taskID) {
+					taskOutputIDs = append(taskOutputIDs, b.ID)
+				}
+			}
+		}
+	}
+
+	// Phase 2: Find the tool_result matching a TaskOutput tool_use ID (prefer last match).
+	var bestMsg mergedMsg
+	bestBI := -1
+	for _, m := range a.conv.merged {
+		for bi, b := range m.entry.Content {
+			if b.Type != "tool_result" || b.ID == "" {
+				continue
+			}
+			for _, tuID := range taskOutputIDs {
+				if b.ID == tuID {
+					bestMsg = m
+					bestBI = bi
+				}
+			}
+		}
+	}
+	if bestBI >= 0 {
+		return bestMsg, bestBI, true
+	}
+
+	// Phase 3: Fallback — find any tool_result mentioning the task ID
+	// (e.g. the "Command running in background" acknowledgement).
+	for _, m := range a.conv.merged {
+		for bi, b := range m.entry.Content {
+			if b.Type == "tool_result" && strings.Contains(b.Text, taskID) {
+				return m, bi, true
+			}
+		}
+	}
+	return mergedMsg{}, 0, false
+}
+
+// buildToolUseToAgentMap scans entries for Agent tool_result entries that carry
+// AgentID (from toolUseResult.agentId) and builds a map from tool_use_id → agent ID.
+func buildToolUseToAgentMap(entries []session.Entry) map[string]string {
+	m := make(map[string]string)
+	for _, e := range entries {
+		if e.AgentID == "" {
+			continue
+		}
+		for _, b := range e.Content {
+			if b.Type == "tool_result" && b.ID != "" {
+				m[b.ID] = e.AgentID
+			}
+		}
+	}
+	return m
+}
+
+// findAgentForConv finds the subagent matching an entry that contains an Agent tool_use.
+// Uses the toolUseToAgent map (tool_use_id → agentId) built from tool_result entries.
 func (a *App) findAgentForConv(entry session.Entry) (session.Subagent, bool) {
 	agents := a.conv.agents
 	if len(agents) == 0 {
 		return session.Subagent{}, false
 	}
 
-	hasTask := false
-	for _, block := range entry.Content {
-		if block.Type == "tool_use" && block.ToolName == "Task" {
-			hasTask = true
-			break
-		}
-	}
-	if !hasTask || entry.Timestamp.IsZero() {
-		return session.Subagent{}, false
+	agentByID := make(map[string]session.Subagent, len(agents))
+	for _, ag := range agents {
+		agentByID[ag.ID] = ag
 	}
 
-	var best session.Subagent
-	bestDiff := float64(1e18)
-	for _, ag := range agents {
-		if ag.Timestamp.IsZero() {
-			continue
-		}
-		diff := ag.Timestamp.Sub(entry.Timestamp).Seconds()
-		if diff >= -5 && diff < 60 {
-			absDiff := diff
-			if absDiff < 0 {
-				absDiff = -absDiff
-			}
-			if absDiff < bestDiff {
-				bestDiff = absDiff
-				best = ag
+	// Look for Agent tool_use blocks and resolve via the toolUseToAgent map
+	for _, block := range entry.Content {
+		if block.Type == "tool_use" && block.ToolName == "Agent" && block.ID != "" {
+			if agID, ok := a.conv.toolUseToAgent[block.ID]; ok {
+				if ag, ok := agentByID[agID]; ok {
+					return ag, true
+				}
 			}
 		}
-	}
-	if bestDiff < 1e18 {
-		return best, true
 	}
 	return session.Subagent{}, false
 }
@@ -704,6 +967,70 @@ func (a *App) toggleConvLiveTail() (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+// jumpToEntityTree switches to tree mode, optionally selecting the entity matching
+// the currently selected conv sub-item (agent or bg task).
+func (a *App) jumpToEntityTree() (tea.Model, tea.Cmd) {
+	// Capture the entity ID to select in tree
+	var targetAgentID, targetBgTaskID string
+	if item, ok := a.convList.SelectedItem().(convItem); ok {
+		switch item.kind {
+		case convAgent:
+			targetAgentID = item.agent.ID
+		case convTask:
+			if item.bgTaskID != "" {
+				targetBgTaskID = item.bgTaskID
+			}
+		}
+	}
+
+	a.setConvLeftPaneMode(convPaneTree)
+
+	// Find and select the matching entity in the tree
+	if targetAgentID != "" || targetBgTaskID != "" {
+		for i, item := range a.convList.Items() {
+			ci, ok := item.(convItem)
+			if !ok {
+				continue
+			}
+			if targetAgentID != "" && ci.kind == convAgent && ci.agent.ID == targetAgentID {
+				a.convList.Select(i)
+				break
+			}
+			if targetBgTaskID != "" && ci.kind == convTask && ci.bgTaskID == targetBgTaskID {
+				a.convList.Select(i)
+				break
+			}
+		}
+	}
+
+	a.updateConvPreview()
+	return a, nil
+}
+
+// rebuildConversationList rebuilds the left-pane list based on the active flat/tree mode.
+func (a *App) rebuildConversationList(selectIdx int) {
+	contentH := ContentHeight(a.height)
+	items := a.conv.items
+	if a.conv.leftPaneMode == convPaneTree {
+		a.conv.treeItems = buildEntityTree(a.conv.merged, a.conv.agents, a.conv.sess.Tasks, inferAgentStatuses(a.conv.merged))
+		items = a.conv.treeItems
+	}
+	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	a.conv.split.List = &a.convList
+	if selectIdx >= 0 && selectIdx < len(a.convList.Items()) {
+		a.convList.Select(selectIdx)
+	}
+	a.conv.split.CacheKey = ""
+}
+
+// activeConvItems returns the item slice backing the current list mode (flat or tree).
+func (a *App) activeConvItems() []convItem {
+	if a.conv.leftPaneMode == convPaneTree {
+		return a.conv.treeItems
+	}
+	return a.conv.items
+}
+
 // refreshConversation reloads messages for the current conversation.
 func (a *App) refreshConversation() tea.Cmd {
 	entries, err := session.LoadMessages(a.conv.sess.FilePath)
@@ -720,17 +1047,11 @@ func (a *App) refreshConversation() tea.Cmd {
 		a.conv.sess.Tasks = tasks
 	}
 	a.conv.items = buildConvItems(a.conv.merged, agents, tasks)
+	a.conv.sess.Tasks = tasks
 
 	// Preserve cursor position
 	oldIdx := a.convList.Index()
-	contentH := ContentHeight(a.height)
-	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
-	a.conv.split.List = &a.convList
-
-	visCount := len(a.convList.Items())
-	if oldIdx < visCount {
-		a.convList.Select(oldIdx)
-	}
+	a.rebuildConversationList(oldIdx)
 	// During live tail, skip preview update here — handleLiveTail owns the
 	// preview lifecycle (select last → update → scroll-to-tail). Updating here
 	// would "consume" the CacheKey change, making handleLiveTail's update a
@@ -787,21 +1108,111 @@ func (a *App) renderConvTaskBoard(width int) string {
 	return sb.String()
 }
 
+// renderAgentsSummary renders a summary of all agents for the tree group header preview.
+func (a *App) renderAgentsSummary(width int) string {
+	agents := a.conv.agents
+	if len(agents) == 0 {
+		return dimStyle.Render("No agents")
+	}
+	statuses := inferAgentStatuses(a.conv.merged)
+	var sb strings.Builder
+	sb.WriteString(dimStyle.Render(fmt.Sprintf("── Agents (%d) ──", len(agents))) + "\n\n")
+	for _, ag := range agents {
+		if isSystemAgent(ag) {
+			continue
+		}
+		icon := "●"
+		status := statuses[ag.ID]
+		if status == "" {
+			status = statuses[ag.ShortID]
+		}
+		style := dimStyle
+		switch status {
+		case "completed":
+			icon = "✓"
+			style = lipgloss.NewStyle().Foreground(colorAccent)
+		case "running":
+			icon = "◉"
+			style = lipgloss.NewStyle().Foreground(colorAssistant)
+		case "stopped":
+			icon = "⏹"
+		}
+		typeBadge := ""
+		if ag.AgentType != "" {
+			typeBadge = dimStyle.Render("["+ag.AgentType+"]") + " "
+		}
+		dur := ""
+		if !ag.Timestamp.IsZero() {
+			dur = dimStyle.Render(fmt.Sprintf(" (%dm)", int(ag.Timestamp.Sub(ag.Timestamp).Minutes())))
+		}
+		sb.WriteString(fmt.Sprintf("  %s %s%s%s\n", style.Render(icon), typeBadge, style.Render(ag.ShortID), dur))
+		if ag.FirstPrompt != "" {
+			prompt := ag.FirstPrompt
+			if len(prompt) > width-6 {
+				prompt = prompt[:width-9] + "..."
+			}
+			sb.WriteString(dimStyle.Render("    "+prompt) + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// renderBgJobsSummary renders a summary of background jobs for the tree group header preview.
+func (a *App) renderBgJobsSummary(width int) string {
+	bgTasks := buildBgTaskMap(a.conv.merged)
+	if len(bgTasks) == 0 {
+		return dimStyle.Render("No background jobs")
+	}
+	var sb strings.Builder
+	sb.WriteString(dimStyle.Render(fmt.Sprintf("── Background Jobs (%d) ──", len(bgTasks))) + "\n\n")
+	for id, desc := range bgTasks {
+		status := "pending"
+		for _, m := range a.conv.merged {
+			for _, b := range m.entry.Content {
+				if b.Type == "tool_result" && strings.Contains(b.Text, id) {
+					if strings.Contains(b.Text, "<status>completed</status>") {
+						status = "completed"
+					} else if strings.Contains(b.Text, "<status>stopped</status>") {
+						status = "stopped"
+					}
+				}
+			}
+		}
+		icon := "⏳"
+		style := dimStyle
+		switch status {
+		case "completed":
+			icon = "✓"
+			style = lipgloss.NewStyle().Foreground(colorAccent)
+		case "stopped":
+			icon = "⏹"
+		}
+		label := desc
+		if len(label) > width-10 {
+			label = label[:width-13] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("  %s %s %s\n", style.Render(icon), dimStyle.Render(id), style.Render(label)))
+	}
+	return sb.String()
+}
+
 // toggleConvGroupFold toggles the fold state of a group header in the conversation
 // items list and rebuilds the visible list, preserving cursor on the header.
 func (a *App) toggleConvGroupFold(header convItem) {
-	// Find the group header in the full items slice and toggle its fold state.
-	for i := range a.conv.items {
-		if a.conv.items[i].groupTag == header.groupTag && a.conv.items[i].parentIdx == header.parentIdx {
-			a.conv.items[i].folded = !a.conv.items[i].folded
+	// Find the group header in the active items slice and toggle its fold state.
+	items := a.activeConvItems()
+	for i := range items {
+		if items[i].groupTag == header.groupTag && items[i].parentIdx == header.parentIdx {
+			items[i].folded = !items[i].folded
 			break
 		}
 	}
 
 	// Rebuild visible list; find the header's new index.
-	vis := visibleConvItems(a.conv.items)
+	vis := visibleConvItems(items)
 	contentH := ContentHeight(a.height)
-	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
 	a.conv.split.List = &a.convList
 
 	for i, v := range vis {
@@ -1004,21 +1415,25 @@ func extractTaskEntries(entries []session.Entry, taskID string) []session.Entry 
 	}
 
 	if len(ranges) == 0 {
-		// Fallback: collect all entries that mention this task ID
+		// Fallback: collect ALL entries that mention this task ID
+		// (TaskCreate, TaskUpdate, TaskGet, tool_results referencing the task)
+		var result []session.Entry
 		for _, e := range entries {
 			for _, b := range e.Content {
-				if b.Type == "tool_use" && (b.ToolName == "TaskUpdate" || b.ToolName == "TaskCreate") {
-					var input struct {
-						TaskID string `json:"taskId"`
-					}
-					json.Unmarshal([]byte(b.ToolInput), &input)
-					if input.TaskID == taskID {
-						return []session.Entry{e}
-					}
+				match := false
+				if b.Type == "tool_use" && isTaskTool(b.ToolName) && strings.Contains(b.ToolInput, taskID) {
+					match = true
+				}
+				if b.Type == "tool_result" && strings.Contains(b.Text, taskID) {
+					match = true
+				}
+				if match {
+					result = append(result, e)
+					break
 				}
 			}
 		}
-		return nil
+		return result
 	}
 
 	// Collect unique entries from all ranges
@@ -1055,11 +1470,9 @@ func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 	a.conv.agent = session.Subagent{}
 	a.conv.task = task
 
-	contentH := ContentHeight(a.height)
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
-	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
-	a.conv.split.List = &a.convList
+	a.rebuildConversationList(0)
 
 	a.state = viewConversation
 	a.updateConvPreview()
@@ -1095,11 +1508,9 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	a.conv.agent = agent
 	a.conv.task = session.TaskItem{}
 
-	contentH := ContentHeight(a.height)
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
-	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
-	a.conv.split.List = &a.convList
+	a.rebuildConversationList(0)
 
 	a.state = viewConversation
 	a.updateConvPreview()

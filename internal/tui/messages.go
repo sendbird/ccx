@@ -206,7 +206,13 @@ func entryFullText(e session.Entry) string {
 // Includes text content, tool names, and role for comprehensive matching.
 func entryFilterText(e session.Entry) string {
 	var parts []string
-	parts = append(parts, e.Role)
+	parts = append(parts, "role:"+e.Role)
+	if e.Role == "user" {
+		parts = append(parts, "role:user")
+	} else if e.Role == "assistant" {
+		parts = append(parts, "role:asst")
+	}
+	hasImage, hasTask, hasBg, hasAgent, hasThinking := false, false, false, false, false
 	for _, b := range e.Content {
 		switch b.Type {
 		case "text":
@@ -216,11 +222,39 @@ func entryFilterText(e session.Entry) string {
 			}
 		case "tool_use":
 			parts = append(parts, b.ToolName, "tool:"+b.ToolName)
+			if b.ToolName == "Agent" {
+				hasAgent = true
+			}
+			if isTaskTool(b.ToolName) {
+				hasTask = true
+			}
 		case "tool_result":
 			if b.IsError {
 				parts = append(parts, "is:error")
 			}
+			if strings.Contains(b.Text, "Command running in background with ID:") {
+				hasBg = true
+			}
+		case "image":
+			hasImage = true
+		case "thinking":
+			hasThinking = true
 		}
+	}
+	if hasImage {
+		parts = append(parts, "has:image")
+	}
+	if hasTask {
+		parts = append(parts, "has:task")
+	}
+	if hasBg {
+		parts = append(parts, "has:bg")
+	}
+	if hasAgent {
+		parts = append(parts, "has:agent")
+	}
+	if hasThinking {
+		parts = append(parts, "has:thinking")
 	}
 	return strings.Join(parts, " ")
 }

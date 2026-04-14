@@ -46,7 +46,11 @@ func buildCmdRegistry() []cmdEntry {
 		{name: "group:flat", aliases: []string{"g:flat"}, desc: "flat view", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupFlat; a.rebuildSessionList(); return a, nil }},
 		{name: "group:proj", aliases: []string{"g:proj"}, desc: "project groups", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupProject; a.rebuildSessionList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.sessGroupMode = groupProject
+				a.rebuildSessionList()
+				return a, nil
+			}},
 		{name: "group:tree", aliases: []string{"g:tree"}, desc: "tree view", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupTree; a.rebuildSessionList(); return a, nil }},
 		{name: "group:chain", aliases: []string{"g:chain"}, desc: "chain groups", views: cmdSessions,
@@ -54,7 +58,11 @@ func buildCmdRegistry() []cmdEntry {
 		{name: "group:fork", aliases: []string{"g:fork"}, desc: "fork groups", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupFork; a.rebuildSessionList(); return a, nil }},
 		{name: "group:repo", aliases: []string{"g:repo"}, desc: "base repo groups", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.sessGroupMode = groupBaseProject; a.rebuildSessionList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.sessGroupMode = groupBaseProject
+				a.rebuildSessionList()
+				return a, nil
+			}},
 
 		// Conversation detail levels
 		{name: "detail:compact", aliases: []string{"d:compact"}, desc: "text only", views: cmdConv,
@@ -63,6 +71,10 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvDetailLevel(previewTool); return a, nil }},
 		{name: "detail:verbose", aliases: []string{"d:verbose"}, desc: "text + tools + hooks", views: cmdConv,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvDetailLevel(previewHook); return a, nil }},
+		{name: "pane:flat", aliases: []string{"list:flat", "flat"}, desc: "flat conversation list", views: cmdConv,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvLeftPaneMode(convPaneFlat); return a, nil }},
+		{name: "pane:tree", aliases: []string{"list:tree", "tree"}, desc: "entity tree list", views: cmdConv,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvLeftPaneMode(convPaneTree); return a, nil }},
 
 		// Preview modes (sessions only)
 		{name: "preview:conv", aliases: []string{"p:conv"}, desc: "conversation preview", views: cmdSessions,
@@ -176,23 +188,59 @@ func buildCmdRegistry() []cmdEntry {
 		},
 		// Config page filters
 		{name: "page:project", aliases: []string{"p:project", "page:proj"}, desc: "filter to project", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigProject); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigProject)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 		{name: "page:local", aliases: []string{"p:local"}, desc: "filter to local", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigLocal); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigLocal)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 		{name: "page:skills", aliases: []string{"p:skills"}, desc: "filter to skills", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigSkill); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigSkill)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 		{name: "page:agents", aliases: []string{"p:agents"}, desc: "filter to agents", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigAgent); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigAgent)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 		{name: "page:commands", aliases: []string{"p:commands", "page:cmds"}, desc: "filter to commands", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigCommand); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigCommand)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 		{name: "page:mcp", aliases: []string{"p:mcp"}, desc: "filter to MCP", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigMCP); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigMCP)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 		{name: "page:hooks", aliases: []string{"p:hooks"}, desc: "filter to hooks", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigHook); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigHook)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 		{name: "page:keymaps", aliases: []string{"p:keymaps", "p:km"}, desc: "filter to keymaps", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigKeymap); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigKeymap)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 		{name: "page:shortcuts", aliases: []string{"p:shortcuts", "p:sc"}, desc: "filter to shortcuts", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.cfgFilterCat = int(session.ConfigShortcut); a.rebuildCfgList(); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgFilterCat = int(session.ConfigShortcut)
+				a.rebuildCfgList()
+				return a, nil
+			}},
 
 		// Stats page filters
 		{name: "page:tools", aliases: []string{"p:tools"}, desc: "stats → tools", views: cmdStats,
@@ -294,12 +342,26 @@ func (a *App) setSessPreviewMode(mode sessPreview) {
 
 // setConvDetailLevel sets the conversation preview detail level and re-renders.
 func (a *App) setConvDetailLevel(level int) {
-	a.conv.previewMode = level
 	sp := &a.conv.split
+	a.conv.rightPaneMode = level
 	if sp.Folds != nil {
 		sp.Folds.HideHooks = level == previewTool
 	}
 	sp.CacheKey = ""
+	a.updateConvPreview()
+}
+
+// setConvLeftPaneMode switches the conversation list between flat and tree modes.
+func (a *App) setConvLeftPaneMode(mode int) {
+	if mode == a.conv.leftPaneMode {
+		return
+	}
+	a.conv.leftPaneMode = mode
+	if mode == convPaneTree && a.liveTail {
+		a.liveTail = false
+		a.conv.split.BottomAlign = false
+	}
+	a.rebuildConversationList(0)
 	a.updateConvPreview()
 }
 

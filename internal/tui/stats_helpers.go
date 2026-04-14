@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 func renderErrorBreakdown(sb *strings.Builder, toolErrors, toolCounts map[string]int, skillErrors, skillCounts map[string]int, cmdErrors, cmdCounts map[string]int, totalErrors int, width int, ruler string, titleStyle lipgloss.Style) {
@@ -260,3 +262,122 @@ func shortenModel(name string) string {
 func renderToolBarN(sb *strings.Builder, counts map[string]int, width int, limit int) {
 	renderToolBarWithErrors(sb, counts, nil, width, limit)
 }
+
+// renderProjectStats renders per-project token/cost breakdown.
+// Each project gets two lines: name on top, then cost bar + stats.
+func renderProjectStats(sb *strings.Builder, projects []session.ProjectStats, width int) {
+	if len(projects) == 0 {
+		return
+	}
+
+	numStyle := statNumStyle
+	labelStyle := dimStyle
+	costStyle := statCostStyle
+
+	maxCost := projects[0].CostUSD
+	if maxCost <= 0 {
+		maxCost = 1
+	}
+
+	barW := width - 36
+	if barW < 5 {
+		barW = 5
+	}
+
+	limit := min(len(projects), 15)
+	for _, ps := range projects[:limit] {
+		// Line 1: project path (shortened with ~ for home dir)
+		path := ps.ProjectPath
+		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
+			path = "~" + path[len(home):]
+		}
+		maxPathW := width - 4
+		if len(path) > maxPathW {
+			path = "..." + path[len(path)-maxPathW+3:]
+		}
+		sb.WriteString(fmt.Sprintf("  %s\n", path))
+
+		// Line 2: cost + bar + stats
+		barLen := int(float64(barW) * ps.CostUSD / maxCost)
+		if barLen < 1 && ps.CostUSD > 0 {
+			barLen = 1
+		}
+		bar := strings.Repeat("█", barLen)
+
+		sb.WriteString(fmt.Sprintf("    %s %s  %s out  %s sess  %s msgs\n",
+			costStyle.Render(fmt.Sprintf("%7s", fmtCost(ps.CostUSD))),
+			labelStyle.Render(bar),
+			numStyle.Render(fmtNum(ps.TotalOutputTokens)),
+			labelStyle.Render(fmt.Sprintf("%d", ps.SessionCount)),
+			labelStyle.Render(fmt.Sprintf("%d", ps.TotalMessages))))
+	}
+	if len(projects) > limit {
+		sb.WriteString(labelStyle.Render(fmt.Sprintf("  ... and %d more projects\n", len(projects)-limit)))
+	}
+}
+
+// renderProjectDetail renders the full project stats drill-down page.
+func renderProjectDetail(stats session.GlobalStats, width int) string {
+	if len(stats.ProjectStats) == 0 {
+		return dimStyle.Render("(no project data)")
+	}
+
+	var sb strings.Builder
+	titleStyle := statTitleStyle
+	numStyle := statNumStyle
+	labelStyle := dimStyle
+	costStyle := statCostStyle
+	ruler := dimStyle.Render(strings.Repeat("─", min(width, 40)))
+
+	sb.WriteString(titleStyle.Render(fmt.Sprintf("PROJECTS (%d)", len(stats.ProjectStats))) + "\n")
+	sb.WriteString(ruler + "\n\n")
+
+	maxCost := stats.ProjectStats[0].CostUSD
+	if maxCost <= 0 {
+		maxCost = 1
+	}
+
+	barW := width - 36
+	if barW < 5 {
+		barW = 5
+	}
+
+	for i, ps := range stats.ProjectStats {
+		// Project path (shortened with ~ for home dir)
+		path := ps.ProjectPath
+		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
+			path = "~" + path[len(home):]
+		}
+
+		// Rank number
+		rank := fmt.Sprintf("%2d. ", i+1)
+
+		maxPathW := width - len(rank) - 2
+		if len(path) > maxPathW {
+			path = "..." + path[len(path)-maxPathW+3:]
+		}
+		sb.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render(rank), path))
+
+		// Cost bar
+		barLen := int(float64(barW) * ps.CostUSD / maxCost)
+		if barLen < 1 && ps.CostUSD > 0 {
+			barLen = 1
+		}
+		bar := strings.Repeat("█", barLen)
+
+		sb.WriteString(fmt.Sprintf("      %s %s\n",
+			costStyle.Render(fmt.Sprintf("%7s", fmtCost(ps.CostUSD))),
+			labelStyle.Render(bar)))
+
+		// Token details
+		sb.WriteString(fmt.Sprintf("      %s out   %s sess   %s msgs   %s duration\n",
+			numStyle.Render(fmtNum(ps.TotalOutputTokens)),
+			labelStyle.Render(fmt.Sprintf("%d", ps.SessionCount)),
+			labelStyle.Render(fmt.Sprintf("%d", ps.TotalMessages)),
+			labelStyle.Render(fmtDuration(ps.TotalDuration))))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+

@@ -12,7 +12,12 @@ import (
 func newTestApp(sessions []session.Session) *App {
 	app := NewApp(sessions, Config{TmuxEnabled: true})
 	m, _ := app.Update(tea.WindowSizeMsg{Width: 160, Height: 50})
-	return m.(*App)
+	a := m.(*App)
+	// Reset state to viewSessions — NewApp may restore a different view from
+	// persisted preferences (~/.config/ccx/config.yaml), which would break
+	// tests that assume the sessions view is active.
+	a.state = viewSessions
+	return a
 }
 
 func fakeSessions() []session.Session {

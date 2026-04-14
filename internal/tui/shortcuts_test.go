@@ -24,11 +24,14 @@ func TestDefaultShortcuts(t *testing.T) {
 	if !ok {
 		t.Fatal("expected conversation view shortcuts")
 	}
-	if conv.Left["1"] != "detail:compact" {
-		t.Errorf("conversation left 1 = %q, want detail:compact", conv.Left["1"])
+	if conv.Left["1"] != "pane:flat" {
+		t.Errorf("conversation left 1 = %q, want pane:flat", conv.Left["1"])
 	}
-	if conv.Left["3"] != "detail:verbose" {
-		t.Errorf("conversation left 3 = %q, want detail:verbose", conv.Left["3"])
+	if conv.Left["2"] != "pane:tree" {
+		t.Errorf("conversation left 2 = %q, want pane:tree", conv.Left["2"])
+	}
+	if conv.Right["3"] != "detail:verbose" {
+		t.Errorf("conversation right 3 = %q, want detail:verbose", conv.Right["3"])
 	}
 
 	// Config view
@@ -90,8 +93,8 @@ func TestMergeShortcuts(t *testing.T) {
 		t.Errorf("newview left 1 = %q, want custom:cmd", dst["newview"].Left["1"])
 	}
 	// Other views preserved
-	if dst["conversation"].Left["1"] != "detail:compact" {
-		t.Errorf("conversation left 1 = %q, want detail:compact (preserved)", dst["conversation"].Left["1"])
+	if dst["conversation"].Left["1"] != "pane:flat" {
+		t.Errorf("conversation left 1 = %q, want pane:flat (preserved)", dst["conversation"].Left["1"])
 	}
 }
 

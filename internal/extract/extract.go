@@ -94,19 +94,38 @@ func sortItems(items []Item) {
 	})
 }
 
+// isURLEndChar returns true if r is likely intentional at the end of a URL.
+// Characters like ., ), *, ;, ', ! are valid in RFC 3986 but almost never
+// end a real URL — they leak from surrounding prose or markdown.
+func isURLEndChar(r rune) bool {
+	if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+		return true
+	}
+	switch r {
+	case '-', '_', '~', // unreserved (minus '.' which is almost never a URL terminator)
+		'/', '=', '%': // common URL terminators
+		return true
+	}
+	return false
+}
+
 // CleanURL strips JSON escape artifacts and trailing punctuation.
 func CleanURL(raw string) string {
 	// Strip literal \n, \t, \r that leak from JSON string values
 	raw = urlCleanReplacer.Replace(raw)
 	// Strip trailing backslashes (escaped newlines in JSON)
 	raw = strings.TrimRight(raw, `\`)
-	// Strip trailing punctuation that leaks from prose/markdown
-	raw = strings.TrimRight(raw, ".,;:!?)'\"")
+	// Strip trailing characters that are not valid in URLs (RFC 3986 unreserved + reserved)
+	raw = strings.TrimRightFunc(raw, func(r rune) bool {
+		return !isURLEndChar(r)
+	})
 	// Strip trailing capitalized words/markdown absorbed from adjacent text
 	// (e.g. "...1234GH", "...55Then", "...**Fix**"). Keep the preceding char ($1).
 	raw = trailingJunkRe.ReplaceAllString(raw, "$1")
-	// Re-strip punctuation that may be exposed after word removal
-	raw = strings.TrimRight(raw, ".,;:!?)'\"")
+	// Re-strip after word removal
+	raw = strings.TrimRightFunc(raw, func(r rune) bool {
+		return !isURLEndChar(r)
+	})
 
 	// Validate
 	u, err := url.Parse(raw)

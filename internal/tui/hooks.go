@@ -50,6 +50,10 @@ func (a *App) handleHooksKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		a.state = viewSessions
 		return a, nil
+	case a.keymap.Session.Refresh:
+		a.hooksVP.SetContent(renderHooksView(a.width))
+		a.copiedMsg = "Refreshed"
+		return a, nil
 	case "e":
 		home, err := os.UserHomeDir()
 		if err != nil {

@@ -26,65 +26,69 @@ func main() {
 		groupMode    string
 		previewMode  string
 		viewMode     string
+		jumpSession  string
+		jumpUUID     string
 	)
 
-	flag.BoolVar(&showVersion, "version", false, "print version and exit")
-	flag.BoolVar(&showVersion, "v", false, "print version and exit (shorthand)")
-	flag.StringVar(&claudeDir, "dir", "", "path to Claude data directory (default: ~/.claude)")
-	flag.BoolVar(&tmuxEnabled, "tmux", false, "enable tmux integration (auto-detected if inside tmux)")
-	flag.BoolVar(&tmuxAutoLive, "tmux-auto-live", false, "auto-enter live session in same tmux window on startup")
-	flag.StringVar(&worktreeDir, "worktree-dir", ".worktree", "subdirectory name for git worktrees")
-	flag.StringVar(&searchQuery, "search", "", "start with session list filtered by search query")
-	flag.StringVar(&groupMode, "group", "", "initial group mode (flat|proj|tree|chain|fork)")
-	flag.StringVar(&previewMode, "preview", "", "initial preview mode (conv|stats|mem|tasks)")
-	flag.StringVar(&viewMode, "view", "", "initial view (sessions|config|plugins|stats)")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "ccx — Claude Code Explorer\n\n")
-		fmt.Fprintf(os.Stderr, "Usage: ccx [flags]\n\n")
-		fmt.Fprintf(os.Stderr, "Flags:\n")
-		flag.PrintDefaults()
-	}
-	// Handle subcommands before flag parsing (urls/files aren't registered flags)
+	// Handle subcommands before global flag parsing
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "urls", "files":
-			dir := os.Getenv("CLAUDE_CONFIG_DIR")
-			if dir == "" {
-				home, err := os.UserHomeDir()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-					os.Exit(1)
-				}
-				dir = home + "/.claude"
-			}
-			if err := cli.Run(os.Args[1], dir); err != nil {
+		case "urls", "files", "images", "help":
+			subcmd := os.Args[1]
+			fs := flag.NewFlagSet(subcmd, flag.ExitOnError)
+			plain := fs.Bool("plain", false, "force plain text output (no interactive picker)")
+			fs.Parse(os.Args[2:])
+
+			dir := resolveClaudeDir("")
+			result, err := cli.Run(subcmd, dir, *plain)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
+			if result != nil && result.JumpSession != "" {
+				// Picker selected "jump to conversation" — launch full TUI
+				jumpSession = result.JumpSession
+				jumpUUID = result.JumpUUID
+				claudeDir = dir
+			} else {
+				os.Exit(0)
+			}
+		}
+	}
+
+	// Only parse global flags if we didn't handle a subcommand
+	if jumpSession == "" {
+		flag.BoolVar(&showVersion, "version", false, "print version and exit")
+		flag.BoolVar(&showVersion, "v", false, "print version and exit (shorthand)")
+		flag.StringVar(&claudeDir, "dir", "", "path to Claude data directory (default: ~/.claude)")
+		flag.BoolVar(&tmuxEnabled, "tmux", false, "enable tmux integration (auto-detected if inside tmux)")
+		flag.BoolVar(&tmuxAutoLive, "tmux-auto-live", false, "auto-enter live session in same tmux window on startup")
+		flag.StringVar(&worktreeDir, "worktree-dir", ".worktree", "subdirectory name for git worktrees")
+		flag.StringVar(&searchQuery, "search", "", "start with session list filtered by search query")
+		flag.StringVar(&groupMode, "group", "", "initial group mode (flat|proj|tree|chain|fork)")
+		flag.StringVar(&previewMode, "preview", "", "initial preview mode (conv|stats|mem|tasks)")
+		flag.StringVar(&viewMode, "view", "", "initial view (sessions|config|plugins|stats)")
+		flag.Usage = func() {
+			fmt.Fprintf(os.Stderr, "ccx — Claude Code Explorer\n\n")
+			fmt.Fprintf(os.Stderr, "Usage: ccx [flags]\n")
+			fmt.Fprintf(os.Stderr, "       ccx <command> [--plain]\n\n")
+			fmt.Fprintf(os.Stderr, "Commands:\n")
+			for _, c := range cli.Commands {
+				fmt.Fprintf(os.Stderr, "  %-10s %s\n", c.Name, c.Desc)
+			}
+			fmt.Fprintf(os.Stderr, "\nFlags:\n")
+			flag.PrintDefaults()
+		}
+		flag.Parse()
+
+		if showVersion {
+			fmt.Println("ccx", version)
 			os.Exit(0)
 		}
+
+		claudeDir = resolveClaudeDir(claudeDir)
 	}
 
-	flag.Parse()
-
-	if showVersion {
-		fmt.Println("ccx", version)
-		os.Exit(0)
-	}
-
-	if claudeDir == "" {
-		claudeDir = os.Getenv("CLAUDE_CONFIG_DIR")
-	}
-	if claudeDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		claudeDir = home + "/.claude"
-	}
-
-	// Auto-detect tmux unless explicitly set
 	if !tmuxEnabled && os.Getenv("TMUX") != "" {
 		tmuxEnabled = true
 	}
@@ -92,9 +96,6 @@ func main() {
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
 	km, _, _, _ := tui.LoadCCXConfig(configPath)
 
-	// Load cached sessions for instant first paint (~5ms).
-	// Falls back to live-only scan (~40ms) if no cache exists.
-	// Full scan happens asynchronously inside the TUI.
 	initialSessions := session.LoadCachedSessions(claudeDir)
 	if len(initialSessions) == 0 {
 		livePaths := tmux.DetectLiveProjectPaths()
@@ -111,10 +112,27 @@ func main() {
 		GroupMode:    groupMode,
 		PreviewMode:  previewMode,
 		ViewMode:     viewMode,
+		JumpSession:  jumpSession,
+		JumpUUID:     jumpUUID,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func resolveClaudeDir(dir string) string {
+	if dir == "" {
+		dir = os.Getenv("CLAUDE_CONFIG_DIR")
+	}
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		dir = home + "/.claude"
+	}
+	return dir
 }

@@ -1,6 +1,9 @@
 package session
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // AggregateStats scans all session files and aggregates their statistics.
 func AggregateStats(sessions []Session) GlobalStats {
@@ -23,11 +26,34 @@ func AggregateStats(sessions []Session) GlobalStats {
 	}
 
 	allFiles := make(map[string]bool)
+	projMap := make(map[string]*ProjectStats) // projectPath → aggregated stats
 
 	for _, sess := range sessions {
 		stats, err := ScanSessionStats(sess.FilePath)
 		if err != nil {
 			continue
+		}
+
+		// Per-project aggregation
+		projKey := sess.ProjectPath
+		if projKey == "" {
+			projKey = "(no project)"
+		}
+		ps := projMap[projKey]
+		if ps == nil {
+			ps = &ProjectStats{ProjectPath: projKey, ProjectName: sess.ProjectName}
+			projMap[projKey] = ps
+		}
+		ps.SessionCount++
+		ps.TotalInputTokens += stats.TotalInputTokens + stats.TotalCacheReadTokens + stats.TotalCacheCreationTokens
+		ps.TotalOutputTokens += stats.TotalOutputTokens
+		ps.TotalCacheReadTokens += stats.TotalCacheReadTokens
+		ps.TotalCacheCreationTokens += stats.TotalCacheCreationTokens
+		ps.CostUSD += EstimateCost(stats.ModelTokens)
+		ps.TotalMessages += stats.MessageCount
+		pDur := stats.LastTimestamp.Sub(stats.FirstTimestamp)
+		if pDur > 0 {
+			ps.TotalDuration += pDur
 		}
 
 		g.SessionCount++
@@ -132,6 +158,14 @@ func AggregateStats(sessions []Session) GlobalStats {
 	if g.SessionCount > 0 {
 		g.AvgDuration = g.TotalDuration / time.Duration(g.SessionCount)
 	}
+
+	// Build sorted per-project stats (by cost descending)
+	for _, ps := range projMap {
+		g.ProjectStats = append(g.ProjectStats, *ps)
+	}
+	sort.Slice(g.ProjectStats, func(i, j int) bool {
+		return g.ProjectStats[i].CostUSD > g.ProjectStats[j].CostUSD
+	})
 
 	return g
 }

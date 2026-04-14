@@ -71,12 +71,18 @@ type NavigationKeymap struct {
 	End      []string `yaml:"end"`
 }
 
+// ConvKeymap defines configurable keybindings for the conversation view.
+type ConvKeymap struct {
+	JumpToTree string `yaml:"jump_to_tree"`
+}
+
 // Keymap holds all configurable keybindings.
 type Keymap struct {
-	Session    SessionKeymap    `yaml:"session"`
-	Actions    ActionsKeymap    `yaml:"actions"`
-	Views      ViewsKeymap      `yaml:"views"`
-	Navigation NavigationKeymap `yaml:"navigation"`
+	Session      SessionKeymap    `yaml:"session"`
+	Actions      ActionsKeymap    `yaml:"actions"`
+	Views        ViewsKeymap      `yaml:"views"`
+	Conversation ConvKeymap       `yaml:"conversation"`
+	Navigation   NavigationKeymap `yaml:"navigation"`
 }
 
 // DefaultKeymap returns a Keymap with all hardcoded defaults.
@@ -126,6 +132,9 @@ func DefaultKeymap() Keymap {
 			Stats:   "s",
 			Config:  "c",
 			Plugins: "p",
+		},
+		Conversation: ConvKeymap{
+			JumpToTree: "J",
 		},
 		Navigation: NavigationKeymap{
 			Up:       []string{"k"},
@@ -281,6 +290,11 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Views.Plugins != "" {
 		dst.Views.Plugins = src.Views.Plugins
+	}
+
+	// Conversation
+	if src.Conversation.JumpToTree != "" {
+		dst.Conversation.JumpToTree = src.Conversation.JumpToTree
 	}
 
 	// Navigation (append, don't replace)

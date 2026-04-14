@@ -4,8 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/remote"
 	"gopkg.in/yaml.v3"
 )
@@ -34,10 +34,10 @@ type KeymapsConfig struct {
 // CCXConfig is the unified config file containing keybindings + preferences.
 // Stored at ~/.config/ccx/config.yaml.
 type CCXConfig struct {
-	Keymaps     KeymapsConfig  `yaml:"keymaps,omitempty"`
-	Preferences Preferences    `yaml:"preferences,omitempty"`
-	Shortcuts   Shortcuts      `yaml:"shortcuts,omitempty"`
-	Remote      remote.Config  `yaml:"remote,omitempty"`
+	Keymaps     KeymapsConfig `yaml:"keymaps,omitempty"`
+	Preferences Preferences   `yaml:"preferences,omitempty"`
+	Shortcuts   Shortcuts     `yaml:"shortcuts,omitempty"`
+	Remote      remote.Config `yaml:"remote,omitempty"`
 }
 
 // configPath returns the path to the unified config file.
@@ -109,48 +109,124 @@ func SavePreferences(prefs Preferences) {
 // fillKeymapDefaults fills empty keymap fields with default values.
 func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	s := &cfg.Keymaps.Session
-	if s.Quit == "" { s.Quit = d.Session.Quit }
-	if s.Escape == "" { s.Escape = d.Session.Escape }
-	if s.Open == "" { s.Open = d.Session.Open }
-	if s.Edit == "" { s.Edit = d.Session.Edit }
-	if s.Actions == "" { s.Actions = d.Session.Actions }
-	if s.Views == "" { s.Views = d.Session.Views }
-	if s.Refresh == "" { s.Refresh = d.Session.Refresh }
-	if s.Group == "" { s.Group = d.Session.Group }
-	if s.Help == "" { s.Help = d.Session.Help }
-	if s.Search == "" { s.Search = d.Session.Search }
-	if s.GlobalSearch == "" { s.GlobalSearch = d.Session.GlobalSearch }
-	if s.Live == "" { s.Live = d.Session.Live }
-	if s.Select == "" { s.Select = d.Session.Select }
-	if s.Preview == "" { s.Preview = d.Session.Preview }
-	if s.PreviewBack == "" { s.PreviewBack = d.Session.PreviewBack }
-	if s.Left == "" { s.Left = d.Session.Left }
-	if s.Right == "" { s.Right = d.Session.Right }
-	if s.ResizeShrink == "" { s.ResizeShrink = d.Session.ResizeShrink }
-	if s.ResizeGrow == "" { s.ResizeGrow = d.Session.ResizeGrow }
-	if s.Command == "" { s.Command = d.Session.Command }
+	if s.Quit == "" {
+		s.Quit = d.Session.Quit
+	}
+	if s.Escape == "" {
+		s.Escape = d.Session.Escape
+	}
+	if s.Open == "" {
+		s.Open = d.Session.Open
+	}
+	if s.Edit == "" {
+		s.Edit = d.Session.Edit
+	}
+	if s.Actions == "" {
+		s.Actions = d.Session.Actions
+	}
+	if s.Views == "" {
+		s.Views = d.Session.Views
+	}
+	if s.Refresh == "" {
+		s.Refresh = d.Session.Refresh
+	}
+	if s.Group == "" {
+		s.Group = d.Session.Group
+	}
+	if s.Help == "" {
+		s.Help = d.Session.Help
+	}
+	if s.Search == "" {
+		s.Search = d.Session.Search
+	}
+	if s.GlobalSearch == "" {
+		s.GlobalSearch = d.Session.GlobalSearch
+	}
+	if s.Live == "" {
+		s.Live = d.Session.Live
+	}
+	if s.Select == "" {
+		s.Select = d.Session.Select
+	}
+	if s.Preview == "" {
+		s.Preview = d.Session.Preview
+	}
+	if s.PreviewBack == "" {
+		s.PreviewBack = d.Session.PreviewBack
+	}
+	if s.Left == "" {
+		s.Left = d.Session.Left
+	}
+	if s.Right == "" {
+		s.Right = d.Session.Right
+	}
+	if s.ResizeShrink == "" {
+		s.ResizeShrink = d.Session.ResizeShrink
+	}
+	if s.ResizeGrow == "" {
+		s.ResizeGrow = d.Session.ResizeGrow
+	}
+	if s.Command == "" {
+		s.Command = d.Session.Command
+	}
 
 	a := &cfg.Keymaps.Actions
-	if a.Delete == "" { a.Delete = d.Actions.Delete }
-	if a.Move == "" { a.Move = d.Actions.Move }
-	if a.Resume == "" { a.Resume = d.Actions.Resume }
-	if a.CopyPath == "" { a.CopyPath = d.Actions.CopyPath }
-	if a.Worktree == "" { a.Worktree = d.Actions.Worktree }
-	if a.Kill == "" { a.Kill = d.Actions.Kill }
-	if a.Input == "" { a.Input = d.Actions.Input }
-	if a.Jump == "" { a.Jump = d.Actions.Jump }
-	if a.URLs == "" { a.URLs = d.Actions.URLs }
-	if a.Files == "" { a.Files = d.Actions.Files }
-	if a.ImportMem == "" { a.ImportMem = d.Actions.ImportMem }
-	if a.RemoveMem == "" { a.RemoveMem = d.Actions.RemoveMem }
-	if a.Fork == "" { a.Fork = d.Actions.Fork }
-	if a.New == "" { a.New = d.Actions.New }
-	if a.Remote == "" { a.Remote = d.Actions.Remote }
+	if a.Delete == "" {
+		a.Delete = d.Actions.Delete
+	}
+	if a.Move == "" {
+		a.Move = d.Actions.Move
+	}
+	if a.Resume == "" {
+		a.Resume = d.Actions.Resume
+	}
+	if a.CopyPath == "" {
+		a.CopyPath = d.Actions.CopyPath
+	}
+	if a.Worktree == "" {
+		a.Worktree = d.Actions.Worktree
+	}
+	if a.Kill == "" {
+		a.Kill = d.Actions.Kill
+	}
+	if a.Input == "" {
+		a.Input = d.Actions.Input
+	}
+	if a.Jump == "" {
+		a.Jump = d.Actions.Jump
+	}
+	if a.URLs == "" {
+		a.URLs = d.Actions.URLs
+	}
+	if a.Files == "" {
+		a.Files = d.Actions.Files
+	}
+	if a.ImportMem == "" {
+		a.ImportMem = d.Actions.ImportMem
+	}
+	if a.RemoveMem == "" {
+		a.RemoveMem = d.Actions.RemoveMem
+	}
+	if a.Fork == "" {
+		a.Fork = d.Actions.Fork
+	}
+	if a.New == "" {
+		a.New = d.Actions.New
+	}
+	if a.Remote == "" {
+		a.Remote = d.Actions.Remote
+	}
 
 	v := &cfg.Keymaps.Views
-	if v.Stats == "" { v.Stats = d.Views.Stats }
-	if v.Config == "" { v.Config = d.Views.Config }
-	if v.Plugins == "" { v.Plugins = d.Views.Plugins }
+	if v.Stats == "" {
+		v.Stats = d.Views.Stats
+	}
+	if v.Config == "" {
+		v.Config = d.Views.Config
+	}
+	if v.Plugins == "" {
+		v.Plugins = d.Views.Plugins
+	}
 }
 
 // groupModeString converts a group mode int to its string name.
@@ -228,7 +304,7 @@ func (a *App) capturePreferences() Preferences {
 		GroupMode:       groupModeString(a.sessGroupMode),
 		PreviewMode:     sessPreviewString(a.sessPreviewMode),
 		ViewMode:        viewStateString(a.state),
-		ConvDetailLevel: int(a.conv.previewMode),
+		ConvDetailLevel: int(a.conv.rightPaneMode),
 		SplitRatio:      a.splitRatio,
 		WorktreeDir:     a.config.WorktreeDir,
 		HiddenBadges:    hidden,
@@ -249,7 +325,7 @@ func (a *App) applyPreferences(p Preferences) {
 		a.config.ViewMode = p.ViewMode
 	}
 	if p.ConvDetailLevel >= 0 && p.ConvDetailLevel <= 2 {
-		a.conv.previewMode = p.ConvDetailLevel
+		a.conv.rightPaneMode = p.ConvDetailLevel
 	}
 	if p.SplitRatio >= 15 && p.SplitRatio <= 85 {
 		a.splitRatio = p.SplitRatio

@@ -101,16 +101,24 @@ func splitSystemTags(text string) []ContentBlock {
 }
 
 type rawEntry struct {
-	Type          string          `json:"type"`
-	Timestamp     string          `json:"timestamp"`
-	IsMeta        bool            `json:"isMeta"`
-	Message       json.RawMessage `json:"message"`
-	UUID          string          `json:"uuid"`
-	ParentID      string          `json:"parentUuid"`
-	AgentID       string          `json:"agentId"`
-	CWD           string          `json:"cwd"`
-	GitBranch     string          `json:"gitBranch"`
-	ImagePasteIDs []int           `json:"imagePasteIds"`
+	Type          string             `json:"type"`
+	Timestamp     string             `json:"timestamp"`
+	IsMeta        bool               `json:"isMeta"`
+	Message       json.RawMessage    `json:"message"`
+	UUID          string             `json:"uuid"`
+	ParentID      string             `json:"parentUuid"`
+	AgentID       string             `json:"agentId"`
+	CWD           string             `json:"cwd"`
+	GitBranch     string             `json:"gitBranch"`
+	ImagePasteIDs []int              `json:"imagePasteIds"`
+	ToolUseResult *rawToolUseResult  `json:"toolUseResult"`
+}
+
+// rawToolUseResult holds metadata from the toolUseResult field on tool_result entries.
+// For Agent results, it contains the agentId linking to the subagent file.
+type rawToolUseResult struct {
+	AgentID   string `json:"agentId"`
+	AgentType string `json:"agentType"`
 }
 
 type rawMessage struct {
@@ -120,14 +128,15 @@ type rawMessage struct {
 }
 
 type rawContentBlock struct {
-	Type    string          `json:"type"`
-	ID      string          `json:"id"`
-	Text    string          `json:"text"`
-	Name    string          `json:"name"`
-	Content json.RawMessage `json:"content"`
-	Input   any             `json:"input"`
-	IsError bool            `json:"is_error"`
-	Source  *imageSource    `json:"source"`
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`
+	ToolUseID string          `json:"tool_use_id"`
+	Text      string          `json:"text"`
+	Name      string          `json:"name"`
+	Content   json.RawMessage `json:"content"`
+	Input     any             `json:"input"`
+	IsError   bool            `json:"is_error"`
+	Source    *imageSource    `json:"source"`
 }
 
 type imageSource struct {
@@ -141,12 +150,18 @@ func ParseEntry(line string) (Entry, error) {
 		return Entry{}, fmt.Errorf("unmarshal entry: %w", err)
 	}
 
+	agentID := raw.AgentID
+	// Prefer toolUseResult.agentId (Agent tool_result entries carry it here)
+	if agentID == "" && raw.ToolUseResult != nil && raw.ToolUseResult.AgentID != "" {
+		agentID = raw.ToolUseResult.AgentID
+	}
+
 	entry := Entry{
 		Type:     raw.Type,
 		IsMeta:   raw.IsMeta,
 		UUID:     raw.UUID,
 		ParentID: raw.ParentID,
-		AgentID:  raw.AgentID,
+		AgentID:  agentID,
 		RawJSON:  line,
 	}
 
@@ -218,6 +233,7 @@ func parseContentBlocks(raw json.RawMessage) []ContentBlock {
 				cb.ToolInput = string(inputBytes)
 			}
 		case "tool_result":
+			cb.ID = b.ToolUseID
 			cb.Text = parseToolResultContent(b.Content)
 		case "thinking":
 			cb.Text = b.Text
