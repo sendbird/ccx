@@ -21,6 +21,7 @@ var Commands = []struct {
 	{"files", "List file paths touched by the session (interactive on TTY)"},
 	{"changes", "List file changes made by the session (interactive on TTY)"},
 	{"images", "List image paths from the session (interactive on TTY)"},
+	{"conversation", "List conversation turns from the Claude session (interactive on TTY)"},
 	{"help", "Show available commands and usage"},
 }
 
@@ -53,6 +54,11 @@ func Run(command, claudeDir string, plain bool) (*RunResult, error) {
 }
 
 func runPlain(command, filePath, sessID, claudeDir string) error {
+	entries, err := session.LoadMessages(filePath)
+	if err != nil {
+		return err
+	}
+
 	switch command {
 	case "urls":
 		return printItems(extract.SessionURLs(filePath), "urls")
@@ -60,6 +66,8 @@ func runPlain(command, filePath, sessID, claudeDir string) error {
 		return printItems(extract.SessionFilePaths(filePath), "files")
 	case "changes":
 		return printChanges(extract.SessionChanges(filePath))
+	case "conversation":
+		return printConversation(extractConversationWithContext(entries, sessID))
 	case "images":
 		return printImages(filePath, sessID, claudeDir)
 	default:
@@ -84,6 +92,8 @@ func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, er
 		items = extractChangesWithContext(entries, sessID)
 	case "images":
 		items = extractImagesWithContext(entries, sessID, home)
+	case "conversation":
+		items = extractConversationWithContext(entries, sessID)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", command)
 	}
@@ -123,7 +133,8 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "  ccx urls | fzf        Pipe to fzf (auto plain)\n")
 	fmt.Fprintf(os.Stderr, "  ccx files             Interactive file picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx changes           Interactive changed-files picker\n")
-	fmt.Fprintf(os.Stderr, "  ccx images            Interactive image picker\n\n")
+	fmt.Fprintf(os.Stderr, "  ccx images            Interactive image picker\n")
+	fmt.Fprintf(os.Stderr, "  ccx conversation      Interactive conversation picker\n\n")
 	fmt.Fprintf(os.Stderr, "Picker keys:\n")
 	fmt.Fprintf(os.Stderr, "  ↵ enter    Jump to message in full ccx TUI\n")
 	fmt.Fprintf(os.Stderr, "  o          Open URL in browser\n")
@@ -168,6 +179,21 @@ func printChanges(items []extract.ChangeItem) error {
 			cat += strings.Repeat(" ", 5-len(cat))
 		}
 		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", cat, item.Item.Label, item.Summary)
+	}
+	return nil
+}
+
+func printConversation(items []PickerItem) error {
+	if len(items) == 0 {
+		return fmt.Errorf("no conversation entries found in session")
+	}
+	for _, item := range items {
+		ref := item.FirstRef()
+		role := strings.ToUpper(ref.Role)
+		if len(role) < 5 {
+			role += strings.Repeat(" ", 5-len(role))
+		}
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", role, item.Item.Label, ref.EntryUUID)
 	}
 	return nil
 }

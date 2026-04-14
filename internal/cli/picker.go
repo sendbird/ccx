@@ -39,7 +39,9 @@ type pickerModel struct {
 	refCursor  int
 
 	// Preview focus: right-arrow/tab moves focus to preview for scrolling
-	previewFocused bool
+	previewFocused   bool
+	artifactCursor   int
+	artifactSelected map[int]bool
 
 	searching   bool
 	searchInput textinput.Model
@@ -55,10 +57,11 @@ type pickerModel struct {
 
 func newPickerModel(kind string, items []PickerItem) pickerModel {
 	return pickerModel{
-		kind:     kind,
-		allItems: items,
-		items:    items,
-		selected: make(map[int]bool),
+		kind:             kind,
+		allItems:         items,
+		items:            items,
+		selected:         make(map[int]bool),
+		artifactSelected: make(map[int]bool),
 	}
 }
 
@@ -95,6 +98,39 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m pickerModel) handlePreviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	if m.kind == "conversation" {
+		if m.cursor >= 0 && m.cursor < len(m.items) {
+			artifacts := m.items[m.cursor].ConversationArtifacts
+			switch key {
+			case "up", "k":
+				if len(artifacts) > 0 && m.artifactCursor > 0 {
+					m.artifactCursor--
+					m.updatePreview()
+					return m, nil
+				}
+				m.preview.LineUp(3)
+				return m, nil
+			case "down", "j":
+				if len(artifacts) > 0 && m.artifactCursor < len(artifacts)-1 {
+					m.artifactCursor++
+					m.updatePreview()
+					return m, nil
+				}
+				m.preview.LineDown(3)
+				return m, nil
+			case " ":
+				if len(artifacts) > 0 {
+					if m.artifactSelected[m.artifactCursor] {
+						delete(m.artifactSelected, m.artifactCursor)
+					} else {
+						m.artifactSelected[m.artifactCursor] = true
+					}
+					m.updatePreview()
+				}
+				return m, nil
+			}
+		}
+	}
 	switch key {
 	case "esc", "left", "h", "tab":
 		m.previewFocused = false
@@ -120,7 +156,7 @@ func (m pickerModel) handlePreviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G":
 		m.preview.GotoBottom()
 		return m, nil
-	case "enter", "e":
+	case "enter", "e", "o":
 		// Pass through to normal handler
 		m.previewFocused = false
 		return m.handleKey(msg)
@@ -282,10 +318,24 @@ func (m pickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "o":
+		if m.kind == "conversation" {
+			targets := m.conversationArtifactTargets(false)
+			if len(targets) > 0 {
+				m.openItems(targets)
+			}
+			return m, nil
+		}
 		m.openItems(m.selectedURLs())
 		return m, nil
 
 	case "e":
+		if m.kind == "conversation" {
+			targets := m.conversationArtifactTargets(true)
+			if len(targets) > 0 {
+				m.editItems(targets)
+			}
+			return m, nil
+		}
 		targets := m.selectedURLs()
 		if len(targets) > 0 {
 			m.editItems(targets)
@@ -316,6 +366,12 @@ func (m *pickerModel) updatePreview() {
 	highlight := lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B"))
 
 	var sb strings.Builder
+
+	if m.kind == "conversation" {
+		m.preview.SetContent(m.conversationPreview())
+		m.preview.GotoTop()
+		return
+	}
 
 	// Header
 	sb.WriteString(accent.Render(strings.ToUpper(item.Item.Category)))
@@ -406,6 +462,47 @@ func (m *pickerModel) updatePreview() {
 
 // --- View ---
 
+func renderConversationListRow(item PickerItem, selected bool, selectedMark, plainMark, badge string, listW int, selStyle, dimStyle lipgloss.Style) []string {
+	headerPrefix := " " + plainMark + badge + " "
+	bodyPrefix := strings.Repeat(" ", lipgloss.Width(headerPrefix))
+	if selected {
+		headerPrefix = selStyle.Render(">") + selectedMark + badge + " "
+		bodyPrefix = strings.Repeat(" ", lipgloss.Width(" "+plainMark+badge+" "))
+	}
+
+	label := item.Item.Label
+	maxHeader := max(listW-lipgloss.Width(headerPrefix), 12)
+	if len(label) > maxHeader {
+		label = label[:maxHeader-3] + "..."
+	}
+	lines := []string{headerPrefix + func() string {
+		if selected {
+			return selStyle.Render(label)
+		}
+		return dimStyle.Render(label)
+	}()}
+
+	textLines := strings.Split(item.ConversationText, "\n")
+	if len(textLines) == 0 {
+		textLines = []string{"(no visible content)"}
+	}
+	for i, line := range textLines {
+		if i >= 2 {
+			break
+		}
+		maxBody := max(listW-lipgloss.Width(bodyPrefix), 12)
+		if len(line) > maxBody {
+			line = line[:maxBody-3] + "..."
+		}
+		if selected {
+			lines = append(lines, bodyPrefix+selStyle.Render(line))
+		} else {
+			lines = append(lines, bodyPrefix+dimStyle.Render(line))
+		}
+	}
+	return lines
+}
+
 func (m pickerModel) View() string {
 	if m.width == 0 || m.height == 0 {
 		return ""
@@ -420,7 +517,10 @@ func (m pickerModel) View() string {
 	cat := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366F1")).Bold(true)
 
 	visMax := contentH - 2
-	if visMax < 3 {
+	if m.kind == "conversation" {
+		visMax = max((contentH-2)/3, 1)
+	}
+	if visMax < 3 && m.kind != "conversation" {
 		visMax = 3
 	}
 	start := 0
@@ -445,6 +545,10 @@ func (m pickerModel) View() string {
 		maxLabel := listW - 12
 		if maxLabel < 10 {
 			maxLabel = 10
+		}
+		if m.kind == "conversation" {
+			listLines = append(listLines, renderConversationListRow(item, i == m.cursor, check, "  ", badge, listW, sel, dim)...)
+			continue
 		}
 		if len(label) > maxLabel {
 			label = label[:maxLabel-3] + "..."
@@ -509,7 +613,9 @@ func (m pickerModel) View() string {
 	case "changes":
 		actions = "↵:jump  e:$EDITOR"
 	case "images":
-		actions = "↵:jump  e:$EDITOR"
+		actions = "↵:jump  o:open  e:$EDITOR"
+	case "conversation":
+		actions = "↵:jump  o:open artifacts  e:edit local artifacts"
 	}
 	var footer string
 	if m.searching {
@@ -525,6 +631,8 @@ func (m pickerModel) View() string {
 			filterHints = hint.Render("is:") + dim.Render("change") + "  " + hint.Render("role:") + dim.Render("user asst")
 		case "images":
 			filterHints = hint.Render("is:") + dim.Render("image") + "  " + hint.Render("role:") + dim.Render("user asst")
+		case "conversation":
+			filterHints = hint.Render("is:") + dim.Render("conversation") + "  " + hint.Render("role:") + dim.Render("user asst")
 		}
 		footer = filterHints
 	} else if m.previewFocused {
@@ -538,7 +646,7 @@ func (m pickerModel) View() string {
 
 // --- Helpers ---
 
-func (m pickerModel) listWidth() int  { return m.width * 40 / 100 }
+func (m pickerModel) listWidth() int    { return m.width * 40 / 100 }
 func (m pickerModel) previewWidth() int { return m.width - m.listWidth() - 2 }
 
 func (m *pickerModel) filterItems() {
@@ -636,6 +744,99 @@ func padRight(s string, n int) string {
 		return s[:n]
 	}
 	return s + strings.Repeat(" ", n-len(s))
+}
+
+func (m pickerModel) conversationArtifactTargets(editableOnly bool) []string {
+	if m.kind != "conversation" || m.cursor < 0 || m.cursor >= len(m.items) {
+		return nil
+	}
+	item := m.items[m.cursor]
+	var targets []string
+	if len(m.artifactSelected) > 0 {
+		for i, artifact := range item.ConversationArtifacts {
+			if !m.artifactSelected[i] {
+				continue
+			}
+			if editableOnly && artifact.Category == "url" {
+				continue
+			}
+			targets = append(targets, artifact.URL)
+		}
+		return targets
+	}
+	if m.artifactCursor >= 0 && m.artifactCursor < len(item.ConversationArtifacts) {
+		artifact := item.ConversationArtifacts[m.artifactCursor]
+		if editableOnly && artifact.Category == "url" {
+			return nil
+		}
+		return []string{artifact.URL}
+	}
+	for _, artifact := range item.ConversationArtifacts {
+		if editableOnly && artifact.Category == "url" {
+			continue
+		}
+		targets = append(targets, artifact.URL)
+	}
+	return targets
+}
+
+func (m pickerModel) conversationPreview() string {
+	if m.cursor < 0 || m.cursor >= len(m.items) {
+		return ""
+	}
+	item := m.items[m.cursor]
+	ref := item.FirstRef()
+
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+	accent := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#38BDF8"))
+	highlight := lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B"))
+	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+
+	var sb strings.Builder
+	sb.WriteString(accent.Render("CONVERSATION") + "  " + highlight.Render(item.Item.Label) + "\n\n")
+	if ref.Preview != "" {
+		for _, line := range strings.Split(ref.Preview, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			sb.WriteString(line + "\n")
+		}
+	}
+	if len(item.ConversationArtifacts) == 0 {
+		sb.WriteString("\n" + dim.Render("(no urls/files/images/changes in this turn)"))
+		return sb.String()
+	}
+
+	sb.WriteString("\n" + accent.Render("ARTIFACTS") + "\n")
+	for i, artifact := range item.ConversationArtifacts {
+		label := artifact.Label
+		if label == "" {
+			label = artifact.URL
+		}
+		if len(label) > max(m.previewWidth()-10, 20) {
+			label = label[:max(m.previewWidth()-13, 17)] + "..."
+		}
+		cursor := "  "
+		if i == m.artifactCursor {
+			cursor = "> "
+		}
+		mark := "  "
+		if m.artifactSelected[i] {
+			mark = "* "
+		}
+		line := fmt.Sprintf("%s%s[%s] %s", cursor, mark, strings.ToUpper(artifact.Category), label)
+		if i == m.artifactCursor {
+			sb.WriteString(selectedStyle.Render(line) + "\n")
+		} else {
+			sb.WriteString(dim.Render(line) + "\n")
+		}
+	}
+	selectedCount := len(m.artifactSelected)
+	if selectedCount > 0 {
+		sb.WriteString("\n" + dim.Render(fmt.Sprintf("%d selected", selectedCount)))
+	}
+	sb.WriteString("\n" + dim.Render("j/k:artifact nav  sp:select  o:open  e:edit local  ↵:jump to turn"))
+	return sb.String()
 }
 
 // RunPicker launches the interactive picker and returns the result.
