@@ -644,69 +644,6 @@ func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
 	}
 }
 
-// renderStandardPreview renders conversation text plus artifact summaries
-// (images, files, changes, URLs) without raw tool block details.
-func (a *App) renderStandardPreview(item convItem, entry session.Entry) {
-	sp := &a.conv.split
-	pw := sp.PreviewWidth(a.width, a.splitRatio)
-	textW := max(pw-2, 10)
-
-	cacheKey := fmt.Sprintf("standard:%s:%d", convPreviewBaseKey(item), len(entry.Content))
-	if cacheKey == sp.CacheKey {
-		return
-	}
-
-	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	var sb strings.Builder
-	sb.WriteString(renderPreviewHeader(entry, textW))
-
-	chunks := previewTextChunks(entry)
-	if len(chunks) == 0 {
-		sb.WriteString(dimStyle.Render("(no text content)"))
-	} else {
-		for i, chunk := range chunks {
-			if i > 0 {
-				sb.WriteString("\n\n" + dimStyle.Render(strings.Repeat("─", min(textW, 24))) + "\n\n")
-			}
-			sb.WriteString(wrapText(chunk, textW))
-		}
-	}
-
-	imageCount := 0
-	for _, b := range entry.Content {
-		if b.Type == "image" {
-			imageCount++
-		}
-	}
-	files := extract.BlockFilePaths(entry.Content)
-	urls := extract.BlockURLs(entry.Content)
-	changes := extract.BlockChanges(entry.Content)
-
-	if imageCount > 0 || len(files) > 0 || len(urls) > 0 || len(changes) > 0 {
-		sb.WriteString("\n\n" + sectionStyle.Render("Artifacts") + "\n")
-		if imageCount > 0 {
-			sb.WriteString(dimStyle.Render(fmt.Sprintf("  images: %d", imageCount)) + "\n")
-		}
-		if len(files) > 0 {
-			sb.WriteString(dimStyle.Render(fmt.Sprintf("  files: %d", len(files))) + "\n")
-		}
-		if len(changes) > 0 {
-			sb.WriteString(dimStyle.Render(fmt.Sprintf("  changes: %d", len(changes))) + "\n")
-		}
-		if len(urls) > 0 {
-			sb.WriteString(dimStyle.Render(fmt.Sprintf("  urls: %d", len(urls))) + "\n")
-		}
-	}
-
-	sp.CacheKey = cacheKey
-	sp.SetPreviewContent(sb.String(), a.width, a.height, a.splitRatio)
-	sp.Preview.YOffset = 0
-	if sp.Folds != nil {
-		sp.Folds.Entry = session.Entry{}
-		sp.Folds.BlockStarts = nil
-	}
-}
-
 func buildStandardPreviewEntry(entry session.Entry) session.Entry {
 	blocks := make([]session.ContentBlock, 0, len(entry.Content)+8)
 
