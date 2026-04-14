@@ -573,6 +573,21 @@ func (a *App) updateConvPreview() {
 	}
 }
 
+func previewTextChunks(e session.Entry) []string {
+	var chunks []string
+	for _, b := range e.Content {
+		if b.Type != "text" {
+			continue
+		}
+		text := strings.TrimSpace(session.StripXMLTags(b.Text))
+		if text == "" {
+			continue
+		}
+		chunks = append(chunks, text)
+	}
+	return chunks
+}
+
 func renderPreviewHeader(entry session.Entry, textW int) string {
 	roleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
@@ -608,12 +623,16 @@ func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
 	var sb strings.Builder
 	sb.WriteString(renderPreviewHeader(entry, textW))
 
-	// Extract text blocks only
-	text := entryFullText(entry)
-	if text == "" {
+	chunks := previewTextChunks(entry)
+	if len(chunks) == 0 {
 		sb.WriteString(dimStyle.Render("(no text content)"))
 	} else {
-		sb.WriteString(wrapText(text, textW))
+		for i, chunk := range chunks {
+			if i > 0 {
+				sb.WriteString("\n\n" + dimStyle.Render(strings.Repeat("─", min(textW, 24))) + "\n\n")
+			}
+			sb.WriteString(wrapText(chunk, textW))
+		}
 	}
 
 	sp.CacheKey = cacheKey
@@ -642,32 +661,10 @@ func (a *App) renderStandardPreview(item convItem, entry session.Entry) {
 	var sb strings.Builder
 	sb.WriteString(renderPreviewHeader(entry, textW))
 
-	text := entryFullText(entry)
-	if text == "" {
+	chunks := previewTextChunks(entry)
+	if len(chunks) == 0 {
 		sb.WriteString(dimStyle.Render("(no text content)"))
 	} else {
-		parts := strings.Split(text, "\n")
-		chunks := []string{strings.Join(parts, "\n")}
-		if len(parts) > 0 {
-			var splitChunks []string
-			var current []string
-			for _, line := range parts {
-				if strings.HasPrefix(line, "USER  ") || strings.HasPrefix(line, "ASSISTANT  ") || strings.HasPrefix(line, "ENTRY  ") {
-					if len(current) > 0 {
-						splitChunks = append(splitChunks, strings.Join(current, "\n"))
-					}
-					current = []string{line}
-					continue
-				}
-				current = append(current, line)
-			}
-			if len(current) > 0 {
-				splitChunks = append(splitChunks, strings.Join(current, "\n"))
-			}
-			if len(splitChunks) > 1 {
-				chunks = splitChunks
-			}
-		}
 		for i, chunk := range chunks {
 			if i > 0 {
 				sb.WriteString("\n\n" + dimStyle.Render(strings.Repeat("─", min(textW, 24))) + "\n\n")
