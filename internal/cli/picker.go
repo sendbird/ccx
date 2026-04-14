@@ -27,6 +27,13 @@ type PickerResult struct {
 	EntryUUID string
 }
 
+type pickerPreviewMode int
+
+const (
+	pickerPreviewConversation pickerPreviewMode = iota
+	pickerPreviewArtifacts
+)
+
 type pickerModel struct {
 	kind     string // "urls", "files", "images", "changes"
 	allItems []PickerItem
@@ -40,6 +47,7 @@ type pickerModel struct {
 
 	// Preview focus: right-arrow/tab moves focus to preview for scrolling
 	previewFocused   bool
+	previewMode      pickerPreviewMode
 	artifactCursor   int
 	artifactSelected map[int]bool
 
@@ -62,6 +70,7 @@ func newPickerModel(kind string, items []PickerItem) pickerModel {
 		items:            items,
 		selected:         make(map[int]bool),
 		artifactSelected: make(map[int]bool),
+		previewMode:      pickerPreviewConversation,
 	}
 }
 
@@ -92,6 +101,26 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 	return m, nil
+}
+
+func (m *pickerModel) cycleConversationPreviewMode(reverse bool) {
+	if m.kind != "conversation" {
+		return
+	}
+	if reverse {
+		if m.previewMode == pickerPreviewConversation {
+			m.previewMode = pickerPreviewArtifacts
+		} else {
+			m.previewMode = pickerPreviewConversation
+		}
+	} else {
+		if m.previewMode == pickerPreviewConversation {
+			m.previewMode = pickerPreviewArtifacts
+		} else {
+			m.previewMode = pickerPreviewConversation
+		}
+	}
+	m.updatePreview()
 }
 
 // --- Preview focus mode ---
@@ -132,8 +161,21 @@ func (m pickerModel) handlePreviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch key {
-	case "esc", "left", "h", "tab":
+	case "esc", "left", "h":
 		m.previewFocused = false
+		return m, nil
+	case "tab":
+		if m.kind == "conversation" {
+			m.cycleConversationPreviewMode(false)
+			return m, nil
+		}
+		m.previewFocused = false
+		return m, nil
+	case "shift+tab":
+		if m.kind == "conversation" {
+			m.cycleConversationPreviewMode(true)
+			return m, nil
+		}
 		return m, nil
 	case "q":
 		m.previewFocused = false
@@ -257,8 +299,21 @@ func (m pickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "right", "l", "tab":
+	case "right", "l":
 		m.previewFocused = true
+		return m, nil
+	case "tab":
+		if m.kind == "conversation" && m.previewFocused {
+			m.cycleConversationPreviewMode(false)
+			return m, nil
+		}
+		m.previewFocused = true
+		return m, nil
+	case "shift+tab":
+		if m.kind == "conversation" {
+			m.cycleConversationPreviewMode(true)
+			return m, nil
+		}
 		return m, nil
 
 	case "/":
@@ -816,7 +871,11 @@ func (m pickerModel) conversationPreview() string {
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 
 	var sb strings.Builder
-	sb.WriteString(accent.Render("CONVERSATION") + "  " + highlight.Render(item.Item.Label) + "\n\n")
+	modeLabel := "conversation"
+	if m.previewMode == pickerPreviewArtifacts {
+		modeLabel = "artifacts"
+	}
+	sb.WriteString(accent.Render("CONVERSATION") + "  " + highlight.Render(item.Item.Label) + "  " + dim.Render("["+modeLabel+"]") + "\n\n")
 	if ref.Preview != "" {
 		for _, line := range strings.Split(ref.Preview, "\n") {
 			if strings.TrimSpace(line) == "" {
@@ -827,6 +886,22 @@ func (m pickerModel) conversationPreview() string {
 	}
 	if len(item.ConversationArtifacts) == 0 {
 		sb.WriteString("\n" + dim.Render("(no urls/files/images/changes in this turn)"))
+		return sb.String()
+	}
+
+	if m.previewMode == pickerPreviewConversation {
+		sb.WriteString("\n" + accent.Render("ARTIFACT SUMMARY") + "\n")
+		for _, artifact := range item.ConversationArtifacts {
+			label := artifact.Label
+			if label == "" {
+				label = artifact.URL
+			}
+			if len(label) > max(m.previewWidth()-10, 20) {
+				label = label[:max(m.previewWidth()-13, 17)] + "..."
+			}
+			sb.WriteString(dim.Render(fmt.Sprintf("  [%s] %s", strings.ToUpper(artifact.Category), label)) + "\n")
+		}
+		sb.WriteString("\n" + dim.Render("tab:artifacts mode  ↵:jump to turn"))
 		return sb.String()
 	}
 
@@ -858,7 +933,7 @@ func (m pickerModel) conversationPreview() string {
 	if selectedCount > 0 {
 		sb.WriteString("\n" + dim.Render(fmt.Sprintf("%d selected", selectedCount)))
 	}
-	sb.WriteString("\n" + dim.Render("j/k:artifact nav  sp:select  o:open  e:edit local  ↵:jump to turn"))
+	sb.WriteString("\n" + dim.Render("tab:conversation mode  j/k:artifact nav  sp:select  o:open  e:edit local  ↵:jump to turn"))
 	return sb.String()
 }
 

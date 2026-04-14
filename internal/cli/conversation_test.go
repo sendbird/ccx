@@ -137,6 +137,24 @@ func TestConversationListText(t *testing.T) {
 	}
 }
 
+func TestConversationPreviewModeCycle(t *testing.T) {
+	m := newPickerModel("conversation", []PickerItem{{
+		Item:             extract.Item{URL: "conversation:1", Label: "#1", Category: "conversation"},
+		ConversationText: "hello",
+	}})
+	if m.previewMode != pickerPreviewConversation {
+		t.Fatalf("initial preview mode = %v, want conversation", m.previewMode)
+	}
+	m.cycleConversationPreviewMode(false)
+	if m.previewMode != pickerPreviewArtifacts {
+		t.Fatalf("after cycle preview mode = %v, want artifacts", m.previewMode)
+	}
+	m.cycleConversationPreviewMode(true)
+	if m.previewMode != pickerPreviewConversation {
+		t.Fatalf("after reverse cycle preview mode = %v, want conversation", m.previewMode)
+	}
+}
+
 func TestPrintConversation(t *testing.T) {
 	items := []PickerItem{{
 		Item:      extract.Item{URL: "conversation:1", Label: "#1  USER  12:00:00  hello", Category: "conversation"},

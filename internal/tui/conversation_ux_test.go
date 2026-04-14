@@ -1080,6 +1080,35 @@ func TestDefaultFoldsCollapseTools(t *testing.T) {
 // TestLiveTickMsgReachesHandleLiveTailInConvView verifies that liveTickMsg
 // dispatches to handleLiveTail (not refreshLivePreview) when app.state == viewConversation,
 // even if sessPreviewLive and livePreviewSessID are set from a prior session view.
+func TestRenderStandardPreviewShowsArtifactSummary(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "hello"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Here is the result"},
+				{Type: "tool_use", ToolName: "Read", ToolInput: `{"file_path":"/tmp/x.go"}`},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	item := convItem{kind: convMsg, merged: mergedMsg{entry: entries[1], startIdx: 1, endIdx: 1}}
+	app.renderStandardPreview(item, entries[1])
+
+	content := app.conv.split.Preview.View()
+	if !strings.Contains(content, "Artifacts") {
+		t.Fatalf("standard preview should show artifact section, got %q", content)
+	}
+	if !strings.Contains(content, "files: 1") {
+		t.Fatalf("standard preview should summarize files, got %q", content)
+	}
+	if strings.Contains(content, "Tool: Read") {
+		t.Fatalf("standard preview should not show raw tool blocks, got %q", content)
+	}
+}
+
 func TestLiveTickMsgReachesHandleLiveTailInConvView(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	entries := []session.Entry{

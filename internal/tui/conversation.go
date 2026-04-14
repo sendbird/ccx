@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -512,12 +513,18 @@ func (a *App) updateConvPreview() {
 		}
 	}
 
-	// Text-only preview mode: show clean conversation text (no tool calls).
-	// Exception: in tree mode, always show full content with tool blocks
-	// since the whole point of tree view is to inspect entity details.
-	if a.conv.rightPaneMode == previewText && a.conv.leftPaneMode != convPaneTree {
-		a.renderTextOnlyPreview(item, entry)
-		return
+	// Compact preview: text only.
+	// Standard preview: conversation text + artifacts only.
+	// Verbose preview: full structured blocks + hooks.
+	if a.conv.leftPaneMode != convPaneTree {
+		if a.conv.rightPaneMode == previewText {
+			a.renderTextOnlyPreview(item, entry)
+			return
+		}
+		if a.conv.rightPaneMode == previewTool {
+			a.renderStandardPreview(item, entry)
+			return
+		}
 	}
 
 	baseKey := convPreviewBaseKey(item)
@@ -605,9 +612,82 @@ func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
 	}
 
 	sp.CacheKey = cacheKey
-	sp.Preview.SetContent(sb.String())
+	sp.SetPreviewContent(sb.String(), a.width, a.height, a.splitRatio)
 	sp.Preview.YOffset = 0
 	// Clear fold state to prevent fold keys from acting on stale data
+	if sp.Folds != nil {
+		sp.Folds.Entry = session.Entry{}
+		sp.Folds.BlockStarts = nil
+	}
+}
+
+// renderStandardPreview renders conversation text plus artifact summaries
+// (images, files, changes, URLs) without raw tool block details.
+func (a *App) renderStandardPreview(item convItem, entry session.Entry) {
+	sp := &a.conv.split
+	pw := sp.PreviewWidth(a.width, a.splitRatio)
+	textW := max(pw-2, 10)
+
+	cacheKey := fmt.Sprintf("standard:%s:%d", convPreviewBaseKey(item), len(entry.Content))
+	if cacheKey == sp.CacheKey {
+		return
+	}
+
+	roleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
+	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+
+	var sb strings.Builder
+	role := strings.ToUpper(entry.Role)
+	if role == "" {
+		role = "UNKNOWN"
+	}
+	sb.WriteString(roleStyle.Render(role))
+	if !entry.Timestamp.IsZero() {
+		sb.WriteString(dimStyle.Render("  " + entry.Timestamp.Format("15:04:05")))
+	}
+	if entry.Model != "" {
+		sb.WriteString(dimStyle.Render("  " + entry.Model))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(dimStyle.Render(strings.Repeat("─", min(textW, 60))) + "\n\n")
+
+	text := entryFullText(entry)
+	if text == "" {
+		sb.WriteString(dimStyle.Render("(no text content)"))
+	} else {
+		sb.WriteString(wrapText(text, textW))
+	}
+
+	imageCount := 0
+	for _, b := range entry.Content {
+		if b.Type == "image" {
+			imageCount++
+		}
+	}
+	files := extract.BlockFilePaths(entry.Content)
+	urls := extract.BlockURLs(entry.Content)
+	changes := extract.BlockChanges(entry.Content)
+
+	if imageCount > 0 || len(files) > 0 || len(urls) > 0 || len(changes) > 0 {
+		sb.WriteString("\n\n" + sectionStyle.Render("Artifacts") + "\n")
+		if imageCount > 0 {
+			sb.WriteString(dimStyle.Render(fmt.Sprintf("  images: %d", imageCount)) + "\n")
+		}
+		if len(files) > 0 {
+			sb.WriteString(dimStyle.Render(fmt.Sprintf("  files: %d", len(files))) + "\n")
+		}
+		if len(changes) > 0 {
+			sb.WriteString(dimStyle.Render(fmt.Sprintf("  changes: %d", len(changes))) + "\n")
+		}
+		if len(urls) > 0 {
+			sb.WriteString(dimStyle.Render(fmt.Sprintf("  urls: %d", len(urls))) + "\n")
+		}
+	}
+
+	sp.CacheKey = cacheKey
+	sp.SetPreviewContent(sb.String(), a.width, a.height, a.splitRatio)
+	sp.Preview.YOffset = 0
 	if sp.Folds != nil {
 		sp.Folds.Entry = session.Entry{}
 		sp.Folds.BlockStarts = nil
