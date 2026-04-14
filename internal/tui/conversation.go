@@ -573,18 +573,7 @@ func (a *App) updateConvPreview() {
 	}
 }
 
-// renderTextOnlyPreview renders a clean text-only view of the entry (no tool calls).
-func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
-	sp := &a.conv.split
-	pw := sp.PreviewWidth(a.width, a.splitRatio)
-	textW := max(pw-2, 10)
-
-	cacheKey := fmt.Sprintf("text:%s:%d", convPreviewBaseKey(item), len(entry.Content))
-	if cacheKey == sp.CacheKey {
-		return
-	}
-
-	// Header
+func renderPreviewHeader(entry session.Entry, textW int) string {
 	roleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 
@@ -602,6 +591,22 @@ func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
 	}
 	sb.WriteString("\n")
 	sb.WriteString(dimStyle.Render(strings.Repeat("─", min(textW, 60))) + "\n\n")
+	return sb.String()
+}
+
+// renderTextOnlyPreview renders a clean text-only view of the entry (no tool calls).
+func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
+	sp := &a.conv.split
+	pw := sp.PreviewWidth(a.width, a.splitRatio)
+	textW := max(pw-2, 10)
+
+	cacheKey := fmt.Sprintf("text:%s:%d", convPreviewBaseKey(item), len(entry.Content))
+	if cacheKey == sp.CacheKey {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(renderPreviewHeader(entry, textW))
 
 	// Extract text blocks only
 	text := entryFullText(entry)
@@ -633,24 +638,9 @@ func (a *App) renderStandardPreview(item convItem, entry session.Entry) {
 		return
 	}
 
-	roleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
-	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-
 	var sb strings.Builder
-	role := strings.ToUpper(entry.Role)
-	if role == "" {
-		role = "UNKNOWN"
-	}
-	sb.WriteString(roleStyle.Render(role))
-	if !entry.Timestamp.IsZero() {
-		sb.WriteString(dimStyle.Render("  " + entry.Timestamp.Format("15:04:05")))
-	}
-	if entry.Model != "" {
-		sb.WriteString(dimStyle.Render("  " + entry.Model))
-	}
-	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render(strings.Repeat("─", min(textW, 60))) + "\n\n")
+	sb.WriteString(renderPreviewHeader(entry, textW))
 
 	text := entryFullText(entry)
 	if text == "" {
@@ -753,7 +743,10 @@ func buildConversationPreviewEntry(header string, fallbackTS time.Time, entries 
 		blocks = append(blocks, session.ContentBlock{Type: "text", Text: header})
 	}
 
-	for _, e := range entries {
+	for idx, e := range entries {
+		if idx > 0 {
+			blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.Repeat("─", 24)})
+		}
 		if ts.IsZero() && !e.Timestamp.IsZero() {
 			ts = e.Timestamp
 		}
