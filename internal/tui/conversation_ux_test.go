@@ -1109,6 +1109,22 @@ func TestRenderStandardPreviewShowsArtifactSummary(t *testing.T) {
 	}
 }
 
+func TestFocusedArtifactTooltipForChangeBlock(t *testing.T) {
+	sp := &SplitPane{}
+	sp.Folds = &FoldState{
+		Entry: session.Entry{Content: []session.ContentBlock{{
+			Type:      "tool_use",
+			ToolName:  "Edit",
+			ToolInput: `{"file_path":"/tmp/x.go","old_string":"a","new_string":"b"}`,
+		}}},
+		BlockCursor: 0,
+	}
+	tooltip := focusedArtifactTooltip(sp, 120)
+	if !strings.Contains(tooltip, "/tmp/x.go") {
+		t.Fatalf("expected change tooltip to include file path, got %q", tooltip)
+	}
+}
+
 func TestLiveTickMsgReachesHandleLiveTailInConvView(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	entries := []session.Entry{

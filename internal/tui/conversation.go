@@ -1597,13 +1597,51 @@ func (a *App) scrollConvPreviewToTail() {
 	sp.Preview.YOffset = maxOffset
 }
 
+func focusedArtifactTooltip(sp *SplitPane, width int) string {
+	if sp == nil || sp.Folds == nil {
+		return ""
+	}
+	entry := sp.Folds.Entry
+	bc := sp.Folds.BlockCursor
+	if bc < 0 || bc >= len(entry.Content) {
+		return ""
+	}
+	block := entry.Content[bc]
+	switch {
+	case block.Type == "image" && block.ImagePasteID > 0:
+		return fmt.Sprintf("Image\n\npaste #%d", block.ImagePasteID)
+	case len(extract.BlockChanges([]session.ContentBlock{block})) > 0:
+		if diff := toolDiffOutput(block, max(width/2, 20)); diff != "" {
+			return diff
+		}
+		return "Change artifact"
+	case len(extract.BlockFilePaths([]session.ContentBlock{block})) > 0:
+		items := extract.BlockFilePaths([]session.ContentBlock{block})
+		if len(items) > 0 {
+			return "File\n\n" + items[0].URL
+		}
+	case len(extract.BlockURLs([]session.ContentBlock{block})) > 0:
+		items := extract.BlockURLs([]session.ContentBlock{block})
+		if len(items) > 0 {
+			return "URL\n\n" + items[0].URL
+		}
+	}
+	return ""
+}
+
 // renderConvSplit renders the conversation split view.
 func (a *App) renderConvSplit() string {
 	sp := &a.conv.split
 	rendered := sp.Render(a.width, a.height, a.splitRatio)
 
-	// Show tooltip for selected item when list is focused and tooltip is on
-	if a.convTooltipOn && !sp.Focus && sp.Show && len(a.convList.Items()) > 0 {
+	// Show tooltip for selected item when list is focused and tooltip is on.
+	// When preview is focused, prefer a tooltip for the focused artifact/block.
+	if sp.Focus && sp.Show {
+		if tooltip := focusedArtifactTooltip(sp, a.width); tooltip != "" {
+			contentH := ContentHeight(a.height)
+			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage, a.convTooltipScroll)
+		}
+	} else if a.convTooltipOn && sp.Show && len(a.convList.Items()) > 0 {
 		if tooltip := a.convTooltip(); tooltip != "" {
 			contentH := ContentHeight(a.height)
 			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage, a.convTooltipScroll)
