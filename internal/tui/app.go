@@ -120,6 +120,16 @@ const (
 	viewPlugins
 )
 
+type convPageKind int
+
+const (
+	convPageNone convPageKind = iota
+	convPageURLs
+	convPageImages
+	convPageChanges
+	convPageFiles
+)
+
 type App struct {
 	state  viewState
 	width  int
@@ -183,6 +193,10 @@ type App struct {
 	statsDetailVP      viewport.Model
 	statsPageMenu      bool // "p" page jump popup
 	convPageMenu       bool // conversation page jump popup
+	convPage           convPageKind
+	convPageItems      []extract.Item
+	convPageCursor     int
+	convPageChangeMap  map[string]extract.ChangeItem
 
 	// Session preview mode
 	sessPreviewMode    sessPreview
@@ -1078,6 +1092,12 @@ func (a *App) View() string {
 		hintBox := a.renderConvPageHintBox()
 		content = placeHintBox(content, hintBox)
 		help = formatHelp("p:page — pick a page")
+	}
+
+	// Conversation artifact page browser
+	if a.state == viewConversation && a.convPage != convPageNone {
+		content = a.renderConvPageBrowser()
+		help = formatHelp("↑↓:nav enter:open esc:back")
 	}
 
 	// Block filter hint box floating above help line (conversation preview and full-screen message)

@@ -118,6 +118,39 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleConvPageMenu(key)
 	}
 
+	// Dedicated conversation artifact page browser
+	if a.convPage != convPageNone {
+		switch key {
+		case "esc":
+			a.convPage = convPageNone
+			a.convPageItems = nil
+			a.convPageChangeMap = nil
+			a.conv.split.CacheKey = ""
+			a.updateConvPreview()
+			return a, nil
+		case "up", "k":
+			if a.convPageCursor > 0 {
+				a.convPageCursor--
+			}
+			return a, nil
+		case "down", "j":
+			if a.convPageCursor < len(a.convPageItems)-1 {
+				a.convPageCursor++
+			}
+			return a, nil
+		case "enter":
+			if a.convPage == convPageImages && a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
+				id := strings.TrimPrefix(a.convPageItems[a.convPageCursor].URL, "paste:")
+				var pasteID int
+				fmt.Sscanf(id, "%d", &pasteID)
+				if pasteID > 0 {
+					return a.openCachedImage(pasteID)
+				}
+			}
+			return a, nil
+		}
+	}
+
 	// Block filter input intercepts all keys
 	if a.conv.blockFiltering {
 		return a.handleBlockFilterInput(msg)
@@ -705,27 +738,148 @@ func buildStandardEntry(entry session.Entry) session.Entry {
 	return entry
 }
 
+func convPageTitle(kind convPageKind) string {
+	switch kind {
+	case convPageURLs:
+		return "URLs"
+	case convPageImages:
+		return "Images"
+	case convPageChanges:
+		return "Changes"
+	case convPageFiles:
+		return "Files"
+	default:
+		return "Conversation"
+	}
+}
+
+func (a *App) renderConvPageBrowser() string {
+	if a.convPage == convPageNone {
+		return ""
+	}
+	contentH := ContentHeight(a.height)
+	listW := a.conv.split.ListWidth(a.width, a.splitRatio)
+	previewW := a.conv.split.PreviewWidth(a.width, a.splitRatio)
+
+	var left strings.Builder
+	left.WriteString(dimStyle.Render("── "+convPageTitle(a.convPage)+" ──") + "\n\n")
+	if len(a.convPageItems) == 0 {
+		left.WriteString(dimStyle.Render("(no items)"))
+	} else {
+		for i, item := range a.convPageItems {
+			cursor := " "
+			style := dimStyle
+			if i == a.convPageCursor {
+				cursor = ">"
+				style = selectedStyle
+			}
+			label := item.Label
+			if label == "" {
+				label = item.URL
+			}
+			if len(label) > listW-4 {
+				label = label[:max(listW-7, 1)] + "..."
+			}
+			left.WriteString(cursor + " " + style.Render(label) + "\n")
+		}
+	}
+
+	rightContent := dimStyle.Render("(no selection)")
+	if a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
+		item := a.convPageItems[a.convPageCursor]
+		switch a.convPage {
+		case convPageChanges:
+			if a.convPageChangeMap != nil {
+				if ch, ok := a.convPageChangeMap[item.URL]; ok && len(ch.ToolInputs) > 0 {
+					block := session.ContentBlock{Type: "tool_use", ToolName: ch.ToolNames[0], ToolInput: ch.ToolInputs[0]}
+					if diff := toolDiffOutput(block, max(previewW-2, 10)); diff != "" {
+						rightContent = diff
+						break
+					}
+				}
+			}
+			rightContent = item.URL
+		default:
+			rightContent = wrapText(item.URL, max(previewW-2, 10))
+		}
+	}
+
+	leftBox := lipgloss.NewStyle().Width(listW).Height(contentH).Render(left.String())
+	rightBox := lipgloss.NewStyle().
+		Width(previewW).Height(contentH).
+		BorderLeft(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(colorDim).
+		PaddingLeft(1).
+		Render(rightContent)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, rightBox)
+}
+
 func (a *App) openConvImagesPage() (tea.Model, tea.Cmd) {
-	pw := a.conv.split.PreviewWidth(a.width, a.splitRatio)
-	a.setConvPreviewText(a.renderConvImagesPage(pw))
+	a.convPage = convPageImages
+	a.convPageItems = nil
+	for _, e := range a.conv.messages {
+		for _, b := range e.Content {
+			if b.Type == "image" && b.ImagePasteID > 0 {
+				label := b.Text
+				if label == "" {
+					label = "[Image]"
+				}
+				a.convPageItems = append(a.convPageItems, extract.Item{URL: fmt.Sprintf("paste:%d", b.ImagePasteID), Label: fmt.Sprintf("[%s] paste #%d", label, b.ImagePasteID), Category: "image"})
+			}
+		}
+	}
+	a.convPageCursor = 0
 	return a, nil
 }
 
 func (a *App) openConvURLsPage() (tea.Model, tea.Cmd) {
-	pw := a.conv.split.PreviewWidth(a.width, a.splitRatio)
-	a.setConvPreviewText(a.renderConvURLsPage(pw))
+	a.convPage = convPageURLs
+	a.convPageItems = nil
+	seen := make(map[string]bool)
+	for _, m := range a.conv.merged {
+		for _, item := range extract.BlockURLs(m.entry.Content) {
+			if !seen[item.URL] {
+				seen[item.URL] = true
+				a.convPageItems = append(a.convPageItems, item)
+			}
+		}
+	}
+	a.convPageCursor = 0
 	return a, nil
 }
 
 func (a *App) openConvFilesPage() (tea.Model, tea.Cmd) {
-	pw := a.conv.split.PreviewWidth(a.width, a.splitRatio)
-	a.setConvPreviewText(a.renderConvFilesPage(pw))
+	a.convPage = convPageFiles
+	a.convPageItems = nil
+	seen := make(map[string]bool)
+	for _, m := range a.conv.merged {
+		for _, item := range extract.BlockFilePaths(m.entry.Content) {
+			if !seen[item.URL] {
+				seen[item.URL] = true
+				a.convPageItems = append(a.convPageItems, item)
+			}
+		}
+	}
+	a.convPageCursor = 0
 	return a, nil
 }
 
 func (a *App) openConvChangesPage() (tea.Model, tea.Cmd) {
-	pw := a.conv.split.PreviewWidth(a.width, a.splitRatio)
-	a.setConvPreviewText(a.renderConvChangesPage(pw))
+	a.convPage = convPageChanges
+	a.convPageItems = nil
+	a.convPageChangeMap = make(map[string]extract.ChangeItem)
+	seen := make(map[string]bool)
+	for _, m := range a.conv.merged {
+		for _, ch := range extract.BlockChanges(m.entry.Content) {
+			if !seen[ch.Item.URL] {
+				seen[ch.Item.URL] = true
+				a.convPageItems = append(a.convPageItems, extract.Item{URL: ch.Item.URL, Label: ch.Item.URL, Category: "change"})
+				a.convPageChangeMap[ch.Item.URL] = ch
+			}
+		}
+	}
+	a.convPageCursor = 0
 	return a, nil
 }
 
