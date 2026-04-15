@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/remote"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
@@ -1126,6 +1127,14 @@ func (a *App) View() string {
 	// Cross-session search overlays everything
 	if a.searchActive {
 		screen = a.renderSearchView()
+	}
+
+	// Kitty inline image layer: draw over the tooltip area when a focused
+	// image artifact has a cached file and the terminal supports it.
+	if !a.searchActive && !a.liveInputActive && kitty.Supported() {
+		if imgLayer := a.kittyImageLayer(); imgLayer != "" {
+			screen += imgLayer
+		}
 	}
 
 	return screen

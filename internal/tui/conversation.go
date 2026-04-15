@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -1623,6 +1624,39 @@ func (a *App) focusedArtifactTooltip(sp *SplitPane, width int) string {
 		}
 	}
 	return ""
+}
+
+// kittyImageLayer returns Kitty graphics escape sequences to draw an inline
+// image over the tooltip area when a focused image artifact has a cached file.
+// Returns empty string if no image should be drawn.
+func (a *App) kittyImageLayer() string {
+	if a.state != viewConversation {
+		return ""
+	}
+	sp := &a.conv.split
+	if !sp.Focus || !sp.Show || sp.Folds == nil {
+		return ""
+	}
+	bc := sp.Folds.BlockCursor
+	if bc < 0 || bc >= len(sp.Folds.Entry.Content) {
+		return ""
+	}
+	block := sp.Folds.Entry.Content[bc]
+	if block.Type != "image" || block.ImagePasteID <= 0 {
+		return ""
+	}
+	cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
+	if cachePath == "" {
+		return ""
+	}
+	// Draw in the tooltip area: top-left region of the screen
+	// Reserve reasonable cell dimensions for the image
+	cols := min(a.width/3, 40)
+	rows := min(ContentHeight(a.height)/2, 20)
+	if cols < 10 || rows < 5 {
+		return ""
+	}
+	return kitty.PlaceImage(cachePath, 3, 3, cols, rows)
 }
 
 // renderConvSplit renders the conversation split view.
