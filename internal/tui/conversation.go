@@ -938,8 +938,8 @@ func (a *App) renderConvPageBrowser() string {
 			if label == "" {
 				label = item.URL
 			}
-			if len(label) > listW-4 {
-				label = label[:max(listW-7, 1)] + "..."
+			if lipgloss.Width(label) > listW-4 {
+				label = truncate(label, max(listW-7, 1))
 			}
 			left.WriteString(cursor + " " + style.Render(label) + "\n")
 		}

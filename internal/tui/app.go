@@ -1949,7 +1949,7 @@ func (a *App) renderConvPageActionsHintBox() string {
 		line1 = hl.Render("enter") + d.Render(":edit") + sp + hl.Render("e") + d.Render(":edit")
 		line2 = hl.Render("y") + d.Render(":copy-path")
 	case convPageImages:
-		line1 = hl.Render("enter") + d.Render(":open")
+		line1 = hl.Render("enter") + d.Render(":open") + sp + hl.Render("e") + d.Render(":edit")
 		line2 = hl.Render("y") + d.Render(":copy-path")
 	default:
 		line1 = hl.Render("enter") + d.Render(":open")
