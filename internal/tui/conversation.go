@@ -154,6 +154,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			copyToClipboard(item.URL)
 			a.copiedMsg = "Copied path"
 			return a, nil
+		case "x":
+			a.convPageActionsMenu = true
+			return a, nil
 		}
 		return a, nil
 	}

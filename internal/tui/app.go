@@ -1114,7 +1114,7 @@ func (a *App) View() string {
 	// Conversation artifact page browser
 	if a.state == viewConversation && a.convPage != convPageNone {
 		content = a.renderConvPageBrowser()
-		help = formatHelp("↑↓:nav enter:open esc:back p:page")
+		help = formatHelp("↑↓:nav enter:open x:actions y:copy esc:back p:page")
 	}
 
 	// Block filter hint box floating above help line (conversation preview and full-screen message)
