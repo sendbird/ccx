@@ -1630,9 +1630,26 @@ func (a *App) focusedArtifactTooltip(sp *SplitPane, width int) string {
 	return ""
 }
 
+// kittyImageActive returns true if the focused block is a renderable image.
+func (a *App) kittyImageActive() bool {
+	if a.state != viewConversation || !kitty.Supported() {
+		return false
+	}
+	sp := &a.conv.split
+	if !sp.Focus || !sp.Show || sp.Folds == nil {
+		return false
+	}
+	bc := sp.Folds.BlockCursor
+	if bc < 0 || bc >= len(sp.Folds.Entry.Content) {
+		return false
+	}
+	block := sp.Folds.Entry.Content[bc]
+	return block.Type == "image" && block.ImagePasteID > 0
+}
+
 // kittyImageLayer returns Kitty graphics escape sequences to draw an inline
-// image over the tooltip area when a focused image artifact has a cached file.
-// Returns a clear command if no image should be drawn (to remove stale images).
+// image covering the full left pane area when a focused image artifact has
+// a cached file. Returns a clear command if no image should be drawn.
 func (a *App) kittyImageLayer() string {
 	if a.state != viewConversation {
 		return kitty.ClearImages()
@@ -1651,37 +1668,21 @@ func (a *App) kittyImageLayer() string {
 	}
 	cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
 	if cachePath == "" {
-		// Extract on focus — intentional user action
 		cachePath = a.resolveImagePath(block.ImagePasteID)
 	}
 	if cachePath == "" {
 		return kitty.ClearImages()
 	}
 
-	// Match tooltip position logic from overlayTooltip():
-	// tooltip Y = visibleIdx + 1 (title bar offset), clamped to screen
-	// tooltip X = column 2
-	// Image goes inside the tooltip box: skip border + header text lines
+	// Use the full left pane area for the image
+	listW := sp.ListWidth(a.width, a.splitRatio)
 	contentH := ContentHeight(a.height)
-	perPage := max(a.convList.Paginator.PerPage, 1)
-	visibleIdx := a.convList.Index() % perPage
-	tooltipY := visibleIdx + 1 // same as overlayTooltip
-
-	// Tooltip box has ~6 lines of text header before image area
-	// (border + "Image" + label + blank + paste# + path)
-	imageY := tooltipY + 7
-	imageX := 5 // column 2 + border + padding
-
-	// Size: fit in left half, reasonable height
-	cols := min(a.width/3, 40)
-	rows := min(contentH/3, 15)
+	imageY := 2 // after title bar
+	imageX := 1
+	cols := listW
+	rows := contentH
 	if cols < 10 || rows < 4 {
 		return kitty.ClearImages()
-	}
-
-	// Clamp so image doesn't overflow screen bottom
-	if imageY+rows > a.height-2 {
-		imageY = max(a.height-2-rows, 2)
 	}
 
 	return kitty.ClearImages() + kitty.PlaceImage(cachePath, imageY, imageX, cols, rows)
@@ -1694,7 +1695,8 @@ func (a *App) renderConvSplit() string {
 
 	// Show tooltip for selected item when list is focused and tooltip is on.
 	// When preview is focused, prefer a tooltip for the focused artifact/block.
-	if sp.Focus && sp.Show {
+	// Skip text tooltip for image blocks when Kitty rendering is active.
+	if sp.Focus && sp.Show && !a.kittyImageActive() {
 		if tooltip := a.focusedArtifactTooltip(sp, a.width); tooltip != "" {
 			contentH := ContentHeight(a.height)
 			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage, a.convTooltipScroll)
