@@ -1628,35 +1628,43 @@ func (a *App) focusedArtifactTooltip(sp *SplitPane, width int) string {
 
 // kittyImageLayer returns Kitty graphics escape sequences to draw an inline
 // image over the tooltip area when a focused image artifact has a cached file.
-// Returns empty string if no image should be drawn.
+// Returns a clear command if no image should be drawn (to remove stale images).
 func (a *App) kittyImageLayer() string {
 	if a.state != viewConversation {
-		return ""
+		return kitty.ClearImages()
 	}
 	sp := &a.conv.split
 	if !sp.Focus || !sp.Show || sp.Folds == nil {
-		return ""
+		return kitty.ClearImages()
 	}
 	bc := sp.Folds.BlockCursor
 	if bc < 0 || bc >= len(sp.Folds.Entry.Content) {
-		return ""
+		return kitty.ClearImages()
 	}
 	block := sp.Folds.Entry.Content[bc]
 	if block.Type != "image" || block.ImagePasteID <= 0 {
-		return ""
+		return kitty.ClearImages()
 	}
 	cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
 	if cachePath == "" {
-		return ""
+		return kitty.ClearImages()
 	}
-	// Draw in the tooltip area: top-left region of the screen
-	// Reserve reasonable cell dimensions for the image
+	// Position image inside the tooltip area on the left side.
+	// Tooltip starts at column 2, row derived from cursor position.
+	contentH := ContentHeight(a.height)
+	perPage := max(a.convList.Paginator.PerPage, 1)
+	visibleIdx := a.convList.Index() % perPage
+	tooltipY := visibleIdx + 2 // +1 for title bar, +1 for border
 	cols := min(a.width/3, 40)
-	rows := min(ContentHeight(a.height)/2, 20)
+	rows := min(contentH/2, 20)
 	if cols < 10 || rows < 5 {
-		return ""
+		return kitty.ClearImages()
 	}
-	return kitty.PlaceImage(cachePath, 3, 3, cols, rows)
+	// Clamp so image doesn't overflow screen
+	if tooltipY+rows > a.height-2 {
+		tooltipY = max(a.height-2-rows, 2)
+	}
+	return kitty.ClearImages() + kitty.PlaceImage(cachePath, tooltipY, 3, cols, rows)
 }
 
 // renderConvSplit renders the conversation split view.

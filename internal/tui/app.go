@@ -1129,12 +1129,9 @@ func (a *App) View() string {
 		screen = a.renderSearchView()
 	}
 
-	// Kitty inline image layer: draw over the tooltip area when a focused
-	// image artifact has a cached file and the terminal supports it.
-	if !a.searchActive && !a.liveInputActive && kitty.Supported() {
-		if imgLayer := a.kittyImageLayer(); imgLayer != "" {
-			screen += imgLayer
-		}
+	// Kitty inline image layer: draw or clear images each frame.
+	if kitty.Supported() {
+		screen += a.kittyImageLayer()
 	}
 
 	return screen
@@ -2379,7 +2376,7 @@ func (a *App) bulkDelete(selected []session.Session) (tea.Model, tea.Cmd) {
 	a.sessions = remaining
 	if a.hasFilterApplied() {
 		a.sessionList.ResetFilter()
-			a.config.SearchQuery = ""
+		a.config.SearchQuery = ""
 	}
 	items := buildGroupedItems(remaining, a.sessGroupMode)
 	a.sessionList.SetItems(items)
