@@ -125,9 +125,13 @@ assistant: "I recommend" -deprecated  # Complex combination
 Drill into any session to read the full conversation.
 
 - **Split-pane preview** (`Tab`/`→`) — foldable message detail with three detail levels:
-  - **Text** — text blocks only
-  - **Tool** — text + tool blocks, hooks hidden
-  - **Hook** — text + tool blocks + full hook details
+  - **Compact** — text blocks only
+  - **Standard** — text + per-turn artifact list (images, files, changes, URLs)
+  - **Verbose** — text + tool blocks + full hook details
+- **Kitty image preview** — inline image rendering in the left pane for Kitty-compatible terminals (kitty, WezTerm, ghostty). Aspect-ratio-preserving, auto-detected inside tmux.
+
+![Kitty image preview](docs/gifs/08-kitty-image-preview.png)
+
 - **Block navigation** (`↑`/`↓`) — navigate text, tool calls, and results
 - **Fold/unfold** (`←`/`→`, `f`/`F`) — collapse/expand content blocks
 - **System tag folding** — `<system-reminder>`, `<task-notification>`, `<available-deferred-tools>`, etc. are folded by default, expandable on demand
