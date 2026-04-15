@@ -1664,13 +1664,18 @@ func (a *App) kittyImageLayer() string {
 		return kitty.ClearImages()
 	}
 
-	// Use the full left pane area for the image — from column 1 to the split border
+	// Use the full left pane area, preserving image aspect ratio
 	listW := sp.ListWidth(a.width, a.splitRatio)
 	contentH := ContentHeight(a.height)
-	imageY := 2 // after title bar
+	maxCols := max(listW-1, 10)
+	maxRows := max(contentH-1, 4)
+
+	imgW, imgH := kitty.ImageSize(cachePath)
+	cols, rows := kitty.FitSize(imgW, imgH, maxCols, maxRows)
+
+	// Center vertically in the pane
+	imageY := 2 + (maxRows-rows)/2
 	imageX := 1
-	cols := max(listW-1, 10)
-	rows := max(contentH-1, 4)
 
 	return kitty.ClearImages() + kitty.PlaceImage(cachePath, imageY, imageX, cols, rows)
 }

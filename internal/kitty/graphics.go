@@ -3,6 +3,10 @@ package kitty
 import (
 	"encoding/base64"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"os"
 	"os/exec"
 	"strings"
@@ -78,6 +82,57 @@ func detectKittyViaTmux() bool {
 		}
 	}
 	return false
+}
+
+// ImageSize returns the pixel dimensions of an image file.
+// Returns (0, 0) if the file can't be read or decoded.
+func ImageSize(path string) (width, height int) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
+// FitSize computes cell dimensions that fit within maxCols x maxRows
+// while preserving the image's aspect ratio.
+// Assumes ~2:1 cell aspect ratio (cells are roughly twice as tall as wide).
+func FitSize(imgW, imgH, maxCols, maxRows int) (cols, rows int) {
+	if imgW <= 0 || imgH <= 0 || maxCols <= 0 || maxRows <= 0 {
+		return maxCols, maxRows
+	}
+	// Cell aspect: each cell is ~2x taller than wide in pixels
+	// So 1 row ≈ 2 cols in pixel height
+	aspectW := float64(imgW)
+	aspectH := float64(imgH) / 2.0 // convert pixel height to cell-equivalent width
+
+	scaleW := float64(maxCols) / aspectW
+	scaleH := float64(maxRows) / aspectH
+	scale := scaleW
+	if scaleH < scale {
+		scale = scaleH
+	}
+
+	cols = int(aspectW * scale)
+	rows = int(aspectH * scale)
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	if cols > maxCols {
+		cols = maxCols
+	}
+	if rows > maxRows {
+		rows = maxRows
+	}
+	return cols, rows
 }
 
 // DisplayImage returns Kitty graphics protocol escape sequences to display
