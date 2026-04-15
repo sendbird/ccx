@@ -1937,10 +1937,25 @@ func (a *App) renderConvPageActionsHintBox() string {
 	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	d := dimStyle
 	sp := "  "
-	line1 := hl.Render("enter") + d.Render(":open") + sp + hl.Render("e") + d.Render(":edit")
-	line2 := hl.Render("o") + d.Render(":open-url") + sp + hl.Render("y") + d.Render(":copy-path")
-	line3 := hl.Render("esc") + d.Render(":cancel")
-	body := strings.Join([]string{line1, line2, line3}, "\n")
+	var line1, line2 string
+	switch a.convPage {
+	case convPageURLs:
+		line1 = hl.Render("enter") + d.Render(":open") + sp + hl.Render("o") + d.Render(":open")
+		line2 = hl.Render("y") + d.Render(":copy-path")
+	case convPageFiles:
+		line1 = hl.Render("enter") + d.Render(":edit") + sp + hl.Render("e") + d.Render(":edit")
+		line2 = hl.Render("y") + d.Render(":copy-path")
+	case convPageChanges:
+		line1 = hl.Render("enter") + d.Render(":edit") + sp + hl.Render("e") + d.Render(":edit")
+		line2 = hl.Render("y") + d.Render(":copy-path")
+	case convPageImages:
+		line1 = hl.Render("enter") + d.Render(":open")
+		line2 = hl.Render("y") + d.Render(":copy-path")
+	default:
+		line1 = hl.Render("enter") + d.Render(":open")
+		line2 = hl.Render("y") + d.Render(":copy-path")
+	}
+	body := strings.Join([]string{line1, line2, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDim).

@@ -1110,9 +1110,13 @@ func TestConversationPageMenuImagesPage(t *testing.T) {
 	}}
 	app := setupConvApp(t, entries, 160, 40)
 	app.conv.merged = filterConversation(mergeConversationTurns(entries))
-	content := app.renderConvImagesPage(80)
-	if !strings.Contains(content, "Images") {
-		t.Fatalf("expected Images page, got %q", content)
+	m, _ := app.openConvImagesPage()
+	app = m.(*App)
+	if app.convPage != convPageImages {
+		t.Fatal("expected images page to open")
+	}
+	if len(app.convPageItems) != 1 {
+		t.Fatalf("expected 1 image artifact item, got %d", len(app.convPageItems))
 	}
 }
 
