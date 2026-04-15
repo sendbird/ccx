@@ -1939,7 +1939,8 @@ func (a *App) renderConvPageActionsHintBox() string {
 	sp := "  "
 	line1 := hl.Render("enter") + d.Render(":open") + sp + hl.Render("e") + d.Render(":edit")
 	line2 := hl.Render("o") + d.Render(":open-url") + sp + hl.Render("y") + d.Render(":copy-path")
-	body := strings.Join([]string{line1, line2, d.Render("esc:cancel")}, "\n")
+	line3 := hl.Render("esc") + d.Render(":cancel")
+	body := strings.Join([]string{line1, line2, line3}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDim).

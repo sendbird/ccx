@@ -816,20 +816,17 @@ func makeConvPageItem(item extract.Item, ts time.Time, turnPreview, userPrompt s
 }
 
 func convPageItemContext(item convPageItem, width int) string {
-	var sb strings.Builder
+	var sections []string
 	if !item.timestamp.IsZero() {
-		sb.WriteString(dimStyle.Render("Timestamp") + "\n")
-		sb.WriteString(item.timestamp.Format("2006-01-02 15:04:05") + "\n\n")
+		sections = append(sections, dimStyle.Render("Timestamp")+"\n"+item.timestamp.Format("2006-01-02 15:04:05"))
 	}
 	if item.turnPreview != "" {
-		sb.WriteString(dimStyle.Render("Turn") + "\n")
-		sb.WriteString(wrapText(item.turnPreview, width) + "\n\n")
+		sections = append(sections, dimStyle.Render("Turn")+"\n"+wrapText(item.turnPreview, width))
 	}
 	if item.userPrompt != "" {
-		sb.WriteString(dimStyle.Render("Related user prompt") + "\n")
-		sb.WriteString(wrapText(item.userPrompt, width) + "\n")
+		sections = append(sections, dimStyle.Render("Related user prompt")+"\n"+wrapText(item.userPrompt, width))
 	}
-	return sb.String()
+	return strings.Join(sections, "\n\n")
 }
 
 func renderFilePreview(path string, width int) string {
