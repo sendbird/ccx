@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/cli"
+	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
 	"github.com/sendbird/ccx/internal/tui"
@@ -119,6 +120,10 @@ func main() {
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+	// Clear any Kitty inline images before exiting
+	if kitty.Supported() {
+		fmt.Print(kitty.ClearImages())
 	}
 }
 
