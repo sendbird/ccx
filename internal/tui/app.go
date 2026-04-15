@@ -1863,13 +1863,13 @@ func (a *App) renderStatsPageHintBox() string {
 func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "u":
-		return a.openConvURLMenu()
+		return a.openConvURLsPage()
 	case "i":
-		return a, nil
+		return a.openConvImagesPage()
 	case "g":
-		return a.openConvChangesMenu()
+		return a.openConvChangesPage()
 	case "f":
-		return a.openConvFilesMenu()
+		return a.openConvFilesPage()
 	case "o":
 		// back to normal conversation overview
 		a.conv.split.CacheKey = ""

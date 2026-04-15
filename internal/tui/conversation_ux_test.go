@@ -1097,6 +1097,25 @@ func TestConversationPageMenuConsumesSecondKey(t *testing.T) {
 	}
 }
 
+func TestConversationPageMenuImagesPage(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{{
+		Role:      "assistant",
+		Timestamp: base,
+		Content: []session.ContentBlock{{
+			Type:         "image",
+			Text:         "[Image: image/png]",
+			ImagePasteID: 42,
+		}},
+	}}
+	app := setupConvApp(t, entries, 160, 40)
+	app.conv.merged = filterConversation(mergeConversationTurns(entries))
+	content := app.renderConvImagesPage(80)
+	if !strings.Contains(content, "Images") {
+		t.Fatalf("expected Images page, got %q", content)
+	}
+}
+
 func TestBuildStandardEntryIncludesArtifactRows(t *testing.T) {
 	entry := session.Entry{
 		Role: "assistant",
