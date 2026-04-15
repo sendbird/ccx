@@ -103,13 +103,38 @@ func ClearImages() string {
 	return wrapForTmux("\x1b_Ga=d;\x1b\\")
 }
 
+// PaneOffset returns the tmux pane's top-left position in the terminal.
+// Returns (0, 0) if not inside tmux or if the query fails.
+func PaneOffset() (top, left int) {
+	if os.Getenv("TMUX") == "" {
+		return 0, 0
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "#{pane_top} #{pane_left}").Output()
+	if err != nil {
+		return 0, 0
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	fmt.Sscanf(parts[0], "%d", &top)
+	fmt.Sscanf(parts[1], "%d", &left)
+	return top, left
+}
+
 // PlaceImage returns escape sequences to move the cursor to (row, col) and
-// then display an image there. Row and col are 1-based terminal coordinates.
+// then display an image there. Row and col are 1-based terminal coordinates
+// relative to the application pane. Inside tmux, coordinates are offset by
+// the pane's position in the terminal.
 func PlaceImage(path string, row, col, cols, rows int) string {
 	if path == "" {
 		return ""
 	}
-	cursor := fmt.Sprintf("\x1b[%d;%dH", row, col)
+	// Offset by tmux pane position so the image lands in the right spot
+	top, left := PaneOffset()
+	absRow := row + top
+	absCol := col + left
+	cursor := fmt.Sprintf("\x1b[%d;%dH", absRow, absCol)
 	img := DisplayImage(path, cols, rows)
 	if img == "" {
 		return ""
