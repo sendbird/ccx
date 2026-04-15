@@ -60,7 +60,7 @@ func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lip
 	imgBadge := ""
 	for _, block := range e.Content {
 		if block.Type == "image" {
-			imgBadge = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#87CEEB")).Render("🖼")
+			imgBadge = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#87CEEB")).Render("▣")
 			break
 		}
 	}

@@ -532,7 +532,7 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 			text := strings.TrimSpace(session.StripXMLTags(block.Text))
 			if text == "[separator]" || strings.HasPrefix(text, "[separator]\n\n") {
 				buf.WriteString(cursorPrefix)
-				buf.WriteString(dimStyle.Render(strings.Repeat("-", max(w-2, 10))) + "\n\n")
+				buf.WriteString(dimStyle.Render(strings.Repeat("-", max(w-3, 10))) + "\n\n")
 				if strings.HasPrefix(text, "[separator]\n\n") {
 					text = strings.TrimPrefix(text, "[separator]\n\n")
 					text = strings.TrimSpace(text)
@@ -542,7 +542,13 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 						}
 						text = formatMarkdownTables(text)
 						wrapped := wrapText(text, max(w-2, 10))
-						buf.WriteString(wrapped + "\n\n")
+						for i, line := range strings.Split(wrapped, "\n") {
+							if i > 0 {
+								buf.WriteString(cursorPrefix)
+							}
+							buf.WriteString(line + "\n")
+						}
+						buf.WriteString("\n")
 					}
 				}
 				break
@@ -662,7 +668,7 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 			buf.WriteString(cursorPrefix)
 			label := block.Text
 			if block.ImagePasteID > 0 {
-				label = fmt.Sprintf("🖼 %s  (paste #%d — Enter to open)", block.Text, block.ImagePasteID)
+				label = fmt.Sprintf("▣ %s  (paste #%d — Enter to open)", block.Text, block.ImagePasteID)
 			}
 			buf.WriteString(dimStyle.Render(label) + "\n\n")
 		}
