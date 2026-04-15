@@ -532,7 +532,7 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 			text := strings.TrimSpace(session.StripXMLTags(block.Text))
 			if text == "[separator]" || strings.HasPrefix(text, "[separator]\n\n") {
 				buf.WriteString(cursorPrefix)
-				buf.WriteString(dimStyle.Render(strings.Repeat("=", max(w-2, 10))) + "\n\n")
+				buf.WriteString(dimStyle.Render(strings.Repeat("-", max(w-2, 10))) + "\n\n")
 				if strings.HasPrefix(text, "[separator]\n\n") {
 					text = strings.TrimPrefix(text, "[separator]\n\n")
 					text = strings.TrimSpace(text)
