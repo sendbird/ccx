@@ -579,6 +579,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		first := a.width == 0 && a.height == 0
 		a.width = msg.Width
 		a.height = msg.Height
+		kitty.InvalidatePaneOffset()
 		cmd := a.resizeAll()
 		// On first size, trigger deferred view init for -view flag or picker jump
 		if first && (a.state != viewSessions || a.config.JumpSession != "") {

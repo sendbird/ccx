@@ -103,23 +103,39 @@ func ClearImages() string {
 	return wrapForTmux("\x1b_Ga=d;\x1b\\")
 }
 
+var (
+	cachedPaneTop  int
+	cachedPaneLeft int
+	paneOffsetOnce sync.Once
+)
+
 // PaneOffset returns the tmux pane's top-left position in the terminal.
 // Returns (0, 0) if not inside tmux or if the query fails.
+// Cached after first call; call InvalidatePaneOffset() on resize.
 func PaneOffset() (top, left int) {
 	if os.Getenv("TMUX") == "" {
 		return 0, 0
 	}
+	paneOffsetOnce.Do(fetchPaneOffset)
+	return cachedPaneTop, cachedPaneLeft
+}
+
+// InvalidatePaneOffset forces re-query of tmux pane position on next call.
+func InvalidatePaneOffset() {
+	paneOffsetOnce = sync.Once{}
+}
+
+func fetchPaneOffset() {
 	out, err := exec.Command("tmux", "display-message", "-p", "#{pane_top} #{pane_left}").Output()
 	if err != nil {
-		return 0, 0
+		return
 	}
 	parts := strings.Fields(strings.TrimSpace(string(out)))
 	if len(parts) != 2 {
-		return 0, 0
+		return
 	}
-	fmt.Sscanf(parts[0], "%d", &top)
-	fmt.Sscanf(parts[1], "%d", &left)
-	return top, left
+	fmt.Sscanf(parts[0], "%d", &cachedPaneTop)
+	fmt.Sscanf(parts[1], "%d", &cachedPaneLeft)
 }
 
 // PlaceImage returns escape sequences to move the cursor to (row, col) and

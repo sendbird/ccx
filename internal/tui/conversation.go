@@ -1599,6 +1599,10 @@ func (a *App) focusedArtifactTooltip(sp *SplitPane, width int) string {
 	switch {
 	case block.Type == "image" && block.ImagePasteID > 0:
 		cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
+		if cachePath == "" {
+			// Extract on focus — this is an intentional user action
+			cachePath = a.resolveImagePath(block.ImagePasteID)
+		}
 		label := block.Text
 		if label == "" {
 			label = "[Image]"
@@ -1606,7 +1610,7 @@ func (a *App) focusedArtifactTooltip(sp *SplitPane, width int) string {
 		if cachePath != "" {
 			return fmt.Sprintf("Image\n\n%s\n\npaste #%d\n%s", label, block.ImagePasteID, cachePath)
 		}
-		return fmt.Sprintf("Image\n\n%s\n\npaste #%d\n(not cached for inline preview)", label, block.ImagePasteID)
+		return fmt.Sprintf("Image\n\n%s\n\npaste #%d\n(image not available)", label, block.ImagePasteID)
 	case len(extract.BlockChanges([]session.ContentBlock{block})) > 0:
 		if diff := toolDiffOutput(block, max(width/2, 20)); diff != "" {
 			return diff
@@ -1646,6 +1650,10 @@ func (a *App) kittyImageLayer() string {
 		return kitty.ClearImages()
 	}
 	cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
+	if cachePath == "" {
+		// Extract on focus — intentional user action
+		cachePath = a.resolveImagePath(block.ImagePasteID)
+	}
 	if cachePath == "" {
 		return kitty.ClearImages()
 	}
