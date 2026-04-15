@@ -139,12 +139,40 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		case "enter":
-			if a.convPage == convPageImages && a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
-				id := strings.TrimPrefix(a.convPageItems[a.convPageCursor].URL, "paste:")
-				var pasteID int
-				fmt.Sscanf(id, "%d", &pasteID)
-				if pasteID > 0 {
-					return a.openCachedImage(pasteID)
+			if a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
+				item := a.convPageItems[a.convPageCursor]
+				switch a.convPage {
+				case convPageImages:
+					id := strings.TrimPrefix(item.URL, "paste:")
+					var pasteID int
+					fmt.Sscanf(id, "%d", &pasteID)
+					if pasteID > 0 {
+						return a.openCachedImage(pasteID)
+					}
+				case convPageFiles, convPageChanges:
+					return a.openInEditor(item.URL)
+				case convPageURLs:
+					if err := extract.OpenInBrowser(item.URL); err == nil {
+						a.copiedMsg = "Opened URL"
+					}
+				}
+			}
+			return a, nil
+		case "e":
+			if a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
+				item := a.convPageItems[a.convPageCursor]
+				if a.convPage == convPageFiles || a.convPage == convPageChanges {
+					return a.openInEditor(item.URL)
+				}
+			}
+			return a, nil
+		case "o":
+			if a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
+				item := a.convPageItems[a.convPageCursor]
+				if a.convPage == convPageURLs {
+					if err := extract.OpenInBrowser(item.URL); err == nil {
+						a.copiedMsg = "Opened URL"
+					}
 				}
 			}
 			return a, nil
