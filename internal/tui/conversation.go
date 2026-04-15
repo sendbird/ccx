@@ -815,22 +815,27 @@ func (a *App) renderConvPageBrowser() string {
 	rightContent := dimStyle.Render("(no selection)")
 	if a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
 		item := a.convPageItems[a.convPageCursor]
+		header := dimStyle.Render("── "+convPageTitle(a.convPage)+" detail ──") + "\n\n"
 		switch a.convPage {
 		case convPageChanges:
 			if a.convPageChangeMap != nil {
 				if ch, ok := a.convPageChangeMap[item.URL]; ok && len(ch.ToolInputs) > 0 {
 					block := session.ContentBlock{Type: "tool_use", ToolName: ch.ToolNames[0], ToolInput: ch.ToolInputs[0]}
 					if diff := toolDiffOutput(block, max(previewW-2, 10)); diff != "" {
-						rightContent = diff
+						rightContent = header + diff
 						break
 					}
 				}
 			}
-			rightContent = item.URL
+			rightContent = header + wrapText(item.URL, max(previewW-2, 10))
 		case convPageImages:
-			rightContent = "Image\n\n" + item.Label
+			rightContent = header + "Image\n\n" + item.Label + "\n\nEnter: open image"
+		case convPageFiles:
+			rightContent = header + "File\n\n" + wrapText(item.URL, max(previewW-2, 10)) + "\n\nEnter/e: open in editor"
+		case convPageURLs:
+			rightContent = header + "URL\n\n" + wrapText(item.URL, max(previewW-2, 10)) + "\n\nEnter/o: open in browser"
 		default:
-			rightContent = wrapText(item.URL, max(previewW-2, 10))
+			rightContent = header + wrapText(item.URL, max(previewW-2, 10))
 		}
 	}
 
