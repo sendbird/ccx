@@ -634,6 +634,13 @@ func (a *App) updateConvPreview() {
 		return
 	}
 
+	baseKey := convPreviewBaseKey(item)
+	oldCacheKey := sp.CacheKey
+	if item.kind == convAgent && oldCacheKey != "" && strings.HasPrefix(oldCacheKey, baseKey+":") {
+		debugLog.Printf("updateConvPreview: CACHE HIT key=%q (agent)", oldCacheKey)
+		return
+	}
+
 	var entry session.Entry
 	switch item.kind {
 	case convMsg:
@@ -686,14 +693,12 @@ func (a *App) updateConvPreview() {
 		}
 	}
 
-	baseKey := convPreviewBaseKey(item)
 	cacheKey := fmt.Sprintf("%s:%d", baseKey, len(entry.Content))
 	if cacheKey == sp.CacheKey {
 		debugLog.Printf("updateConvPreview: CACHE HIT key=%q", cacheKey)
 		return
 	}
 
-	oldCacheKey := sp.CacheKey
 	isNewEntry := oldCacheKey == "" || !strings.HasPrefix(oldCacheKey, baseKey+":")
 
 	if isNewEntry {
