@@ -130,6 +130,14 @@ const (
 	convPageFiles
 )
 
+type convPageItem struct {
+	extract.Item
+	timestamp    time.Time
+	turnPreview  string
+	userPrompt   string
+	imagePasteID int
+}
+
 type App struct {
 	state  viewState
 	width  int
@@ -194,9 +202,11 @@ type App struct {
 	statsPageMenu      bool // "p" page jump popup
 	convPageMenu       bool // conversation page jump popup
 	convPage           convPageKind
-	convPageItems      []extract.Item
+	convPageItems      []convPageItem
 	convPageCursor     int
 	convPageChangeMap  map[string]extract.ChangeItem
+	// Conversation artifact browser actions menu
+	convPageActionsMenu bool
 
 	// Session preview mode
 	sessPreviewMode    sessPreview
@@ -1094,10 +1104,17 @@ func (a *App) View() string {
 		help = formatHelp("p:page — pick a page")
 	}
 
+	// Conversation artifact browser actions menu
+	if a.convPageActionsMenu && a.state == viewConversation && a.convPage != convPageNone {
+		hintBox := a.renderConvPageActionsHintBox()
+		content = placeHintBox(content, hintBox)
+		help = formatHelp("x:actions — pick an action")
+	}
+
 	// Conversation artifact page browser
 	if a.state == viewConversation && a.convPage != convPageNone {
 		content = a.renderConvPageBrowser()
-		help = formatHelp("↑↓:nav enter:open esc:back")
+		help = formatHelp("↑↓:nav enter:open esc:back p:page")
 	}
 
 	// Block filter hint box floating above help line (conversation preview and full-screen message)
@@ -1909,6 +1926,20 @@ func (a *App) renderConvPageHintBox() string {
 	line3 := hl.Render("o") + d.Render(":overview")
 
 	body := strings.Join([]string{line1, line2, line3, d.Render("esc:cancel")}, "\n")
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1)
+	return boxStyle.Render(body)
+}
+
+func (a *App) renderConvPageActionsHintBox() string {
+	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	d := dimStyle
+	sp := "  "
+	line1 := hl.Render("enter") + d.Render(":open") + sp + hl.Render("e") + d.Render(":edit")
+	line2 := hl.Render("o") + d.Render(":open-url") + sp + hl.Render("y") + d.Render(":copy-path")
+	body := strings.Join([]string{line1, line2, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDim).

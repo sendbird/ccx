@@ -112,6 +112,52 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	sp := &a.conv.split
 	key := msg.String()
 
+	// Artifact page actions menu
+	if a.convPageActionsMenu {
+		a.convPageActionsMenu = false
+		if a.convPageCursor < 0 || a.convPageCursor >= len(a.convPageItems) {
+			return a, nil
+		}
+		item := a.convPageItems[a.convPageCursor]
+		switch key {
+		case "enter":
+			if a.convPage == convPageImages {
+				id := strings.TrimPrefix(item.URL, "paste:")
+				var pasteID int
+				fmt.Sscanf(id, "%d", &pasteID)
+				if pasteID > 0 {
+					return a.openCachedImage(pasteID)
+				}
+			}
+			if a.convPage == convPageFiles || a.convPage == convPageChanges {
+				return a.openInEditor(item.URL)
+			}
+			if a.convPage == convPageURLs {
+				if err := extract.OpenInBrowser(item.URL); err == nil {
+					a.copiedMsg = "Opened URL"
+				}
+			}
+			return a, nil
+		case "e":
+			if a.convPage == convPageFiles || a.convPage == convPageChanges {
+				return a.openInEditor(item.URL)
+			}
+			return a, nil
+		case "o":
+			if a.convPage == convPageURLs {
+				if err := extract.OpenInBrowser(item.URL); err == nil {
+					a.copiedMsg = "Opened URL"
+				}
+			}
+			return a, nil
+		case "y":
+			copyToClipboard(item.URL)
+			a.copiedMsg = "Copied path"
+			return a, nil
+		}
+		return a, nil
+	}
+
 	// Page jump menu: second key picks the page
 	if a.convPageMenu {
 		a.convPageMenu = false
@@ -166,15 +212,8 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return a, nil
-		case "o":
-			if a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
-				item := a.convPageItems[a.convPageCursor]
-				if a.convPage == convPageURLs {
-					if err := extract.OpenInBrowser(item.URL); err == nil {
-						a.copiedMsg = "Opened URL"
-					}
-				}
-			}
+		case "x":
+			a.convPageActionsMenu = true
 			return a, nil
 		}
 	}
@@ -766,6 +805,52 @@ func buildStandardEntry(entry session.Entry) session.Entry {
 	return entry
 }
 
+func makeConvPageItem(item extract.Item, ts time.Time, turnPreview, userPrompt string, imagePasteID int) convPageItem {
+	return convPageItem{
+		Item:         item,
+		timestamp:    ts,
+		turnPreview:  turnPreview,
+		userPrompt:   userPrompt,
+		imagePasteID: imagePasteID,
+	}
+}
+
+func convPageItemContext(item convPageItem, width int) string {
+	var sb strings.Builder
+	if !item.timestamp.IsZero() {
+		sb.WriteString(dimStyle.Render("Timestamp") + "\n")
+		sb.WriteString(item.timestamp.Format("2006-01-02 15:04:05") + "\n\n")
+	}
+	if item.turnPreview != "" {
+		sb.WriteString(dimStyle.Render("Turn") + "\n")
+		sb.WriteString(wrapText(item.turnPreview, width) + "\n\n")
+	}
+	if item.userPrompt != "" {
+		sb.WriteString(dimStyle.Render("Related user prompt") + "\n")
+		sb.WriteString(wrapText(item.userPrompt, width) + "\n")
+	}
+	return sb.String()
+}
+
+func renderFilePreview(path string, width int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return dimStyle.Render("(file preview unavailable)")
+	}
+	const maxBytes = 4000
+	text := string(data)
+	truncated := false
+	if len(text) > maxBytes {
+		text = text[:maxBytes]
+		truncated = true
+	}
+	out := wrapText(text, width)
+	if truncated {
+		out += "\n\n" + dimStyle.Render("(truncated)")
+	}
+	return out
+}
+
 func convPageTitle(kind convPageKind) string {
 	switch kind {
 	case convPageURLs:
@@ -816,26 +901,41 @@ func (a *App) renderConvPageBrowser() string {
 	if a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
 		item := a.convPageItems[a.convPageCursor]
 		header := dimStyle.Render("── "+convPageTitle(a.convPage)+" detail ──") + "\n\n"
+		context := convPageItemContext(item, max(previewW-2, 10))
 		switch a.convPage {
 		case convPageChanges:
 			if a.convPageChangeMap != nil {
 				if ch, ok := a.convPageChangeMap[item.URL]; ok && len(ch.ToolInputs) > 0 {
 					block := session.ContentBlock{Type: "tool_use", ToolName: ch.ToolNames[0], ToolInput: ch.ToolInputs[0]}
 					if diff := toolDiffOutput(block, max(previewW-2, 10)); diff != "" {
-						rightContent = header + diff
+						rightContent = header + diff + "\n\n" + context
 						break
 					}
 				}
 			}
-			rightContent = header + wrapText(item.URL, max(previewW-2, 10))
+			rightContent = header + wrapText(item.URL, max(previewW-2, 10)) + "\n\n" + context
 		case convPageImages:
-			rightContent = header + "Image\n\n" + item.Label + "\n\nEnter: open image"
+			id := strings.TrimPrefix(item.URL, "paste:")
+			var pasteID int
+			fmt.Sscanf(id, "%d", &pasteID)
+			cachePath := ""
+			if pasteID > 0 {
+				cachePath = session.ImageCachePath(homeDir(), a.currentSess.ID, pasteID)
+			}
+			rightContent = header + "Image\n\n" + item.Label
+			if pasteID > 0 {
+				rightContent += fmt.Sprintf("\n\npaste #%d", pasteID)
+			}
+			if cachePath != "" {
+				rightContent += "\n\n" + wrapText(cachePath, max(previewW-2, 10))
+			}
+			rightContent += "\n\n" + context
 		case convPageFiles:
-			rightContent = header + "File\n\n" + wrapText(item.URL, max(previewW-2, 10)) + "\n\nEnter/e: open in editor"
+			rightContent = header + "File\n\n" + renderFilePreview(item.URL, max(previewW-2, 10)) + "\n\n" + context
 		case convPageURLs:
-			rightContent = header + "URL\n\n" + wrapText(item.URL, max(previewW-2, 10)) + "\n\nEnter/o: open in browser"
+			rightContent = header + "URL\n\n" + wrapText(item.URL, max(previewW-2, 10)) + "\n\n" + context
 		default:
-			rightContent = header + wrapText(item.URL, max(previewW-2, 10))
+			rightContent = header + wrapText(item.URL, max(previewW-2, 10)) + "\n\n" + context
 		}
 	}
 
@@ -850,17 +950,35 @@ func (a *App) renderConvPageBrowser() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, rightBox)
 }
 
+func relatedUserPrompt(messages []session.Entry, idx int) string {
+	for i := idx - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			text := entryFullText(messages[i])
+			if text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
 func (a *App) openConvImagesPage() (tea.Model, tea.Cmd) {
 	a.convPage = convPageImages
 	a.convPageItems = nil
-	for _, e := range a.conv.messages {
+	for idx, e := range a.conv.messages {
 		for _, b := range e.Content {
 			if b.Type == "image" && b.ImagePasteID > 0 {
 				label := b.Text
 				if label == "" {
 					label = "[Image]"
 				}
-				a.convPageItems = append(a.convPageItems, extract.Item{URL: fmt.Sprintf("paste:%d", b.ImagePasteID), Label: fmt.Sprintf("[%s] paste #%d", label, b.ImagePasteID), Category: "image"})
+				a.convPageItems = append(a.convPageItems, makeConvPageItem(
+					extract.Item{URL: fmt.Sprintf("paste:%d", b.ImagePasteID), Label: fmt.Sprintf("[%s] paste #%d", label, b.ImagePasteID), Category: "image"},
+					e.Timestamp,
+					label,
+					relatedUserPrompt(a.conv.messages, idx),
+					b.ImagePasteID,
+				))
 			}
 		}
 	}
@@ -872,11 +990,11 @@ func (a *App) openConvURLsPage() (tea.Model, tea.Cmd) {
 	a.convPage = convPageURLs
 	a.convPageItems = nil
 	seen := make(map[string]bool)
-	for _, m := range a.conv.merged {
+	for idx, m := range a.conv.merged {
 		for _, item := range extract.BlockURLs(m.entry.Content) {
 			if !seen[item.URL] {
 				seen[item.URL] = true
-				a.convPageItems = append(a.convPageItems, item)
+				a.convPageItems = append(a.convPageItems, makeConvPageItem(item, m.entry.Timestamp, convMsgPreview(m.entry, 80), relatedUserPrompt(a.conv.messages, idx), 0))
 			}
 		}
 	}
@@ -888,11 +1006,11 @@ func (a *App) openConvFilesPage() (tea.Model, tea.Cmd) {
 	a.convPage = convPageFiles
 	a.convPageItems = nil
 	seen := make(map[string]bool)
-	for _, m := range a.conv.merged {
+	for idx, m := range a.conv.merged {
 		for _, item := range extract.BlockFilePaths(m.entry.Content) {
 			if !seen[item.URL] {
 				seen[item.URL] = true
-				a.convPageItems = append(a.convPageItems, item)
+				a.convPageItems = append(a.convPageItems, makeConvPageItem(item, m.entry.Timestamp, convMsgPreview(m.entry, 80), relatedUserPrompt(a.conv.messages, idx), 0))
 			}
 		}
 	}
@@ -905,11 +1023,12 @@ func (a *App) openConvChangesPage() (tea.Model, tea.Cmd) {
 	a.convPageItems = nil
 	a.convPageChangeMap = make(map[string]extract.ChangeItem)
 	seen := make(map[string]bool)
-	for _, m := range a.conv.merged {
+	for idx, m := range a.conv.merged {
 		for _, ch := range extract.BlockChanges(m.entry.Content) {
 			if !seen[ch.Item.URL] {
 				seen[ch.Item.URL] = true
-				a.convPageItems = append(a.convPageItems, extract.Item{URL: ch.Item.URL, Label: ch.Item.URL, Category: "change"})
+				item := extract.Item{URL: ch.Item.URL, Label: ch.Item.URL, Category: "change"}
+				a.convPageItems = append(a.convPageItems, makeConvPageItem(item, m.entry.Timestamp, convMsgPreview(m.entry, 80), relatedUserPrompt(a.conv.messages, idx), 0))
 				a.convPageChangeMap[ch.Item.URL] = ch
 			}
 		}

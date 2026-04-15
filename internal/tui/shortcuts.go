@@ -171,7 +171,7 @@ func (a *App) currentFocusSide() string {
 // isInOverlay returns true when a popup menu or overlay is active.
 func (a *App) isInOverlay() bool {
 	return a.actionsMenu || a.editMenu || a.convActionsMenu ||
-		a.viewsMenu || a.statsPageMenu || a.convPageMenu || a.showHelp
+		a.viewsMenu || a.statsPageMenu || a.convPageMenu || a.convPageActionsMenu || a.showHelp
 }
 
 // shortcutHint returns a compact hint string showing active shortcuts
