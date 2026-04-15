@@ -530,6 +530,11 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 		switch block.Type {
 		case "text":
 			text := strings.TrimSpace(session.StripXMLTags(block.Text))
+			if text == "[separator]" {
+				buf.WriteString(cursorPrefix)
+				buf.WriteString(dimStyle.Render(strings.Repeat("=", max(w-2, 10))) + "\n\n")
+				break
+			}
 			if text != "" && !isSystemText(text) {
 				buf.WriteString(cursorPrefix)
 				if formatted {
