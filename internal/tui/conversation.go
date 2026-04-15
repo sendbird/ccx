@@ -1649,22 +1649,34 @@ func (a *App) kittyImageLayer() string {
 	if cachePath == "" {
 		return kitty.ClearImages()
 	}
-	// Position image inside the tooltip area on the left side.
-	// Tooltip starts at column 2, row derived from cursor position.
+
+	// Match tooltip position logic from overlayTooltip():
+	// tooltip Y = visibleIdx + 1 (title bar offset), clamped to screen
+	// tooltip X = column 2
+	// Image goes inside the tooltip box: skip border + header text lines
 	contentH := ContentHeight(a.height)
 	perPage := max(a.convList.Paginator.PerPage, 1)
 	visibleIdx := a.convList.Index() % perPage
-	tooltipY := visibleIdx + 2 // +1 for title bar, +1 for border
+	tooltipY := visibleIdx + 1 // same as overlayTooltip
+
+	// Tooltip box has ~6 lines of text header before image area
+	// (border + "Image" + label + blank + paste# + path)
+	imageY := tooltipY + 7
+	imageX := 5 // column 2 + border + padding
+
+	// Size: fit in left half, reasonable height
 	cols := min(a.width/3, 40)
-	rows := min(contentH/2, 20)
-	if cols < 10 || rows < 5 {
+	rows := min(contentH/3, 15)
+	if cols < 10 || rows < 4 {
 		return kitty.ClearImages()
 	}
-	// Clamp so image doesn't overflow screen
-	if tooltipY+rows > a.height-2 {
-		tooltipY = max(a.height-2-rows, 2)
+
+	// Clamp so image doesn't overflow screen bottom
+	if imageY+rows > a.height-2 {
+		imageY = max(a.height-2-rows, 2)
 	}
-	return kitty.ClearImages() + kitty.PlaceImage(cachePath, tooltipY, 3, cols, rows)
+
+	return kitty.ClearImages() + kitty.PlaceImage(cachePath, imageY, imageX, cols, rows)
 }
 
 // renderConvSplit renders the conversation split view.
