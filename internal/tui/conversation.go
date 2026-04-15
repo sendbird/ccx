@@ -799,6 +799,8 @@ func (a *App) renderConvPageBrowser() string {
 				}
 			}
 			rightContent = item.URL
+		case convPageImages:
+			rightContent = "Image\n\n" + item.Label
 		default:
 			rightContent = wrapText(item.URL, max(previewW-2, 10))
 		}
@@ -1907,6 +1909,39 @@ func (a *App) kittyImageActive() bool {
 // image covering the full left pane area when a focused image artifact has
 // a cached file. Returns a clear command if no image should be drawn.
 func (a *App) kittyImageLayer() string {
+	if !kitty.Supported() || !a.termFocused || a.state != viewConversation {
+		return kitty.ClearImages()
+	}
+
+	// Images page: render into the right detail pane
+	if a.convPage == convPageImages && a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
+		item := a.convPageItems[a.convPageCursor]
+		id := strings.TrimPrefix(item.URL, "paste:")
+		var pasteID int
+		fmt.Sscanf(id, "%d", &pasteID)
+		if pasteID > 0 {
+			cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, pasteID)
+			if cachePath == "" {
+				cachePath = a.resolveImagePath(pasteID)
+			}
+			if cachePath != "" {
+				sp := &a.conv.split
+				listW := sp.ListWidth(a.width, a.splitRatio)
+				previewW := sp.PreviewWidth(a.width, a.splitRatio)
+				contentH := ContentHeight(a.height)
+				maxCols := max(previewW-2, 10)
+				maxRows := max(contentH-1, 4)
+				imgW, imgH := kitty.ImageSize(cachePath)
+				cols, rows := kitty.FitSize(imgW, imgH, maxCols, maxRows)
+				imageY := 2 + (maxRows-rows)/2
+				imageX := listW + 2 // after split border + padding
+				return kitty.ClearImages() + kitty.PlaceImage(cachePath, imageY, imageX, cols, rows)
+			}
+		}
+		return kitty.ClearImages()
+	}
+
+	// Default: focused image artifact in normal conversation view → left pane
 	if !a.kittyImageActive() {
 		return kitty.ClearImages()
 	}
@@ -1920,19 +1955,14 @@ func (a *App) kittyImageLayer() string {
 		return kitty.ClearImages()
 	}
 
-	// Use the full left pane area, preserving image aspect ratio
 	listW := sp.ListWidth(a.width, a.splitRatio)
 	contentH := ContentHeight(a.height)
 	maxCols := max(listW-1, 10)
 	maxRows := max(contentH-1, 4)
-
 	imgW, imgH := kitty.ImageSize(cachePath)
 	cols, rows := kitty.FitSize(imgW, imgH, maxCols, maxRows)
-
-	// Center vertically in the pane
 	imageY := 2 + (maxRows-rows)/2
 	imageX := 1
-
 	return kitty.ClearImages() + kitty.PlaceImage(cachePath, imageY, imageX, cols, rows)
 }
 
