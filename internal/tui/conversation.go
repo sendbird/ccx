@@ -108,6 +108,80 @@ func (a *App) pauseLiveTail() {
 }
 
 // handleConversationKeys handles keyboard input for the conversation split view.
+func (a *App) convPageSelectedItem() *convPageItem {
+	if a.convPageCursor < 0 || a.convPageCursor >= len(a.convPageItems) {
+		return nil
+	}
+	return &a.convPageItems[a.convPageCursor]
+}
+
+func (a *App) convPageItemResolvedTarget(item convPageItem) string {
+	if a.convPage == convPageImages {
+		if item.URL != "" && !strings.HasPrefix(item.URL, "paste:") {
+			return item.URL
+		}
+		if item.imagePasteID > 0 {
+			return a.resolveImagePath(item.imagePasteID)
+		}
+	}
+	return item.URL
+}
+
+func (a *App) convPageOpenSelected() (tea.Model, tea.Cmd) {
+	item := a.convPageSelectedItem()
+	if item == nil {
+		return a, nil
+	}
+	switch a.convPage {
+	case convPageImages:
+		if item.imagePasteID > 0 {
+			return a.openCachedImage(item.imagePasteID)
+		}
+	case convPageFiles, convPageChanges:
+		target := a.convPageItemResolvedTarget(*item)
+		if target != "" {
+			return a.openInEditor(target)
+		}
+	case convPageURLs:
+		if item.URL != "" {
+			if err := extract.OpenInBrowser(item.URL); err == nil {
+				a.copiedMsg = "Opened URL"
+			}
+		}
+	}
+	return a, nil
+}
+
+func (a *App) convPageEditSelected() (tea.Model, tea.Cmd) {
+	item := a.convPageSelectedItem()
+	if item == nil {
+		return a, nil
+	}
+	if a.convPage == convPageFiles || a.convPage == convPageChanges || a.convPage == convPageImages {
+		target := a.convPageItemResolvedTarget(*item)
+		if target != "" {
+			return a.openInEditor(target)
+		}
+	}
+	return a, nil
+}
+
+func (a *App) convPageCopySelected() (tea.Model, tea.Cmd) {
+	item := a.convPageSelectedItem()
+	if item == nil {
+		return a, nil
+	}
+	target := item.URL
+	if a.convPage == convPageFiles || a.convPage == convPageChanges || a.convPage == convPageImages {
+		target = a.convPageItemResolvedTarget(*item)
+	}
+	if target != "" {
+		copyToClipboard(target)
+		a.copiedMsg = "Copied path"
+	}
+	return a, nil
+}
+
 func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	sp := &a.conv.split
 	key := msg.String()
@@ -115,45 +189,18 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Artifact page actions menu
 	if a.convPageActionsMenu {
 		a.convPageActionsMenu = false
-		if a.convPageCursor < 0 || a.convPageCursor >= len(a.convPageItems) {
-			return a, nil
-		}
-		item := a.convPageItems[a.convPageCursor]
 		switch key {
 		case "enter":
-			if a.convPage == convPageImages {
-				id := strings.TrimPrefix(item.URL, "paste:")
-				var pasteID int
-				fmt.Sscanf(id, "%d", &pasteID)
-				if pasteID > 0 {
-					return a.openCachedImage(pasteID)
-				}
-			}
-			if a.convPage == convPageFiles || a.convPage == convPageChanges {
-				return a.openInEditor(item.URL)
-			}
-			if a.convPage == convPageURLs {
-				if err := extract.OpenInBrowser(item.URL); err == nil {
-					a.copiedMsg = "Opened URL"
-				}
-			}
-			return a, nil
+			return a.convPageOpenSelected()
 		case "e":
-			if a.convPage == convPageFiles || a.convPage == convPageChanges {
-				return a.openInEditor(item.URL)
-			}
-			return a, nil
+			return a.convPageEditSelected()
 		case "o":
 			if a.convPage == convPageURLs {
-				if err := extract.OpenInBrowser(item.URL); err == nil {
-					a.copiedMsg = "Opened URL"
-				}
+				return a.convPageOpenSelected()
 			}
 			return a, nil
 		case "y":
-			copyToClipboard(item.URL)
-			a.copiedMsg = "Copied path"
-			return a, nil
+			return a.convPageCopySelected()
 		case "x":
 			a.convPageActionsMenu = true
 			return a, nil
