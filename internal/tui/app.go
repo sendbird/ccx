@@ -166,6 +166,7 @@ type App struct {
 	// Live tracking
 	lastMsgLoadTime time.Time
 	liveTail        bool // auto-scroll to latest message on tick
+	termFocused     bool // terminal has focus (for Kitty image cleanup)
 
 	// Mouse state
 	dragResizing   bool
@@ -501,6 +502,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		splitRatio:      35,
 		selectedSet:     make(map[string]bool),
 		hiddenBadges:    make(map[string]bool),
+		termFocused:     true,
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
@@ -585,7 +587,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if first && (a.state != viewSessions || a.config.JumpSession != "") {
 			cmd = tea.Batch(cmd, func() tea.Msg { return initViewMsg{} })
 		}
+		// Enable focus reporting so we get BlurMsg on tmux window switch
+		if first && kitty.Supported() {
+			cmd = tea.Batch(cmd, tea.EnableReportFocus)
+		}
 		return a, cmd
+
+	case tea.BlurMsg:
+		// Terminal lost focus (e.g. tmux window switch) — clear Kitty images
+		a.termFocused = false
+		return a, nil
+
+	case tea.FocusMsg:
+		a.termFocused = true
+		return a, nil
 
 	case initViewMsg:
 		// Jump to a specific session+message (from picker subcommand)

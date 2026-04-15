@@ -1632,7 +1632,7 @@ func (a *App) focusedArtifactTooltip(sp *SplitPane, width int) string {
 
 // kittyImageActive returns true if the focused block is a renderable image.
 func (a *App) kittyImageActive() bool {
-	if a.state != viewConversation || !kitty.Supported() {
+	if a.state != viewConversation || !kitty.Supported() || !a.termFocused {
 		return false
 	}
 	sp := &a.conv.split
@@ -1651,21 +1651,11 @@ func (a *App) kittyImageActive() bool {
 // image covering the full left pane area when a focused image artifact has
 // a cached file. Returns a clear command if no image should be drawn.
 func (a *App) kittyImageLayer() string {
-	if a.state != viewConversation {
+	if !a.kittyImageActive() {
 		return kitty.ClearImages()
 	}
 	sp := &a.conv.split
-	if !sp.Focus || !sp.Show || sp.Folds == nil {
-		return kitty.ClearImages()
-	}
-	bc := sp.Folds.BlockCursor
-	if bc < 0 || bc >= len(sp.Folds.Entry.Content) {
-		return kitty.ClearImages()
-	}
-	block := sp.Folds.Entry.Content[bc]
-	if block.Type != "image" || block.ImagePasteID <= 0 {
-		return kitty.ClearImages()
-	}
+	block := sp.Folds.Entry.Content[sp.Folds.BlockCursor]
 	cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
 	if cachePath == "" {
 		cachePath = a.resolveImagePath(block.ImagePasteID)
@@ -1674,16 +1664,13 @@ func (a *App) kittyImageLayer() string {
 		return kitty.ClearImages()
 	}
 
-	// Use the full left pane area for the image
+	// Use the full left pane area for the image — from column 1 to the split border
 	listW := sp.ListWidth(a.width, a.splitRatio)
 	contentH := ContentHeight(a.height)
 	imageY := 2 // after title bar
 	imageX := 1
-	cols := listW
-	rows := contentH
-	if cols < 10 || rows < 4 {
-		return kitty.ClearImages()
-	}
+	cols := max(listW-1, 10)
+	rows := max(contentH-1, 4)
 
 	return kitty.ClearImages() + kitty.PlaceImage(cachePath, imageY, imageX, cols, rows)
 }
