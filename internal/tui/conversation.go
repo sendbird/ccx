@@ -523,14 +523,7 @@ func (a *App) updateConvPreview() {
 			return
 		}
 		if a.conv.rightPaneMode == previewTool {
-			sp.CacheKey = fmt.Sprintf("standard:%s:%d", convPreviewBaseKey(item), len(entry.Content))
-			sp.SetPreviewContent(renderStandardPreviewContent(entry, max(sp.PreviewWidth(a.width, a.splitRatio)-2, 10)), a.width, a.height, a.splitRatio)
-			sp.Preview.YOffset = 0
-			if sp.Folds != nil {
-				sp.Folds.Entry = session.Entry{}
-				sp.Folds.BlockStarts = nil
-			}
-			return
+			entry = buildStandardEntry(entry)
 		}
 	}
 
@@ -652,49 +645,55 @@ func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
 	}
 }
 
-func renderStandardPreviewContent(entry session.Entry, textW int) string {
-	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	var sb strings.Builder
-	sb.WriteString(renderPreviewHeader(entry, textW))
+func buildStandardEntry(entry session.Entry) session.Entry {
+	blocks := make([]session.ContentBlock, 0, len(entry.Content)+8)
 
+	// Group text chunks with their artifacts per turn
 	chunks := previewTextChunks(entry)
-	if len(chunks) == 0 {
-		sb.WriteString(dimStyle.Render("(no text content)"))
-	} else {
-		for i, chunk := range chunks {
-			if i > 0 {
-				sb.WriteString("\n\n" + dimStyle.Render(strings.Repeat("╌", max(textW, 24))) + "\n\n")
-			}
-			sb.WriteString(wrapText(chunk, textW))
+	for i, chunk := range chunks {
+		if i > 0 {
+			blocks = append(blocks, session.ContentBlock{Type: "system_tag", TagName: "separator", Text: strings.Repeat("╌", 40)})
 		}
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: chunk})
 	}
 
-	var artifactLines []string
+	// Collect artifacts from the entire entry and place them after the text
+	var artifacts []session.ContentBlock
 	for _, b := range entry.Content {
 		if b.Type == "image" {
-			label := b.Text
-			if label == "" {
-				label = "[image]"
-			}
-			artifactLines = append(artifactLines, "[image] "+label)
+			artifacts = append(artifacts, b)
 		}
 	}
 	for _, item := range extract.BlockFilePaths(entry.Content) {
-		artifactLines = append(artifactLines, "[file] "+item.URL)
+		artifacts = append(artifacts, session.ContentBlock{Type: "text", Text: "[file] " + item.URL})
 	}
-	for _, item := range extract.BlockURLs(entry.Content) {
-		artifactLines = append(artifactLines, "[url] "+item.URL)
-	}
-	for _, item := range extract.BlockChanges(entry.Content) {
-		artifactLines = append(artifactLines, "[change] "+item.Item.URL)
-	}
-	if len(artifactLines) > 0 {
-		sb.WriteString("\n\n" + sectionStyle.Render("Artifacts") + "\n")
-		for _, line := range artifactLines {
-			sb.WriteString(dimStyle.Render("  "+line) + "\n")
+	for _, ch := range extract.BlockChanges(entry.Content) {
+		// Keep the original tool_use block so the tooltip can render diffs
+		if len(ch.ToolInputs) > 0 {
+			artifacts = append(artifacts, session.ContentBlock{
+				Type:      "tool_use",
+				ToolName:  ch.ToolNames[0],
+				ToolInput: ch.ToolInputs[0],
+			})
+		} else {
+			artifacts = append(artifacts, session.ContentBlock{Type: "text", Text: "[change] " + ch.Item.URL})
 		}
 	}
-	return sb.String()
+	for _, item := range extract.BlockURLs(entry.Content) {
+		artifacts = append(artifacts, session.ContentBlock{Type: "text", Text: "[url] " + item.URL})
+	}
+
+	if len(artifacts) > 0 {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "Artifacts"})
+		blocks = append(blocks, artifacts...)
+	}
+
+	if len(blocks) == 0 {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no content)"})
+	}
+
+	entry.Content = blocks
+	return entry
 }
 
 func (a *App) setConvPreviewText(content string) {

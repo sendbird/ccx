@@ -1080,7 +1080,7 @@ func TestDefaultFoldsCollapseTools(t *testing.T) {
 // TestLiveTickMsgReachesHandleLiveTailInConvView verifies that liveTickMsg
 // dispatches to handleLiveTail (not refreshLivePreview) when app.state == viewConversation,
 // even if sessPreviewLive and livePreviewSessID are set from a prior session view.
-func TestBuildStandardPreviewEntryIncludesArtifactRows(t *testing.T) {
+func TestBuildStandardEntryIncludesArtifactRows(t *testing.T) {
 	entry := session.Entry{
 		Role: "assistant",
 		Content: []session.ContentBlock{
@@ -1088,12 +1088,16 @@ func TestBuildStandardPreviewEntryIncludesArtifactRows(t *testing.T) {
 			{Type: "tool_use", ToolName: "Read", ToolInput: `{"file_path":"/tmp/x.go"}`},
 		},
 	}
-	content := renderStandardPreviewContent(entry, 80)
-	if !strings.Contains(content, "[file] /tmp/x.go") {
-		t.Fatalf("expected passive file artifact row, got %q", content)
+	preview := buildStandardEntry(entry)
+	found := false
+	for _, b := range preview.Content {
+		if b.Type == "text" && strings.Contains(b.Text, "[file] /tmp/x.go") {
+			found = true
+			break
+		}
 	}
-	if strings.Contains(content, "▸") || strings.Contains(content, "Tool: Read") {
-		t.Fatalf("standard preview should be passive, got %q", content)
+	if !found {
+		t.Fatalf("expected file artifact block, got %#v", preview.Content)
 	}
 }
 
@@ -1112,19 +1116,29 @@ func TestRenderStandardPreviewShowsArtifactSummary(t *testing.T) {
 	}
 	app := setupConvApp(t, entries, 160, 40)
 	app.conv.rightPaneMode = previewTool
+	app.conv.split.CacheKey = ""
 	selectConvItemBy(t, app, func(ci convItem) bool {
 		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
 	})
 	app.updateConvPreview()
-	content := app.conv.split.Preview.View()
-	if !strings.Contains(content, "Artifacts") {
-		t.Fatalf("standard preview should show artifact section, got %q", content)
+	if app.conv.split.Folds == nil || len(app.conv.split.Folds.Entry.Content) == 0 {
+		t.Fatal("expected fold-aware standard preview entry")
 	}
-	if !strings.Contains(content, "[file] /tmp/x.go") {
-		t.Fatalf("standard preview should show passive file artifact row, got %q", content)
+	foundArtifacts := false
+	foundFile := false
+	for _, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "text" && b.Text == "Artifacts" {
+			foundArtifacts = true
+		}
+		if b.Type == "text" && strings.Contains(b.Text, "[file] /tmp/x.go") {
+			foundFile = true
+		}
 	}
-	if strings.Contains(content, "Tool: Read") {
-		t.Fatalf("standard preview should not show raw tool blocks, got %q", content)
+	if !foundArtifacts {
+		t.Fatalf("standard preview should include Artifacts header block")
+	}
+	if !foundFile {
+		t.Fatalf("standard preview should include file artifact block")
 	}
 }
 
