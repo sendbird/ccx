@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 )
@@ -14,14 +15,17 @@ var (
 )
 
 // Supported returns true if the terminal supports Kitty graphics protocol.
-// Checks environment variables and allows explicit opt-in via CCX_KITTY=1.
-// Inside tmux, Kitty env vars are often lost, so the override is essential.
+// Checks environment variables and tmux outer terminal hints.
 // Cached for the session lifetime.
 func Supported() bool {
 	supportedOnce.Do(func() {
 		// Explicit user override
 		if os.Getenv("CCX_KITTY") == "1" {
 			supported = true
+			return
+		}
+		if os.Getenv("CCX_KITTY") == "0" {
+			supported = false
 			return
 		}
 		term := os.Getenv("TERM")
@@ -37,14 +41,43 @@ func Supported() bool {
 		case strings.HasPrefix(term, "xterm-kitty"):
 			supported = true
 		}
-		// Fallback: check Kitty-specific env vars that may survive tmux
+		// Kitty-specific env vars that may survive tmux
 		if !supported {
 			if os.Getenv("KITTY_WINDOW_ID") != "" || os.Getenv("KITTY_PID") != "" {
 				supported = true
 			}
 		}
+		// Inside tmux: check if the outer terminal is Kitty-compatible.
+		// tmux stores the original TERM in its socket environment.
+		if !supported && os.Getenv("TMUX") != "" {
+			supported = detectKittyViaTmux()
+		}
 	})
 	return supported
+}
+
+// detectKittyViaTmux checks tmux's server environment for Kitty indicators.
+func detectKittyViaTmux() bool {
+	out, err := exec.Command("tmux", "show-environment", "-g", "TERM_PROGRAM").Output()
+	if err == nil {
+		val := strings.TrimSpace(string(out))
+		// Format: TERM_PROGRAM=kitty or -TERM_PROGRAM (unset)
+		if strings.HasPrefix(val, "TERM_PROGRAM=") {
+			prog := strings.TrimPrefix(val, "TERM_PROGRAM=")
+			if prog == "kitty" || prog == "WezTerm" || prog == "ghostty" {
+				return true
+			}
+		}
+	}
+	// Also check KITTY_WINDOW_ID in tmux environment
+	out, err = exec.Command("tmux", "show-environment", "-g", "KITTY_WINDOW_ID").Output()
+	if err == nil {
+		val := strings.TrimSpace(string(out))
+		if strings.HasPrefix(val, "KITTY_WINDOW_ID=") {
+			return true
+		}
+	}
+	return false
 }
 
 // DisplayImage returns Kitty graphics protocol escape sequences to display
