@@ -652,7 +652,7 @@ func buildStandardEntry(entry session.Entry) session.Entry {
 	chunks := previewTextChunks(entry)
 	for i, chunk := range chunks {
 		if i > 0 {
-			chunk = strings.Repeat("-", 200) + "\n\n" + chunk
+			chunk = "[separator]\n\n" + chunk
 		}
 		blocks = append(blocks, session.ContentBlock{Type: "text", Text: chunk})
 	}
