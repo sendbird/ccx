@@ -123,22 +123,30 @@ func PaneOffset() (top, left int) {
 }
 
 // PlaceImage returns escape sequences to move the cursor to (row, col) and
-// then display an image there. Row and col are 1-based terminal coordinates
-// relative to the application pane. Inside tmux, coordinates are offset by
-// the pane's position in the terminal.
+// then display an image there. Row and col are 1-based coordinates relative
+// to the application pane. Inside tmux, the cursor move and image draw are
+// both sent through DCS passthrough with absolute terminal coordinates.
 func PlaceImage(path string, row, col, cols, rows int) string {
 	if path == "" {
 		return ""
 	}
-	// Offset by tmux pane position so the image lands in the right spot
-	top, left := PaneOffset()
-	absRow := row + top
-	absCol := col + left
-	cursor := fmt.Sprintf("\x1b[%d;%dH", absRow, absCol)
 	img := DisplayImage(path, cols, rows)
 	if img == "" {
 		return ""
 	}
+	if inTmux() {
+		// Inside tmux: cursor move + image must both go through passthrough
+		// with absolute terminal coordinates
+		top, left := PaneOffset()
+		absRow := row + top
+		absCol := col + left
+		cursor := fmt.Sprintf("\x1b[%d;%dH", absRow, absCol)
+		raw := cursor + fmt.Sprintf("\x1b_Ga=T,t=f,f=100,c=%d,r=%d;%s\x1b\\", cols, rows,
+			base64.StdEncoding.EncodeToString([]byte(path)))
+		return wrapForTmux(raw)
+	}
+	// Not in tmux: simple cursor move + image
+	cursor := fmt.Sprintf("\x1b[%d;%dH", row, col)
 	return cursor + img
 }
 
