@@ -429,30 +429,26 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Tab/shift+tab act on the focused pane: left toggles flat/tree, right cycles compact/standard/verbose.
-	if (key == "tab" || key == "shift+tab") && sp.Show {
+	if key == "tab" || key == "shift+tab" {
+		if !sp.Show {
+			sp.Show = true
+			sp.Focus = false
+			a.updateConvPreview()
+			return a, nil
+		}
 		if sp.Focus {
 			if key == "shift+tab" {
-				a.conv.rightPaneMode = (a.conv.rightPaneMode + len(previewModeLabels) - 1) % len(previewModeLabels)
+				a.setConvDetailLevel((a.conv.rightPaneMode + len(previewModeLabels) - 1) % len(previewModeLabels))
 			} else {
-				a.conv.rightPaneMode = (a.conv.rightPaneMode + 1) % len(previewModeLabels)
-			}
-			if sp.Folds != nil {
-				sp.Folds.HideHooks = a.conv.rightPaneMode == previewTool
+				a.setConvDetailLevel((a.conv.rightPaneMode + 1) % len(previewModeLabels))
 			}
 		} else {
 			if a.conv.leftPaneMode == convPaneFlat {
-				a.conv.leftPaneMode = convPaneTree
+				a.setConvLeftPaneMode(convPaneTree)
 			} else {
-				a.conv.leftPaneMode = convPaneFlat
+				a.setConvLeftPaneMode(convPaneFlat)
 			}
-			if a.conv.leftPaneMode == convPaneTree && a.liveTail {
-				a.liveTail = false
-				a.conv.split.BottomAlign = false
-			}
-			a.rebuildConversationList(0)
 		}
-		sp.CacheKey = "" // force re-render
-		a.updateConvPreview()
 		return a, nil
 	}
 
