@@ -1080,6 +1080,23 @@ func TestDefaultFoldsCollapseTools(t *testing.T) {
 // TestLiveTickMsgReachesHandleLiveTailInConvView verifies that liveTickMsg
 // dispatches to handleLiveTail (not refreshLivePreview) when app.state == viewConversation,
 // even if sessPreviewLive and livePreviewSessID are set from a prior session view.
+func TestConversationPageMenuOpensWithP(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 40)
+	app = pressKey(app, "p")
+	if !app.convPageMenu {
+		t.Fatal("expected conversation page menu to open")
+	}
+}
+
+func TestConversationPageMenuConsumesSecondKey(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 40)
+	app.convPageMenu = true
+	app = pressKey(app, "o")
+	if app.convPageMenu {
+		t.Fatal("expected conversation page menu to close after selection")
+	}
+}
+
 func TestBuildStandardEntryIncludesArtifactRows(t *testing.T) {
 	entry := session.Entry{
 		Role: "assistant",

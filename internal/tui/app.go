@@ -182,6 +182,7 @@ type App struct {
 	statsDetail        statsDetailMode // drill-down detail category
 	statsDetailVP      viewport.Model
 	statsPageMenu      bool // "p" page jump popup
+	convPageMenu       bool // conversation page jump popup
 
 	// Session preview mode
 	sessPreviewMode    sessPreview
@@ -1072,6 +1073,13 @@ func (a *App) View() string {
 		help = formatHelp("p:page — pick a section")
 	}
 
+	// Conversation page jump hint box
+	if a.convPageMenu && a.state == viewConversation {
+		hintBox := a.renderConvPageHintBox()
+		content = placeHintBox(content, hintBox)
+		help = formatHelp("p:page — pick a page")
+	}
+
 	// Block filter hint box floating above help line (conversation preview and full-screen message)
 	if a.conv.blockFiltering && a.state == viewConversation {
 		hintBox := renderBlockFilterHintBox()
@@ -1843,6 +1851,42 @@ func (a *App) renderStatsPageHintBox() string {
 	line1 := hl.Render("t") + d.Render(":tools") + sp + hl.Render("m") + d.Render(":mcp") + sp + hl.Render("a") + d.Render(":agents")
 	line2 := hl.Render("s") + d.Render(":skills") + sp + hl.Render("c") + d.Render(":cmds") + sp + hl.Render("e") + d.Render(":errors")
 	line3 := hl.Render("r") + d.Render(":repos") + sp + hl.Render("p") + d.Render(":projects") + sp + hl.Render("o") + d.Render(":overview")
+
+	body := strings.Join([]string{line1, line2, line3, d.Render("esc:cancel")}, "\n")
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1)
+	return boxStyle.Render(body)
+}
+
+func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "u":
+		return a.openConvURLMenu()
+	case "i":
+		return a, nil
+	case "g":
+		return a.openConvChangesMenu()
+	case "f":
+		return a.openConvFilesMenu()
+	case "o":
+		// back to normal conversation overview
+		a.conv.split.CacheKey = ""
+		a.updateConvPreview()
+		return a, nil
+	}
+	return a, nil
+}
+
+func (a *App) renderConvPageHintBox() string {
+	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	d := dimStyle
+	sp := "  "
+
+	line1 := hl.Render("u") + d.Render(":urls") + sp + hl.Render("i") + d.Render(":images")
+	line2 := hl.Render("g") + d.Render(":changes") + sp + hl.Render("f") + d.Render(":files")
+	line3 := hl.Render("o") + d.Render(":overview")
 
 	body := strings.Join([]string{line1, line2, line3, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().

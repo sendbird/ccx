@@ -112,6 +112,12 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	sp := &a.conv.split
 	key := msg.String()
 
+	// Page jump menu: second key picks the page
+	if a.convPageMenu {
+		a.convPageMenu = false
+		return a.handleConvPageMenu(key)
+	}
+
 	// Block filter input intercepts all keys
 	if a.conv.blockFiltering {
 		return a.handleBlockFilterInput(msg)
@@ -266,6 +272,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.jumpToEntityTree()
 	case a.keymap.Conversation.Actions:
 		a.convActionsMenu = true
+		return a, nil
+	case "p":
+		a.convPageMenu = true
 		return a, nil
 	}
 
