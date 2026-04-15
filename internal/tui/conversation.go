@@ -629,7 +629,7 @@ func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
 	} else {
 		for i, chunk := range chunks {
 			if i > 0 {
-				sb.WriteString("\n\n" + dimStyle.Render(strings.Repeat("-", max(textW, 1))) + "\n\n")
+				sb.WriteString("\n\n" + dimStyle.Render(strings.Repeat("=", max(textW, 1))) + "\n\n")
 			}
 			sb.WriteString(wrapText(chunk, textW))
 		}
