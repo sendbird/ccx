@@ -1113,7 +1113,7 @@ func (a *App) View() string {
 	}
 
 	// Conversation artifact page browser
-	if a.state == viewConversation && a.convPageActive {
+	if a.state == viewConversation && a.convPageActive && !a.convPageMenu {
 		content = a.renderConvPageBrowser()
 		if a.convPage == convPageOverview {
 			help = formatHelp("p:page enter:open []:resize esc:back")
