@@ -1053,8 +1053,17 @@ func (a *App) renderConvPageBrowser() string {
 		if needTop {
 			left.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
 		}
+		prevPrompt := ""
+		if start > 0 {
+			prevPrompt = a.convPageItems[start-1].userPrompt
+		}
 		for i := start; i < end; i++ {
 			item := a.convPageItems[i]
+			// Show separator when user prompt changes between items
+			if i > start && item.userPrompt != prevPrompt {
+				left.WriteString(dimStyle.Render("  ─") + "\n")
+			}
+			prevPrompt = item.userPrompt
 			cursor := " "
 			style := dimStyle
 			if i == a.convPageCursor {
@@ -1078,46 +1087,45 @@ func (a *App) renderConvPageBrowser() string {
 	rightContent := dimStyle.Render("(no selection)")
 	if a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
 		item := a.convPageItems[a.convPageCursor]
-		header := dimStyle.Render("── "+convPageTitle(a.convPage)+" detail ──") + "\n\n"
-		context := convPageItemContext(item, max(previewW, 10))
+		pw := max(previewW, 10)
+		// Metadata first, then page-specific content below
+		context := convPageItemContext(item, pw)
+		var detail string
 		switch a.convPage {
 		case convPageChanges:
 			if a.convPageChangeMap != nil {
 				if ch, ok := a.convPageChangeMap[item.URL]; ok && len(ch.ToolInputs) > 0 {
 					block := session.ContentBlock{Type: "tool_use", ToolName: ch.ToolNames[0], ToolInput: ch.ToolInputs[0]}
-					if diff := toolDiffOutput(block, max(previewW, 10)); diff != "" {
-						rightContent = header + diff + "\n\n" + context
+					if diff := toolDiffOutput(block, pw); diff != "" {
+						detail = diff
 						goto done
 					}
 				}
 			}
-			rightContent = header + wrapText(item.URL, max(previewW, 10)) + "\n\n" + context
+			detail = wrapText(item.URL, pw)
 		case convPageImages:
 			id := strings.TrimPrefix(item.URL, "paste:")
 			var pasteID int
 			fmt.Sscanf(id, "%d", &pasteID)
-			cachePath := ""
+			parts := []string{wrapText(item.Label, pw)}
 			if pasteID > 0 {
-				cachePath = session.ImageCachePath(homeDir(), a.currentSess.ID, pasteID)
+				parts = append(parts, fmt.Sprintf("paste #%d", pasteID))
 			}
-			rightContent = header + "Image\n\n" + wrapText(item.Label, max(previewW, 10))
-			if pasteID > 0 {
-				rightContent += fmt.Sprintf("\n\npaste #%d", pasteID)
+			if cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, pasteID); cachePath != "" {
+				parts = append(parts, wrapText(cachePath, pw))
 			}
-			if cachePath != "" {
-				rightContent += "\n\n" + wrapText(cachePath, max(previewW, 10))
-			}
-			rightContent += "\n\n" + context
+			detail = strings.Join(parts, "\n")
 		case convPageFiles:
-			rightContent = header + dimStyle.Render("["+item.Category+"]") + " " + wrapText(item.URL, max(previewW, 10)) + "\n\n" + context
+			detail = dimStyle.Render("["+item.Category+"]") + " " + wrapText(item.URL, pw)
 		case convPageURLs:
-			rightContent = header + "URL\n\n" + wrapText(item.URL, max(previewW, 10)) + "\n\n" + context
+			detail = wrapText(item.URL, pw)
 		default:
-			rightContent = header + wrapText(item.URL, max(previewW, 10)) + "\n\n" + context
+			detail = wrapText(item.URL, pw)
 		}
+	done:
+		rightContent = context + "\n\n" + dimStyle.Render("────") + "\n\n" + detail
 	}
 
-done:
 	rightContent = clampLines(rightContent, max(previewW, 1))
 
 	// Update viewport when cursor changes or viewport size differs
