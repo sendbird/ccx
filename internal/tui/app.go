@@ -28,6 +28,11 @@ type liveTickMsg time.Time // slow live capture (2s, unfocused)
 type spinnerTickMsg time.Time
 type globalStatsMsg session.GlobalStats
 
+// previewDebounceMsg fires after a short delay to trigger preview updates.
+// The id field is compared against the App's current debounce counter;
+// if they mismatch, a newer navigation happened and this msg is stale.
+type previewDebounceMsg struct{ id uint64 }
+
 // sessionsScannedMsg carries the result of async full session scanning.
 type sessionsScannedMsg struct {
 	sessions []session.Session
@@ -74,6 +79,36 @@ func liveTickCmd() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return liveTickMsg(t)
 	})
+}
+
+// previewDebounce is the delay before firing a preview update after navigation.
+const previewDebounce = 30 * time.Millisecond
+
+// schedulePreviewUpdate increments the debounce counter and returns a Cmd
+// that fires after previewDebounce. The returned msg carries the counter
+// snapshot; if it still matches when received, the preview update runs.
+func (a *App) schedulePreviewUpdate() tea.Cmd {
+	a.previewDebounceID++
+	id := a.previewDebounceID
+	return tea.Tick(previewDebounce, func(time.Time) tea.Msg {
+		return previewDebounceMsg{id: id}
+	})
+}
+
+// runDebouncedPreview executes the preview update for the current view.
+// Called when a previewDebounceMsg fires and its id is still current.
+func (a *App) runDebouncedPreview() tea.Cmd {
+	switch a.state {
+	case viewConversation:
+		a.updateConvPreview()
+	case viewSessions:
+		return a.updateSessionPreview()
+	case viewConfig:
+		a.updateConfigPreview()
+	case viewPlugins:
+		a.updatePluginPreview()
+	}
+	return nil
 }
 
 // captureAfterKeyCmd sends a key to the tmux pane, waits briefly for tmux to
@@ -161,6 +196,11 @@ type App struct {
 
 	// Split pane ratio (list width as % of terminal width)
 	splitRatio int
+
+	// Preview debounce: rapid list navigation skips expensive preview renders
+	// until the user pauses. Counter increments on each navigation; the delayed
+	// msg only fires the update if its id matches the current counter.
+	previewDebounceID uint64
 
 	// Number key shortcuts (view + focus scoped)
 	shortcuts Shortcuts
@@ -714,6 +754,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.copiedMsg = "Sent!"
 		}
 		return a, nil
+
+	case previewDebounceMsg:
+		if msg.id != a.previewDebounceID {
+			return a, nil // stale: a newer navigation happened
+		}
+		return a, a.runDebouncedPreview()
 
 	case tickMsg:
 		cmd := a.handleTick()
@@ -1527,7 +1573,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// List boundary (up/down always navigate list, scroll preview at edges)
 	if !sp.Focus && sp.HandleListBoundary(key) {
-		return a, a.updateSessionPreview()
+		return a, a.schedulePreviewUpdate()
 	}
 
 	// Default list update
@@ -1541,14 +1587,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 	}
-	previewCmd := a.updateSessionPreview()
-	if cmd == nil {
-		return m, previewCmd
-	}
-	if previewCmd != nil {
-		return m, tea.Batch(cmd, previewCmd)
-	}
-	return m, cmd
+	debounceCmd := a.schedulePreviewUpdate()
+	return m, tea.Batch(cmd, debounceCmd)
 }
 
 // handlePaneProxyKey forwards a key to the tmux pane and captures the result.

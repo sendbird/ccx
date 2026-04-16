@@ -621,7 +621,8 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 		}
-		a.updateConvPreview()
+		debounceCmd := a.schedulePreviewUpdate()
+		return a, tea.Batch(cmd, debounceCmd)
 	}
 	return a, cmd
 }

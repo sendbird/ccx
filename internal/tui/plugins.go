@@ -387,8 +387,7 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		a.plgList, cmd = a.plgList.Update(msg)
-		a.updatePluginPreview()
-		return a, cmd
+		return a, tea.Batch(cmd, a.schedulePreviewUpdate())
 	}
 
 	return a, nil

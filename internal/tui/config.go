@@ -413,8 +413,7 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.listReady(&a.cfgList) && isNavKey(msg) {
 		var cmd tea.Cmd
 		a.cfgList, cmd = a.cfgList.Update(msg)
-		a.updateConfigPreview()
-		return a, cmd
+		return a, tea.Batch(cmd, a.schedulePreviewUpdate())
 	}
 
 	return a, nil

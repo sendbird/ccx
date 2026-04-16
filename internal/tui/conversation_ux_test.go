@@ -191,7 +191,13 @@ func pressKey(app *App, key string) *App {
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
 	m, _ := app.Update(msg)
-	return m.(*App)
+	a := m.(*App)
+	// Flush any pending preview debounce so tests see immediate results
+	if a.previewDebounceID > 0 {
+		m, _ = a.Update(previewDebounceMsg{id: a.previewDebounceID})
+		a = m.(*App)
+	}
+	return a
 }
 
 func sendResize(app *App, w, h int) *App {
