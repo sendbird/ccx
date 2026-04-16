@@ -215,16 +215,18 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Dedicated conversation artifact page browser
-	if a.convPage != convPageOverview {
+	if a.convPageActive {
 		switch key {
 		case "p":
 			a.convPageMenu = true
 			return a, nil
 		case "esc":
-			a.convPage = convPageOverview
+			a.convPageActive = false
+			a.convPageActionsMenu = false
 			a.convPageItems = nil
 			a.convPageChangeMap = nil
 			a.conv.split.CacheKey = ""
+			a.updateConvPreview()
 			return a, nil
 		case "up", "k":
 			if a.convPageCursor > 0 {
@@ -426,6 +428,8 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.convActionsMenu = true
 		return a, nil
 	case "p":
+		a.convPageActive = true
+		a.convPage = convPageOverview
 		a.convPageMenu = true
 		return a, nil
 	}

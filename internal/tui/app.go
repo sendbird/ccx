@@ -201,6 +201,7 @@ type App struct {
 	statsDetailVP      viewport.Model
 	statsPageMenu      bool // "p" page jump popup
 	convPageMenu       bool // conversation page jump popup
+	convPageActive     bool
 	convPage           convPageKind
 	convPageItems      []convPageItem
 	convPageCursor     int
@@ -1105,14 +1106,14 @@ func (a *App) View() string {
 	}
 
 	// Conversation artifact browser actions menu
-	if a.convPageActionsMenu && a.state == viewConversation && a.convPage != convPageOverview {
+	if a.convPageActionsMenu && a.state == viewConversation && a.convPageActive {
 		hintBox := a.renderConvPageActionsHintBox()
 		content = placeHintBox(content, hintBox)
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Conversation artifact page browser
-	if a.state == viewConversation {
+	if a.state == viewConversation && a.convPageActive {
 		content = a.renderConvPageBrowser()
 		if a.convPage == convPageOverview {
 			help = formatHelp("p:page enter:open []:resize esc:back")
@@ -1902,6 +1903,7 @@ func (a *App) renderStatsPageHintBox() string {
 }
 
 func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
+	a.convPageActive = true
 	switch key {
 	case "u":
 		return a.openConvURLsPage()
