@@ -93,7 +93,7 @@ func (a *App) convHelpLine(badges string) string {
 	}
 
 	sp := &a.conv.split
-	h := "↵:open e:edit x:actions L:live " + a.keymap.Session.Refresh + ":refresh"
+	h := "↵:open e:edit p:page x:actions L:live " + a.keymap.Session.Refresh + ":refresh"
 	if a.config.TmuxEnabled && tmux.InTmux() && a.currentSess.IsLive {
 		h += " I:input J:jump"
 	}

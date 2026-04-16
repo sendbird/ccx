@@ -894,10 +894,20 @@ func buildEntityTree(
 }
 
 func truncate(s string, maxW int) string {
-	if len(s) <= maxW || maxW <= 3 {
+	if lipgloss.Width(s) <= maxW || maxW <= 3 {
 		return s
 	}
-	return s[:maxW-3] + "..."
+	out := ""
+	w := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > maxW-3 {
+			break
+		}
+		out += string(r)
+		w += rw
+	}
+	return out + "..."
 }
 
 func compactTreeLabel(kind, text string, maxW int) string {

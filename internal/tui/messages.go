@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -854,16 +855,34 @@ func wrapText(text string, width int) string {
 	lines := strings.Split(text, "\n")
 	var result []string
 	for _, line := range lines {
-		if len(line) <= width {
+		if runewidth.StringWidth(line) <= width {
 			result = append(result, line)
 			continue
 		}
-		// Word wrap long lines
-		for len(line) > width {
-			// Find last space before width
-			cut := width
-			if idx := strings.LastIndex(line[:width], " "); idx > 0 {
-				cut = idx + 1
+		// Word wrap long lines using display width
+		for runewidth.StringWidth(line) > width {
+			// Find a cut point that fits within width
+			cut := 0
+			w := 0
+			lastSpace := -1
+			for i, r := range line {
+				rw := runewidth.RuneWidth(r)
+				if w+rw > width {
+					break
+				}
+				w += rw
+				cut = i + len(string(r))
+				if r == ' ' {
+					lastSpace = cut
+				}
+			}
+			if lastSpace > 0 {
+				cut = lastSpace
+			}
+			if cut == 0 {
+				// Safety: at least one rune
+				_, sz := []rune(line)[0], len(string([]rune(line)[0]))
+				cut = sz
 			}
 			result = append(result, line[:cut])
 			line = line[cut:]

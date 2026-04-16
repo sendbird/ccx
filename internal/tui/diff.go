@@ -165,8 +165,19 @@ func formatWriteFolded(toolInput string) string {
 // renderDiffLine renders a single diff line with prefix and style, truncating if needed.
 func renderDiffLine(prefix, line string, maxWidth int, style lipgloss.Style) string {
 	display := "  " + prefix + " " + line
-	if maxWidth > 0 && len(display) > maxWidth+4 {
-		display = display[:maxWidth+1] + "..."
+	if maxWidth > 0 && lipgloss.Width(display) > maxWidth+4 {
+		// Truncate using display width
+		truncated := ""
+		w := 0
+		for _, r := range display {
+			rw := lipgloss.Width(string(r))
+			if w+rw > maxWidth+1 {
+				break
+			}
+			truncated += string(r)
+			w += rw
+		}
+		display = truncated + "..."
 	}
 	return style.Render(display)
 }

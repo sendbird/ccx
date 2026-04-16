@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -1117,6 +1118,126 @@ func TestConversationPageMenuImagesPage(t *testing.T) {
 	}
 	if len(app.convPageItems) != 1 {
 		t.Fatalf("expected 1 image artifact item, got %d", len(app.convPageItems))
+	}
+}
+
+func TestConversationPageBrowserUsesXPrefixedActions(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{{
+		Role:      "assistant",
+		Timestamp: base,
+		Content: []session.ContentBlock{{
+			Type:      "tool_use",
+			ToolName:  "Write",
+			ToolInput: `{"file_path":"/tmp/example.txt","content":"hello"}`,
+		}},
+	}}
+	app := setupConvApp(t, entries, 120, 20)
+	m, _ := app.openConvFilesPage()
+	app = m.(*App)
+	if len(app.convPageItems) == 0 {
+		t.Fatal("expected file page items")
+	}
+
+	app = pressKey(app, "e")
+	if app.convPageActionsMenu {
+		t.Fatal("direct e should not open actions in conversation page browser")
+	}
+
+	app = pressKey(app, "y")
+	if app.convPageActionsMenu {
+		t.Fatal("direct y should not open actions in conversation page browser")
+	}
+
+	app = pressKey(app, "x")
+	if !app.convPageActionsMenu {
+		t.Fatal("x should open conversation page actions menu")
+	}
+
+	app = pressKey(app, "e")
+	if app.convPageActionsMenu {
+		t.Fatal("xe should consume and close the actions menu")
+	}
+}
+
+func TestConversationPageBrowserNavigationKeys(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{{
+		Role:      "assistant",
+		Timestamp: base,
+		Content: []session.ContentBlock{{
+			Type:     "tool_use",
+			ToolName: "Bash",
+			ToolInput: strings.Join([]string{
+				"https://a.example.com/path-a",
+				"https://b.example.com/path-b",
+				"https://c.example.com/path-c",
+				"https://d.example.com/path-d",
+				"https://e.example.com/path-e",
+			}, "\n"),
+		}},
+	}}
+	app := setupConvApp(t, entries, 120, 20)
+	m, _ := app.openConvURLsPage()
+	app = m.(*App)
+	if len(app.convPageItems) < 5 {
+		t.Fatalf("expected multiple URL items, got %d", len(app.convPageItems))
+	}
+
+	app = pressKey(app, "G")
+	if got, want := app.convPageCursor, len(app.convPageItems)-1; got != want {
+		t.Fatalf("G should jump to last item: got %d want %d", got, want)
+	}
+
+	app = pressKey(app, "g")
+	if app.convPageCursor != 0 {
+		t.Fatalf("g should jump to first item: got %d", app.convPageCursor)
+	}
+
+	app = pressKey(app, "pgdown")
+	if app.convPageCursor <= 0 {
+		t.Fatalf("pgdown should move cursor down by a page: got %d", app.convPageCursor)
+	}
+
+	app = pressKey(app, "pgup")
+	if app.convPageCursor != 0 {
+		t.Fatalf("pgup should move cursor back toward top: got %d", app.convPageCursor)
+	}
+}
+
+func TestConversationPageBrowserSplitStaysSeparated(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{{
+		Role:      "assistant",
+		Timestamp: base,
+		Content: []session.ContentBlock{{
+			Type:      "tool_use",
+			ToolName:  "Write",
+			ToolInput: `{"file_path":"/tmp/really/long/path/that/should/not/break/the/layout/file.txt","content":"` + strings.Repeat("very long content without natural wrapping ", 30) + `"}`,
+		}},
+	}}
+	app := setupConvApp(t, entries, 100, 24)
+	m, _ := app.openConvChangesPage()
+	app = m.(*App)
+
+	view := app.renderConvPageBrowser()
+	lines := strings.Split(view, "\n")
+	if len(lines) == 0 {
+		t.Fatal("expected non-empty browser view")
+	}
+	for i, line := range lines {
+		if lipgloss.Width(line) > app.width {
+			t.Fatalf("line %d exceeds width: got %d want <= %d\n%q", i, lipgloss.Width(line), app.width, line)
+		}
+	}
+
+	app = sendResize(app, 80, 24)
+	view = app.renderConvPageBrowser()
+	lines = strings.Split(view, "\n")
+	for i, line := range lines {
+		if lipgloss.Width(line) > app.width {
+			t.Fatalf("after resize line %d exceeds width: got %d want <= %d\n%q", i, lipgloss.Width(line), app.width, line)
+		}
 	}
 }
 

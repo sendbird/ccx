@@ -77,10 +77,17 @@ func (e *IsolatedEnv) Script(extraArgs ...string) string {
 		ShellQuote(realHome), editor)
 	os.WriteFile(wrapperPath, []byte(wrapperContent), 0o755)
 
+	// Resolve symlinks for HOME and cd path (macOS /tmp → /private/tmp)
+	// so Claude's project path matches the trust entry in .claude.json.
+	resolvedHome := e.HomeDir
+	if r, err := filepath.EvalSymlinks(e.HomeDir); err == nil {
+		resolvedHome = r
+	}
+
 	return fmt.Sprintf(
 		`unset CLAUDECODE; %sexport REAL_HOME=%s; export EDITOR=%s; export HOME=%s; cd %s; %s; `+
 			`rc=$?; if [ $rc -ne 0 ]; then echo ""; echo "[claude exited: $rc] press any key"; read -n1; fi`,
-		OAuthTokenEnv(), ShellQuote(realHome), ShellQuote(wrapperPath), ShellQuote(e.HomeDir), ShellQuote(e.HomeDir), claudeCmd,
+		OAuthTokenEnv(), ShellQuote(realHome), ShellQuote(wrapperPath), ShellQuote(resolvedHome), ShellQuote(resolvedHome), claudeCmd,
 	)
 }
 
@@ -158,8 +165,75 @@ func seedTestHome(fakeHome string) {
 		os.WriteFile(filepath.Join(configDir, ".claude.json"), data, 0o644)
 	}
 
-	// Copy home-level state (at HOME/.claude.json)
+	// Copy remote-settings.json — this caches the approved managed settings.
+	// Claude compares new managed settings against this cache; if unchanged,
+	// the "Managed settings require approval" prompt is skipped.
+	if data, err := os.ReadFile(filepath.Join(home, ".claude", "remote-settings.json")); err == nil {
+		os.WriteFile(filepath.Join(configDir, "remote-settings.json"), data, 0o644)
+	}
+
+	// Copy home-level state (at HOME/.claude.json) and inject trust for
+	// the fake HOME path so the "Managed settings require approval" prompt
+	// is skipped in test environments.
+	// Resolve symlinks (macOS /tmp → /private/tmp) because Claude uses the
+	// real path as the project key, not the symlink path.
 	if data, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
+		realFakeHome := fakeHome
+		if resolved, err := filepath.EvalSymlinks(fakeHome); err == nil {
+			realFakeHome = resolved
+		}
+		data = injectProjectTrust(data, realFakeHome)
+		// Also inject under the unresolved path in case Claude uses it
+		if realFakeHome != fakeHome {
+			data = injectProjectTrust(data, fakeHome)
+		}
 		os.WriteFile(filepath.Join(fakeHome, ".claude.json"), data, 0o644)
 	}
+}
+
+// injectProjectTrust adds hasTrustDialogAccepted=true for the given project
+// path inside a .claude.json blob. This prevents the managed settings approval
+// prompt from appearing in isolated test environments.
+func injectProjectTrust(data []byte, projectPath string) []byte {
+	var state map[string]json.RawMessage
+	if json.Unmarshal(data, &state) != nil {
+		return data
+	}
+
+	// Parse the "projects" sub-object
+	var projects map[string]map[string]interface{}
+	raw, ok := state["projects"]
+	if !ok {
+		projects = make(map[string]map[string]interface{})
+	} else if json.Unmarshal(raw, &projects) != nil {
+		return data
+	}
+
+	// Ensure the project entry exists with trust accepted
+	entry, exists := projects[projectPath]
+	if !exists {
+		entry = map[string]interface{}{
+			"allowedTools":                  []interface{}{},
+			"mcpContextUris":                []interface{}{},
+			"mcpServers":                    map[string]interface{}{},
+			"hasCompletedProjectOnboarding": true,
+			"projectOnboardingSeenCount":    10,
+		}
+	}
+	entry["hasTrustDialogAccepted"] = true
+	entry["hasCompletedProjectOnboarding"] = true
+	projects[projectPath] = entry
+
+	// Write back
+	projBytes, err := json.Marshal(projects)
+	if err != nil {
+		return data
+	}
+	state["projects"] = projBytes
+
+	out, err := json.Marshal(state)
+	if err != nil {
+		return data
+	}
+	return out
 }

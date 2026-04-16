@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+	ansi "github.com/charmbracelet/x/ansi"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -47,10 +49,10 @@ type FoldState struct {
 	Entry        session.Entry
 	BlockCursor  int
 	BlockStarts  []int
-	BlockVisible []bool   // nil = all visible; non-nil = per-block visibility
-	BlockFilter  string   // current filter expression (empty = no filter)
-	HideHooks    bool     // true = suppress hook badges/details in render
-	Selected     foldSet  // block indices selected for copy
+	BlockVisible []bool  // nil = all visible; non-nil = per-block visibility
+	BlockFilter  string  // current filter expression (empty = no filter)
+	HideHooks    bool    // true = suppress hook badges/details in render
+	Selected     foldSet // block indices selected for copy
 }
 
 // ListWidth returns the list width given total width and split ratio.
@@ -69,6 +71,76 @@ func (sp *SplitPane) PreviewWidth(totalW, splitRatio int) int {
 // ContentHeight returns the usable content height (totalH - 3 for title+help).
 func ContentHeight(totalH int) int {
 	return max(totalH-3, 1)
+}
+
+// truncateExact truncates s to at most targetW display cells.
+// Uses the Wc (wide-char) variants which treat East Asian Ambiguous-width
+// characters (○, ●, ■, ✓, etc.) as 2 cells, matching CJK terminal rendering.
+func truncateExact(s string, targetW int) (string, int) {
+	if targetW <= 0 {
+		return "", 0
+	}
+	s = ansi.TruncateWc(s, targetW, "")
+	w := ansi.StringWidthWc(s)
+	// Safety: if TruncateWc and StringWidthWc disagree, shrink until it fits
+	for w > targetW && targetW > 0 {
+		targetW--
+		s = ansi.TruncateWc(s, targetW, "")
+		w = ansi.StringWidthWc(s)
+	}
+	return s, w
+}
+
+func renderFixedSplit(left, right string, listW, previewW, contentH int, borderColor lipgloss.Color) string {
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	borderCell := lipgloss.NewStyle().Foreground(borderColor).Render("│")
+	const reset = "\x1b[0m"
+	// CHA (Cursor Horizontal Absolute) — positions cursor at exact column (1-based)
+	borderCHA := fmt.Sprintf("\x1b[%dG", listW+1)
+	rightCHA := fmt.Sprintf("\x1b[%dG", listW+2)
+
+	var out strings.Builder
+	for i := 0; i < contentH; i++ {
+		var l, r string
+		if i < len(leftLines) {
+			l = leftLines[i]
+		}
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+
+		// Left pane: truncate to listW, pad to exactly listW cells
+		// Padding ensures bubbletea's diff renderer fully overwrites previous
+		// frame content when switching between views with different listW values.
+		l, lw := truncateExact(l, listW)
+		out.WriteString(l)
+		out.WriteString(reset)
+		if pad := listW - lw; pad > 0 {
+			out.WriteString(strings.Repeat(" ", pad))
+		}
+
+		// Border: move cursor to absolute column listW+1, draw border
+		out.WriteString(borderCHA)
+		out.WriteString(borderCell)
+
+		// Right pane: move cursor to absolute column listW+2, draw content
+		// Pad right content to exact previewW so bubbletea's diff renderer
+		// fully overwrites previous frame content (raw \x1b[K doesn't work
+		// with bubbletea's character-based differ).
+		out.WriteString(rightCHA)
+		r, rw := truncateExact(r, previewW)
+		out.WriteString(r)
+		out.WriteString(reset)
+		if pad := previewW - rw; pad > 0 {
+			out.WriteString(strings.Repeat(" ", pad))
+		}
+
+		if i < contentH-1 {
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
 }
 
 // Render draws the split layout: list | border | preview.
@@ -97,31 +169,26 @@ func (sp *SplitPane) Render(totalW, totalH, splitRatio int) string {
 		borderColor = colorBorderFocused
 	}
 
-	leftStyle := lipgloss.NewStyle().Width(listW).MaxWidth(listW).Height(contentH).MaxHeight(contentH)
-	rightStyle := lipgloss.NewStyle().Width(previewW).MaxWidth(previewW).Height(contentH).MaxHeight(contentH)
-	borderStyle := lipgloss.NewStyle().Foreground(borderColor).Height(contentH).MaxHeight(contentH)
+	left := sp.List.View()
+	right := sp.Preview.View()
 
-	left := leftStyle.Render(sp.List.View())
-	border := borderStyle.Render(strings.Repeat("│\n", max(contentH-1, 0)) + "│")
-	right := rightStyle.Render(sp.Preview.View())
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, border, right)
+	return renderFixedSplit(left, right, listW, previewW, contentH, borderColor)
 }
 
 type SplitKeyResult int
 
 const (
-	splitKeyUnhandled          SplitKeyResult = iota
-	splitKeyHandled                           // handled, no special action
-	splitKeyClosed                            // esc closed the preview
-	splitKeyOpened                            // right opened the preview
-	splitKeyFocused                           // right/tab focused the preview
-	splitKeyUnfocused                         // left unfocused the preview
-	splitKeySearchFromPreview                 // "/" pressed while preview focused
-	splitKeyCursorMoved                       // block cursor moved, no content change
-	splitKeyScrolled                          // viewport scrolled, no re-render needed
-	splitKeyBoundaryDown                      // block cursor hit bottom boundary
-	splitKeyBoundaryUp                        // block cursor hit top boundary
+	splitKeyUnhandled         SplitKeyResult = iota
+	splitKeyHandled                          // handled, no special action
+	splitKeyClosed                           // esc closed the preview
+	splitKeyOpened                           // right opened the preview
+	splitKeyFocused                          // right/tab focused the preview
+	splitKeyUnfocused                        // left unfocused the preview
+	splitKeySearchFromPreview                // "/" pressed while preview focused
+	splitKeyCursorMoved                      // block cursor moved, no content change
+	splitKeyScrolled                         // viewport scrolled, no re-render needed
+	splitKeyBoundaryDown                     // block cursor hit bottom boundary
+	splitKeyBoundaryUp                       // block cursor hit top boundary
 )
 
 // HandleSplitKey processes common split pane keys (esc, left, right, tab, shift+tab, [, ]).
@@ -594,11 +661,11 @@ type foldResult int
 
 const (
 	foldUnhandled    foldResult = iota
-	foldHandled                // key was consumed, content changed (fold/unfold/format)
-	foldCursorMoved            // key was consumed, only cursor position changed
-	foldSwitchToList           // left on already-folded block
-	foldBoundaryDown           // down at last visible block
-	foldBoundaryUp             // up at first visible block
+	foldHandled                 // key was consumed, content changed (fold/unfold/format)
+	foldCursorMoved             // key was consumed, only cursor position changed
+	foldSwitchToList            // left on already-folded block
+	foldBoundaryDown            // down at last visible block
+	foldBoundaryUp              // up at first visible block
 )
 
 // HandleKey processes fold navigation keys.

@@ -123,8 +123,7 @@ const (
 type convPageKind int
 
 const (
-	convPageOverview convPageKind = iota
-	convPageURLs
+	convPageURLs convPageKind = iota
 	convPageImages
 	convPageChanges
 	convPageFiles
@@ -202,9 +201,12 @@ type App struct {
 	statsPageMenu      bool // "p" page jump popup
 	convPageMenu       bool // conversation page jump popup
 	convPageActive     bool
+	convPageFocus      bool // true = right pane focused, false = left list focused
 	convPage           convPageKind
 	convPageItems      []convPageItem
 	convPageCursor     int
+	convPageLastCursor int // tracks cursor to detect changes and reset viewport
+	convPageVP         viewport.Model
 	convPageChangeMap  map[string]extract.ChangeItem
 	// Conversation artifact browser actions menu
 	convPageActionsMenu bool
@@ -918,6 +920,33 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a.updateActiveComponent(msg)
 }
 
+// activeDividerCol returns the cell-width column of the active split's divider.
+// Returns 0 when no split is visible (overlay fills full width).
+func (a *App) activeDividerCol() int {
+	switch a.state {
+	case viewSessions:
+		if a.sessSplit.Show {
+			return a.sessSplit.ListWidth(a.width, a.splitRatio)
+		}
+	case viewConversation:
+		if a.conv.split.Show {
+			return a.conv.split.ListWidth(a.width, a.splitRatio)
+		}
+	case viewConfig:
+		if a.cfgSplit.Show {
+			return a.cfgSplit.ListWidth(a.width, a.splitRatio)
+		}
+	case viewPlugins:
+		if a.plgDetailActive && a.plgDetailSplit.Show {
+			return a.plgDetailSplit.ListWidth(a.width, a.splitRatio)
+		}
+		if a.plgSplit.Show {
+			return a.plgSplit.ListWidth(a.width, a.splitRatio)
+		}
+	}
+	return 0
+}
+
 func (a *App) View() string {
 	if a.width == 0 || a.height == 0 {
 		return "Loading..."
@@ -1020,7 +1049,7 @@ func (a *App) View() string {
 	if a.urlMenu {
 		hintBox := a.renderURLMenu()
 		if hintBox != "" {
-			content = placeHintBox(content, hintBox)
+			content = placeHintBox(content, hintBox, a.activeDividerCol())
 		}
 		if a.urlSearching {
 			help = "  " + a.urlSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
@@ -1032,108 +1061,113 @@ func (a *App) View() string {
 	// Conversation/message-full actions menu hint box
 	if a.convActionsMenu && (a.state == viewConversation || a.state == viewMessageFull) {
 		hintBox := renderConvActionsHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Actions menu hint box floating above help line
 	if a.actionsMenu && a.state == viewSessions {
 		hintBox := a.renderActionsHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Tag menu floating modal
 	if a.tagMenu {
 		modal := a.renderTagMenu()
-		content = placeHintBox(content, modal)
+		content = placeHintBox(content, modal, a.activeDividerCol())
 	}
 
 	// Config actions menu hint box
 	if a.cfgActionsMenu && a.state == viewConfig {
 		hintBox := a.renderCfgActionsHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Plugin actions menu hint box
 	if a.plgActionsMenu && a.state == viewPlugins {
 		hintBox := a.renderPlgActionsHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Plugin detail actions menu hint box
 	if a.plgCompActionsMenu && a.state == viewPlugins && a.plgDetailActive {
 		hintBox := a.renderPlgCompActionsHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Views menu hint box floating above help line
 	if a.viewsMenu {
 		hintBox := a.renderViewsHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("v:views — pick a view")
 	}
 
 	// Edit menu hint box floating above help line
 	if a.editMenu {
 		hintBox := a.renderEditHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("e:edit — pick a file")
 	}
 
 	// Stats page jump hint box
 	if a.statsPageMenu && a.state == viewGlobalStats {
 		hintBox := a.renderStatsPageHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("p:page — pick a page")
 	}
 
 	// Config page jump hint box
 	if a.cfgPageMenu && a.state == viewConfig {
 		hintBox := a.renderCfgPageHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("p:page — pick a section")
 	}
 
 	// Conversation page jump hint box
 	if a.convPageMenu && a.state == viewConversation {
+		// Keep browser visible as background when menu opens from browser
+		if a.convPageActive {
+			content = a.renderConvPageBrowser()
+		}
 		hintBox := a.renderConvPageHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("p:page — pick a page")
 	}
 
 	// Conversation artifact browser actions menu
 	if a.convPageActionsMenu && a.state == viewConversation && a.convPageActive {
+		content = a.renderConvPageBrowser()
 		hintBox := a.renderConvPageActionsHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Conversation artifact page browser
-	if a.state == viewConversation && a.convPageActive && !a.convPageMenu {
+	if a.state == viewConversation && a.convPageActive && !a.convPageMenu && !a.convPageActionsMenu {
 		content = a.renderConvPageBrowser()
-		if a.convPage == convPageOverview {
-			help = formatHelp("p:page enter:open []:resize esc:back")
+		if a.convPageFocus {
+			help = formatHelp("↑↓:scroll g/G:top/btm pgup/dn:page ←h:list x:actions []:resize p:page")
 		} else {
-			help = formatHelp("↑↓:nav enter:open x:actions y:copy []:resize esc:back p:page")
+			help = formatHelp("↑↓:nav →l:detail g/G:ends pgup/dn:page x:actions []:resize esc:back p:page")
 		}
 	}
 
 	// Block filter hint box floating above help line (conversation preview and full-screen message)
 	if a.conv.blockFiltering && a.state == viewConversation {
 		hintBox := renderBlockFilterHintBox()
-		content = placeHintBox(content, hintBox)
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
 	}
 	if a.state == viewMessageFull {
 		if a.msgFull.blockFiltering {
 			hintBox := renderBlockFilterHintBox()
-			content = placeHintBox(content, hintBox)
+			content = placeHintBox(content, hintBox, a.activeDividerCol())
 		} else if a.msgFull.searching {
 			hintBox := renderMsgFullSearchHintBox()
-			content = placeHintBox(content, hintBox)
+			content = placeHintBox(content, hintBox, a.activeDividerCol())
 		}
 	}
 
@@ -1141,7 +1175,7 @@ func (a *App) View() string {
 	if a.cmdMode {
 		hintBox := a.renderCmdHintBox()
 		if hintBox != "" {
-			content = placeHintBox(content, hintBox)
+			content = placeHintBox(content, hintBox, a.activeDividerCol())
 		}
 	}
 
@@ -1167,10 +1201,15 @@ func (a *App) View() string {
 			if startY < 0 {
 				startY = 0
 			}
+			divCol := a.activeDividerCol()
 			for i, bl := range boxLines {
 				y := startY + i
 				if y < len(contentLines) {
-					contentLines[y] = overlayLine(contentLines[y], bl, 1, a.width)
+					limit := a.width
+					if divCol > 0 {
+						limit = divCol
+					}
+					contentLines[y] = overlayLine(contentLines[y], bl, 1, limit)
 				}
 			}
 			content = strings.Join(contentLines, "\n")
@@ -1912,13 +1951,6 @@ func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
 		return a.openConvChangesPage()
 	case "f":
 		return a.openConvFilesPage()
-	case "o":
-		a.convPageActive = true
-		a.convPage = convPageOverview
-		a.convPageItems = nil
-		a.convPageChangeMap = nil
-		a.conv.split.CacheKey = ""
-		return a, nil
 	}
 	return a, nil
 }
@@ -1930,9 +1962,8 @@ func (a *App) renderConvPageHintBox() string {
 
 	line1 := hl.Render("u") + d.Render(":urls") + sp + hl.Render("i") + d.Render(":images")
 	line2 := hl.Render("g") + d.Render(":changes") + sp + hl.Render("f") + d.Render(":files")
-	line3 := hl.Render("o") + d.Render(":overview")
 
-	body := strings.Join([]string{line1, line2, line3, d.Render("esc:cancel")}, "\n")
+	body := strings.Join([]string{line1, line2, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDim).
@@ -1947,20 +1978,20 @@ func (a *App) renderConvPageActionsHintBox() string {
 	var line1, line2 string
 	switch a.convPage {
 	case convPageURLs:
-		line1 = hl.Render("enter") + d.Render(":open") + sp + hl.Render("o") + d.Render(":open")
-		line2 = hl.Render("y") + d.Render(":copy-path")
+		line1 = hl.Render("xo") + d.Render(":open")
+		line2 = hl.Render("xy") + d.Render(":copy-path")
 	case convPageFiles:
-		line1 = hl.Render("enter") + d.Render(":edit") + sp + hl.Render("e") + d.Render(":edit")
-		line2 = hl.Render("y") + d.Render(":copy-path")
+		line1 = hl.Render("xe") + d.Render(":edit")
+		line2 = hl.Render("xy") + d.Render(":copy-path")
 	case convPageChanges:
-		line1 = hl.Render("enter") + d.Render(":edit") + sp + hl.Render("e") + d.Render(":edit")
-		line2 = hl.Render("y") + d.Render(":copy-path")
+		line1 = hl.Render("xe") + d.Render(":edit")
+		line2 = hl.Render("xy") + d.Render(":copy-path")
 	case convPageImages:
-		line1 = hl.Render("enter") + d.Render(":open") + sp + hl.Render("e") + d.Render(":edit")
-		line2 = hl.Render("y") + d.Render(":copy-path")
+		line1 = hl.Render("xo") + d.Render(":open") + sp + hl.Render("xe") + d.Render(":edit")
+		line2 = hl.Render("xy") + d.Render(":copy-path")
 	default:
-		line1 = hl.Render("enter") + d.Render(":open")
-		line2 = hl.Render("y") + d.Render(":copy-path")
+		line1 = hl.Render("xo") + d.Render(":open")
+		line2 = hl.Render("xy") + d.Render(":copy-path")
 	}
 	body := strings.Join([]string{line1, line2, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
@@ -3609,17 +3640,12 @@ func (a *App) renderSessionSplit() string {
 		borderColor = colorBorderFocused
 	}
 
-	leftStyle := lipgloss.NewStyle().Width(listW).MaxWidth(listW).Height(contentH).MaxHeight(contentH)
-	rightStyle := lipgloss.NewStyle().Width(previewW).MaxWidth(previewW).Height(contentH).MaxHeight(contentH)
-	borderStyle := lipgloss.NewStyle().Foreground(borderColor).Height(contentH).MaxHeight(contentH)
-
 	clampPaginator(&a.sessionList)
 
-	left := leftStyle.Render(a.sessionList.View())
-	border := borderStyle.Render(strings.Repeat("│\n", max(contentH-1, 0)) + "│")
-	right := rightStyle.Render(a.sessSplit.Preview.View())
+	left := a.sessionList.View()
+	right := a.sessSplit.Preview.View()
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, border, right)
+	return renderFixedSplit(left, right, listW, previewW, contentH, borderColor)
 }
 
 // toggleSessionPreviewMode switches session preview to the given mode,

@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	ansi "github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -411,7 +412,7 @@ func newSessionList(sessions []session.Session, width, height int, groupMode int
 // visible. When a depth=1 child matches, its parent also stays visible.
 func buildChainAwareFilter(items []list.Item) list.FilterFunc {
 	// Pre-compute parent-child relationships.
-	parentOf := make(map[int]int)   // child index → parent index
+	parentOf := make(map[int]int)     // child index → parent index
 	childrenOf := make(map[int][]int) // parent index → child indices
 	lastParent := -1
 	for i, item := range items {
@@ -1172,14 +1173,14 @@ func overlayCenter(bg, fg string, width, height int) string {
 
 // placeHintBox overlays hint box lines onto the bottom of content,
 // preserving background content on both sides of the box.
-func placeHintBox(content, hintBox string) string {
+// dividerCol is the cell-width column where the split divider sits (0 = no split).
+func placeHintBox(content, hintBox string, dividerCol int) string {
 	contentLines := strings.Split(content, "\n")
 	boxLines := strings.Split(hintBox, "\n")
 	startY := len(contentLines) - len(boxLines)
 	if startY < 0 {
 		startY = 0
 	}
-	// Find max width of content for overlay
 	maxW := 0
 	for _, l := range contentLines {
 		if w := lipgloss.Width(l); w > maxW {
@@ -1192,7 +1193,11 @@ func placeHintBox(content, hintBox string) string {
 	for i, bl := range boxLines {
 		y := startY + i
 		if y < len(contentLines) {
-			contentLines[y] = overlayLine(contentLines[y], bl, 1, maxW)
+			limit := maxW
+			if dividerCol > 0 {
+				limit = dividerCol
+			}
+			contentLines[y] = overlayLine(contentLines[y], bl, 1, limit)
 		}
 	}
 	return strings.Join(contentLines, "\n")
@@ -1203,7 +1208,11 @@ func placeHintBox(content, hintBox string) string {
 // the background's ANSI state so right-side cells keep their styling.
 func overlayLine(bgLine, fgLine string, col, maxWidth int) string {
 	bgCells := splitANSICells(bgLine)
-	fgW := lipgloss.Width(fgLine)
+	fgW := min(lipgloss.Width(fgLine), max(maxWidth-col, 0))
+	if fgW <= 0 {
+		return bgLine
+	}
+	fgLine = ansi.Truncate(fgLine, fgW, "")
 
 	// Pad bg cells to reach col
 	for len(bgCells) < col+fgW && len(bgCells) < maxWidth {
