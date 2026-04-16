@@ -6,4 +6,5 @@ vendor/
 .DS_Store
 dist/
 .worktree
+/.claude/
 /ccx
