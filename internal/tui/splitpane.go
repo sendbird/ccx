@@ -91,10 +91,24 @@ func truncateExact(s string, targetW int) (string, int) {
 	return s, w
 }
 
+// hexToRGB parses a "#RRGGBB" hex color string into RGB components.
+func hexToRGB(hex string) (uint8, uint8, uint8) {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return 128, 128, 128
+	}
+	var r, g, b uint8
+	fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+	return r, g, b
+}
+
 func renderFixedSplit(left, right string, listW, previewW, contentH int, borderColor lipgloss.Color) string {
 	leftLines := strings.Split(left, "\n")
 	rightLines := strings.Split(right, "\n")
-	borderCell := lipgloss.NewStyle().Foreground(borderColor).Render("│")
+	// Build border with raw ANSI to avoid lipgloss wrapping artifacts.
+	// Convert lipgloss.Color hex to ANSI 24-bit color sequence.
+	br, bg, bb := hexToRGB(string(borderColor))
+	borderCell := fmt.Sprintf("\x1b[38;2;%d;%d;%dm│\x1b[0m", br, bg, bb)
 	const reset = "\x1b[0m"
 	// CHA (Cursor Horizontal Absolute) — positions cursor at exact column (1-based)
 	borderCHA := fmt.Sprintf("\x1b[%dG", listW+1)
