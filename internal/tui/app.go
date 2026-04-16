@@ -123,8 +123,7 @@ const (
 type convPageKind int
 
 const (
-	convPageNone convPageKind = iota
-	convPageOverview
+	convPageOverview convPageKind = iota
 	convPageURLs
 	convPageImages
 	convPageChanges
@@ -1106,14 +1105,14 @@ func (a *App) View() string {
 	}
 
 	// Conversation artifact browser actions menu
-	if a.convPageActionsMenu && a.state == viewConversation && a.convPage != convPageNone {
+	if a.convPageActionsMenu && a.state == viewConversation && a.convPage != convPageOverview {
 		hintBox := a.renderConvPageActionsHintBox()
 		content = placeHintBox(content, hintBox)
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Conversation artifact page browser
-	if a.state == viewConversation && a.convPage != convPageNone {
+	if a.state == viewConversation && a.convPage != convPageOverview {
 		content = a.renderConvPageBrowser()
 		if a.convPage == convPageOverview {
 			help = formatHelp("p:page enter:open []:resize esc:back")

@@ -215,7 +215,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Dedicated conversation artifact page browser
-	if a.convPage != convPageNone {
+	if a.convPage != convPageOverview {
 		switch key {
 		case "p":
 			a.convPageMenu = true
@@ -919,7 +919,7 @@ func convPageTitle(kind convPageKind) string {
 }
 
 func (a *App) renderConvPageBrowser() string {
-	if a.convPage == convPageNone {
+	if a.convPage == convPageOverview {
 		return ""
 	}
 	contentH := ContentHeight(a.height)
