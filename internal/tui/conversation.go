@@ -974,6 +974,24 @@ func renderFilePreview(path string, width int) string {
 	return out
 }
 
+// windowRange returns start/end indices to display around cursor within visibleRows.
+func windowRange(total, cursor, visibleRows int) (int, int) {
+	if total <= visibleRows {
+		return 0, total
+	}
+	half := visibleRows / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + visibleRows
+	if end > total {
+		end = total
+		start = max(end-visibleRows, 0)
+	}
+	return start, end
+}
+
 func convPageTitle(kind convPageKind) string {
 	switch kind {
 	case convPageURLs:
@@ -998,11 +1016,28 @@ func (a *App) renderConvPageBrowser() string {
 	previewW := max(a.width-listW-1, 1)
 
 	var left strings.Builder
-	left.WriteString(dimStyle.Render("── "+convPageTitle(a.convPage)+" ──") + "\n\n")
-	if len(a.convPageItems) == 0 {
+	title := convPageTitle(a.convPage)
+	n := len(a.convPageItems)
+	left.WriteString(dimStyle.Render(fmt.Sprintf("── %s (%d) ──", title, n)) + "\n\n")
+	if n == 0 {
 		left.WriteString(dimStyle.Render("(no items)"))
 	} else {
-		for i, item := range a.convPageItems {
+		// Window the list so the cursor is always visible.
+		// Header takes 2 lines, leaving visibleRows for items.
+		visibleRows := max(contentH-2, 1)
+		start, end := windowRange(n, a.convPageCursor, visibleRows)
+		if start > 0 {
+			left.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
+			visibleRows--
+			end = min(start+visibleRows, n)
+		}
+		showBottom := end < n
+		if showBottom {
+			visibleRows-- // reserve last line for "↓ more"
+			end = min(start+visibleRows, n)
+		}
+		for i := start; i < end; i++ {
+			item := a.convPageItems[i]
 			cursor := " "
 			style := dimStyle
 			if i == a.convPageCursor {
@@ -1017,6 +1052,9 @@ func (a *App) renderConvPageBrowser() string {
 				label = truncate(label, max(listW-7, 1))
 			}
 			left.WriteString(cursor + " " + style.Render(label) + "\n")
+		}
+		if showBottom {
+			left.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more", n-end)) + "\n")
 		}
 	}
 
