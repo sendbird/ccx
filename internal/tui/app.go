@@ -5281,6 +5281,11 @@ func (a *App) renderBreadcrumb() string {
 		countStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Background(colorTitleBg)
 		rightStr := countStyle.Render(rightParts + " ")
 		rightW := lipgloss.Width(rightStr)
+		maxLeftW := max(a.width-rightW-1, 1)
+		if lipgloss.Width(text) > maxLeftW {
+			text = truncate(text, maxLeftW)
+			x = lipgloss.Width(text)
+		}
 		gap := max(a.width-x-rightW, 1)
 		text += lipgloss.NewStyle().Background(colorTitleBg).Render(strings.Repeat(" ", gap)) + rightStr
 	}

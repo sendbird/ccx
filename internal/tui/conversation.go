@@ -936,8 +936,9 @@ func (a *App) renderConvPageBrowser() string {
 		return ""
 	}
 	contentH := ContentHeight(a.height)
-	listW := a.conv.split.ListWidth(a.width, a.splitRatio)
-	previewW := a.conv.split.PreviewWidth(a.width, a.splitRatio)
+	browserRatio := min(a.splitRatio, 30)
+	listW := a.conv.split.ListWidth(a.width, browserRatio)
+	previewW := a.conv.split.PreviewWidth(a.width, browserRatio)
 
 	if a.convPage == convPageOverview {
 		left := dimStyle.Render("── Overview ──\n\nUse `p` to jump to urls / images / changes / files.")
@@ -1020,7 +1021,7 @@ func (a *App) renderConvPageBrowser() string {
 
 	leftBox := lipgloss.NewStyle().Width(listW).Height(contentH).Render(left.String())
 	rightBox := lipgloss.NewStyle().
-		Width(previewW).Height(contentH).
+		Width(previewW).MaxWidth(previewW).Height(contentH).
 		BorderLeft(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(colorDim).
