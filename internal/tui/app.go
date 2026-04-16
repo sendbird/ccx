@@ -124,6 +124,7 @@ type convPageKind int
 
 const (
 	convPageNone convPageKind = iota
+	convPageOverview
 	convPageURLs
 	convPageImages
 	convPageChanges
@@ -1114,7 +1115,11 @@ func (a *App) View() string {
 	// Conversation artifact page browser
 	if a.state == viewConversation && a.convPage != convPageNone {
 		content = a.renderConvPageBrowser()
-		help = formatHelp("↑↓:nav enter:open x:actions y:copy esc:back p:page")
+		if a.convPage == convPageOverview {
+			help = formatHelp("p:page enter:open []:resize esc:back")
+		} else {
+			help = formatHelp("↑↓:nav enter:open x:actions y:copy []:resize esc:back p:page")
+		}
 	}
 
 	// Block filter hint box floating above help line (conversation preview and full-screen message)
@@ -1908,9 +1913,10 @@ func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
 	case "f":
 		return a.openConvFilesPage()
 	case "o":
-		// back to normal conversation overview
+		a.convPage = convPageOverview
+		a.convPageItems = nil
+		a.convPageChangeMap = nil
 		a.conv.split.CacheKey = ""
-		a.updateConvPreview()
 		return a, nil
 	}
 	return a, nil

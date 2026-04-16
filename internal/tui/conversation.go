@@ -217,12 +217,14 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Dedicated conversation artifact page browser
 	if a.convPage != convPageNone {
 		switch key {
+		case "p":
+			a.convPageMenu = true
+			return a, nil
 		case "esc":
-			a.convPage = convPageNone
+			a.convPage = convPageOverview
 			a.convPageItems = nil
 			a.convPageChangeMap = nil
 			a.conv.split.CacheKey = ""
-			a.updateConvPreview()
 			return a, nil
 		case "up", "k":
 			if a.convPageCursor > 0 {
@@ -901,6 +903,8 @@ func renderFilePreview(path string, width int) string {
 
 func convPageTitle(kind convPageKind) string {
 	switch kind {
+	case convPageOverview:
+		return "Overview"
 	case convPageURLs:
 		return "URLs"
 	case convPageImages:
@@ -921,6 +925,20 @@ func (a *App) renderConvPageBrowser() string {
 	contentH := ContentHeight(a.height)
 	listW := a.conv.split.ListWidth(a.width, a.splitRatio)
 	previewW := a.conv.split.PreviewWidth(a.width, a.splitRatio)
+
+	if a.convPage == convPageOverview {
+		left := dimStyle.Render("── Overview ──\n\nUse `p` to jump to urls / images / changes / files.")
+		right := dimStyle.Render("Overview\n\nArtifact browser pages let you inspect URLs, images, changes, and files from the current conversation.\n\nPress `p` to switch pages.")
+		leftBox := lipgloss.NewStyle().Width(listW).Height(contentH).Render(left)
+		rightBox := lipgloss.NewStyle().
+			Width(previewW).Height(contentH).
+			BorderLeft(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(colorDim).
+			PaddingLeft(1).
+			Render(right)
+		return lipgloss.JoinHorizontal(lipgloss.Top, leftBox, rightBox)
+	}
 
 	var left strings.Builder
 	left.WriteString(dimStyle.Render("── "+convPageTitle(a.convPage)+" ──") + "\n\n")
