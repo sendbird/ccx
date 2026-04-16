@@ -1033,6 +1033,7 @@ func relatedUserPrompt(messages []session.Entry, idx int) string {
 }
 
 func (a *App) openConvImagesPage() (tea.Model, tea.Cmd) {
+	a.convPageActive = true
 	a.convPage = convPageImages
 	a.convPageItems = nil
 	for idx, e := range a.conv.messages {
@@ -1057,6 +1058,7 @@ func (a *App) openConvImagesPage() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) openConvURLsPage() (tea.Model, tea.Cmd) {
+	a.convPageActive = true
 	a.convPage = convPageURLs
 	a.convPageItems = nil
 	seen := make(map[string]bool)
@@ -1073,6 +1075,7 @@ func (a *App) openConvURLsPage() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) openConvFilesPage() (tea.Model, tea.Cmd) {
+	a.convPageActive = true
 	a.convPage = convPageFiles
 	a.convPageItems = nil
 	seen := make(map[string]bool)
@@ -1089,6 +1092,7 @@ func (a *App) openConvFilesPage() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) openConvChangesPage() (tea.Model, tea.Cmd) {
+	a.convPageActive = true
 	a.convPage = convPageChanges
 	a.convPageItems = nil
 	a.convPageChangeMap = make(map[string]extract.ChangeItem)

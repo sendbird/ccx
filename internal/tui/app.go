@@ -1903,7 +1903,6 @@ func (a *App) renderStatsPageHintBox() string {
 }
 
 func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
-	a.convPageActive = true
 	switch key {
 	case "u":
 		return a.openConvURLsPage()
@@ -1914,6 +1913,7 @@ func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
 	case "f":
 		return a.openConvFilesPage()
 	case "o":
+		a.convPageActive = true
 		a.convPage = convPageOverview
 		a.convPageItems = nil
 		a.convPageChangeMap = nil
