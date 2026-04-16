@@ -249,6 +249,11 @@ type App struct {
 	convPageLastCursor int // tracks cursor to detect changes and reset viewport
 	convPageVP         viewport.Model
 	convPageChangeMap  map[string]extract.ChangeItem
+	// Browser search filter
+	convPageSearching bool
+	convPageSearchTI  textinput.Model
+	convPageSearchTerm string
+	convPageAllItems  []convPageItem // unfiltered items (set when filter is active)
 	// Conversation artifact browser actions menu
 	convPageActionsMenu bool
 
@@ -1196,18 +1201,26 @@ func (a *App) View() string {
 	// Conversation artifact page browser
 	if a.state == viewConversation && a.convPageActive && !a.convPageMenu && !a.convPageActionsMenu {
 		content = a.renderConvPageBrowser()
-		imgHint := ""
-		if a.convPage == convPageImages && kitty.Supported() {
-			if a.convPageKitty {
-				imgHint = " i:hide-img"
-			} else {
-				imgHint = " i:show-img"
-			}
-		}
-		if a.convPageFocus {
-			help = formatHelp("↑↓:scroll g/G:top/btm pgup/dn:page ←h:list x:actions []:resize p:page" + imgHint)
+		if a.convPageSearching {
+			help = "  " + a.convPageSearchTI.View() + helpStyle.Render("  enter:apply esc:cancel")
 		} else {
-			help = formatHelp("↑↓:nav →l:detail g/G:ends pgup/dn:page x:actions []:resize esc:back p:page" + imgHint)
+			imgHint := ""
+			if a.convPage == convPageImages && kitty.Supported() {
+				if a.convPageKitty {
+					imgHint = " i:hide-img"
+				} else {
+					imgHint = " i:show-img"
+				}
+			}
+			filterHint := ""
+			if a.convPageSearchTerm != "" {
+				filterHint = " " + filterBadge.Render("["+a.convPageSearchTerm+"]")
+			}
+			if a.convPageFocus {
+				help = formatHelp("↑↓:scroll g/G:top/btm pgup/dn:page ←h:list /:search x:actions []:resize p:page"+imgHint) + filterHint
+			} else {
+				help = formatHelp("↑↓:nav →l:detail g/G:ends pgup/dn:page /:search x:actions []:resize esc:back p:page"+imgHint) + filterHint
+			}
 		}
 	}
 
@@ -4762,7 +4775,7 @@ func (a *App) isInTextInput() bool {
 	return a.isFiltering() || a.moveMode || a.worktreeMode ||
 		a.sessConvSearching || a.liveInputActive || a.cfgSearching || a.cfgNaming ||
 		a.urlSearching || a.conv.blockFiltering || a.msgFull.blockFiltering ||
-		a.msgFull.searching
+		a.msgFull.searching || a.convPageSearching
 }
 
 func (a *App) isFiltering() bool {

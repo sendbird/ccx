@@ -222,6 +222,35 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Dedicated conversation artifact page browser
 	if a.convPageActive {
+		// Search input active: intercept all keys
+		if a.convPageSearching {
+			switch key {
+			case "enter":
+				a.convPageSearching = false
+				a.convPageSearchTerm = a.convPageSearchTI.Value()
+				a.applyConvPageFilter()
+				return a, nil
+			case "esc":
+				a.convPageSearching = false
+				a.convPageSearchTI.SetValue("")
+				// Restore unfiltered items
+				if a.convPageAllItems != nil {
+					a.convPageItems = a.convPageAllItems
+					a.convPageAllItems = nil
+					a.convPageSearchTerm = ""
+					a.convPageCursor = 0
+				}
+				return a, nil
+			default:
+				var cmd tea.Cmd
+				a.convPageSearchTI, cmd = a.convPageSearchTI.Update(msg)
+				// Live filter as user types
+				a.convPageSearchTerm = a.convPageSearchTI.Value()
+				a.applyConvPageFilter()
+				return a, cmd
+			}
+		}
+
 		// Right pane focused: scroll keys move viewport
 		if a.convPageFocus {
 			switch key {
@@ -255,6 +284,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case "i":
 				a.convPageKitty = !a.convPageKitty
 				return a, nil
+			case "/":
+				a.convPageFocus = false
+				a.startConvPageSearch()
+				return a, nil
 			case "[":
 				a.adjustSplitRatio(-5)
 				return a, nil
@@ -272,11 +305,25 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.convPageMenu = true
 			return a, nil
 		case "esc":
+			// First esc clears filter, second esc closes browser
+			if a.convPageSearchTerm != "" {
+				a.convPageSearchTerm = ""
+				a.convPageSearchTI.SetValue("")
+				if a.convPageAllItems != nil {
+					a.convPageItems = a.convPageAllItems
+					a.convPageAllItems = nil
+					a.convPageCursor = 0
+					a.convPageLastCursor = -1
+				}
+				return a, nil
+			}
 			a.convPageActive = false
 			a.convPageFocus = false
 			a.convPageActionsMenu = false
 			a.convPageItems = nil
+			a.convPageAllItems = nil
 			a.convPageChangeMap = nil
+			a.convPageSearchTerm = ""
 			a.conv.split.CacheKey = ""
 			a.updateConvPreview()
 			return a, nil
@@ -320,6 +367,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case "i":
 			a.convPageKitty = !a.convPageKitty
+			return a, nil
+		case "/":
+			a.startConvPageSearch()
 			return a, nil
 		case "[":
 			a.adjustSplitRatio(-5)
@@ -996,6 +1046,38 @@ func windowRange(total, cursor, visibleRows int) (int, int) {
 		start = max(end-visibleRows, 0)
 	}
 	return start, end
+}
+
+func (a *App) startConvPageSearch() {
+	a.convPageSearching = true
+	a.convPageSearchTI = textinput.New()
+	a.convPageSearchTI.Prompt = "Search: "
+	a.convPageSearchTI.Focus()
+	// Save unfiltered items on first search
+	if a.convPageAllItems == nil {
+		a.convPageAllItems = a.convPageItems
+	}
+}
+
+func (a *App) applyConvPageFilter() {
+	if a.convPageAllItems == nil {
+		return
+	}
+	term := strings.ToLower(a.convPageSearchTerm)
+	if term == "" {
+		a.convPageItems = a.convPageAllItems
+	} else {
+		var filtered []convPageItem
+		for _, item := range a.convPageAllItems {
+			text := strings.ToLower(item.Label + " " + item.URL + " " + item.userPrompt)
+			if strings.Contains(text, term) {
+				filtered = append(filtered, item)
+			}
+		}
+		a.convPageItems = filtered
+	}
+	a.convPageCursor = 0
+	a.convPageLastCursor = -1
 }
 
 func convPageTitle(kind convPageKind) string {
