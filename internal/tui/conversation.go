@@ -1024,17 +1024,28 @@ func (a *App) renderConvPageBrowser() string {
 	} else {
 		// Window the list so the cursor is always visible.
 		// Header takes 2 lines, leaving visibleRows for items.
+		// Reserve rows for ↑/↓ indicators before computing the window
+		// so the cursor never falls outside the visible range.
 		visibleRows := max(contentH-2, 1)
 		start, end := windowRange(n, a.convPageCursor, visibleRows)
-		if start > 0 {
-			left.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
-			visibleRows--
-			end = min(start+visibleRows, n)
+		needTop := start > 0
+		needBottom := end < n
+		if needTop || needBottom {
+			// Recompute with reduced rows to leave room for indicators
+			reserved := 0
+			if needTop {
+				reserved++
+			}
+			if needBottom {
+				reserved++
+			}
+			itemRows := max(visibleRows-reserved, 1)
+			start, end = windowRange(n, a.convPageCursor, itemRows)
+			needTop = start > 0
+			needBottom = end < n
 		}
-		showBottom := end < n
-		if showBottom {
-			visibleRows-- // reserve last line for "↓ more"
-			end = min(start+visibleRows, n)
+		if needTop {
+			left.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
 		}
 		for i := start; i < end; i++ {
 			item := a.convPageItems[i]
@@ -1053,7 +1064,7 @@ func (a *App) renderConvPageBrowser() string {
 			}
 			left.WriteString(cursor + " " + style.Render(label) + "\n")
 		}
-		if showBottom {
+		if needBottom {
 			left.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more", n-end)) + "\n")
 		}
 	}
