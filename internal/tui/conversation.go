@@ -68,6 +68,15 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.currentSess = sess
 	a.conv.items = buildConvItems(a.conv.merged, agents, tasks, crons)
 
+	// Reset artifact page browser state on fresh conversation open.
+	a.convPageActive = false
+	a.convPageMenu = false
+	a.convPageActionsMenu = false
+	a.convPage = convPageOverview
+	a.convPageItems = nil
+	a.convPageChangeMap = nil
+	a.convPageCursor = 0
+
 	if info, err := os.Stat(sess.FilePath); err == nil {
 		a.lastMsgLoadTime = info.ModTime()
 	}
