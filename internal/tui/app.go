@@ -242,6 +242,7 @@ type App struct {
 	convPageMenu       bool // conversation page jump popup
 	convPageActive     bool
 	convPageFocus      bool // true = right pane focused, false = left list focused
+	convPageKitty      bool // true = show kitty image preview in Images page
 	convPage           convPageKind
 	convPageItems      []convPageItem
 	convPageCursor     int
@@ -1195,10 +1196,18 @@ func (a *App) View() string {
 	// Conversation artifact page browser
 	if a.state == viewConversation && a.convPageActive && !a.convPageMenu && !a.convPageActionsMenu {
 		content = a.renderConvPageBrowser()
+		imgHint := ""
+		if a.convPage == convPageImages && kitty.Supported() {
+			if a.convPageKitty {
+				imgHint = " i:hide-img"
+			} else {
+				imgHint = " i:show-img"
+			}
+		}
 		if a.convPageFocus {
-			help = formatHelp("↑↓:scroll g/G:top/btm pgup/dn:page ←h:list x:actions []:resize p:page")
+			help = formatHelp("↑↓:scroll g/G:top/btm pgup/dn:page ←h:list x:actions []:resize p:page" + imgHint)
 		} else {
-			help = formatHelp("↑↓:nav →l:detail g/G:ends pgup/dn:page x:actions []:resize esc:back p:page")
+			help = formatHelp("↑↓:nav →l:detail g/G:ends pgup/dn:page x:actions []:resize esc:back p:page" + imgHint)
 		}
 	}
 

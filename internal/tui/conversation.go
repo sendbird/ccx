@@ -252,6 +252,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case "x":
 				a.convPageActionsMenu = true
 				return a, nil
+			case "i":
+				a.convPageKitty = !a.convPageKitty
+				return a, nil
 			case "[":
 				a.adjustSplitRatio(-5)
 				return a, nil
@@ -314,6 +317,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		case "x":
 			a.convPageActionsMenu = true
+			return a, nil
+		case "i":
+			a.convPageKitty = !a.convPageKitty
 			return a, nil
 		case "[":
 			a.adjustSplitRatio(-5)
@@ -1159,6 +1165,7 @@ func (a *App) openConvImagesPage() (tea.Model, tea.Cmd) {
 	a.convPageActive = true
 	a.convPageFocus = false
 	a.convPageLastCursor = -1
+	a.convPageKitty = true
 	a.convPage = convPageImages
 	a.convPageItems = nil
 	for idx, e := range a.conv.messages {
@@ -2218,7 +2225,8 @@ func (a *App) kittyImageLayer() string {
 	}
 
 	// Images page: render into the right detail pane of the artifact browser
-	if a.convPageActive && a.convPage == convPageImages && a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
+	// (only when kitty preview is enabled via `i` toggle)
+	if a.convPageActive && a.convPage == convPageImages && a.convPageKitty && a.convPageCursor >= 0 && a.convPageCursor < len(a.convPageItems) {
 		item := a.convPageItems[a.convPageCursor]
 		id := strings.TrimPrefix(item.URL, "paste:")
 		var pasteID int
