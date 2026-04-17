@@ -254,11 +254,14 @@ func RunSessions(claudeDir string, all bool) error {
 		return fmt.Errorf("no sessions found")
 	}
 
+	// Mark live status before filtering
+	tmux.MarkLiveSessions(allSessions)
+
 	var sessions []session.Session
 	if all {
 		sessions = allSessions
 	} else {
-		// Filter to current tmux window's project paths
+		// Default: only live sessions in the current tmux window
 		projPaths := tmux.CurrentWindowClaudes()
 		if len(projPaths) == 0 {
 			live := tmux.FindLiveProjectPaths()
@@ -278,13 +281,16 @@ func RunSessions(claudeDir string, all bool) error {
 			absSet[p] = true
 		}
 		for _, s := range allSessions {
+			if !s.IsLive {
+				continue
+			}
 			abs, _ := filepath.Abs(s.ProjectPath)
 			if absSet[s.ProjectPath] || (abs != "" && absSet[abs]) {
 				sessions = append(sessions, s)
 			}
 		}
 		if len(sessions) == 0 {
-			return fmt.Errorf("no sessions found for current window projects (use --all for all sessions)")
+			return fmt.Errorf("no live sessions in current window (use --all for all sessions)")
 		}
 	}
 
