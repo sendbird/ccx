@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/sendbird/ccx/internal/extract"
@@ -22,6 +23,7 @@ var Commands = []struct {
 	{"changes", "List file changes made by the session (interactive on TTY)"},
 	{"images", "List image paths from the session (interactive on TTY)"},
 	{"conversation", "List conversation turns from the Claude session (interactive on TTY)"},
+	{"sessions", "List all session IDs with metadata"},
 	{"help", "Show available commands and usage"},
 }
 
@@ -38,6 +40,9 @@ func Run(command, claudeDir string, plain bool) (*RunResult, error) {
 	if command == "help" {
 		printHelp()
 		return nil, nil
+	}
+	if command == "sessions" {
+		return nil, runSessions(claudeDir)
 	}
 
 	filePath, sessID, err := findSessionFile(claudeDir)
@@ -227,6 +232,39 @@ func printImages(filePath, sessID, claudeDir string) error {
 	}
 	if found == 0 {
 		return fmt.Errorf("no images found in session")
+	}
+	return nil
+}
+
+// runSessions lists all sessions sorted by modification time (most recent first).
+// Output: ID  SHORT_ID  MODIFIED  MSGS  PROJECT  PROMPT
+func runSessions(claudeDir string) error {
+	sessions := session.LoadCachedSessions(claudeDir)
+	if len(sessions) == 0 {
+		// Fall back to full scan if no cache
+		var err error
+		sessions, err = session.ScanSessions(claudeDir)
+		if err != nil {
+			return fmt.Errorf("no sessions found: %w", err)
+		}
+	}
+	if len(sessions) == 0 {
+		return fmt.Errorf("no sessions found")
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].ModTime.After(sessions[j].ModTime)
+	})
+
+	for _, s := range sessions {
+		prompt := s.FirstPrompt
+		if len(prompt) > 80 {
+			prompt = prompt[:80] + "…"
+		}
+		prompt = strings.ReplaceAll(prompt, "\n", " ")
+		prompt = strings.ReplaceAll(prompt, "\t", " ")
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%d\t%s\t%s\n",
+			s.ID, s.ShortID, s.ModTime.Format("2006-01-02 15:04"), s.MsgCount, s.ProjectName, prompt)
 	}
 	return nil
 }
