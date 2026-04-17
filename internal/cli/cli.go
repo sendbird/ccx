@@ -41,8 +41,9 @@ func Run(command, claudeDir string, plain bool) (*RunResult, error) {
 		printHelp()
 		return nil, nil
 	}
+	// "sessions" is handled directly in main.go with its own flags
 	if command == "sessions" {
-		return nil, runSessions(claudeDir)
+		return nil, RunSessions(claudeDir, false)
 	}
 
 	filePath, sessID, err := findSessionFile(claudeDir)
@@ -236,20 +237,55 @@ func printImages(filePath, sessID, claudeDir string) error {
 	return nil
 }
 
-// runSessions lists all sessions sorted by modification time (most recent first).
+// runSessions lists sessions sorted by modification time (most recent first).
+// By default, filters to sessions matching the current tmux window's project paths.
+// With --all, lists every session.
 // Output: ID  SHORT_ID  MODIFIED  MSGS  PROJECT  PROMPT
-func runSessions(claudeDir string) error {
-	sessions := session.LoadCachedSessions(claudeDir)
-	if len(sessions) == 0 {
-		// Fall back to full scan if no cache
+func RunSessions(claudeDir string, all bool) error {
+	allSessions := session.LoadCachedSessions(claudeDir)
+	if len(allSessions) == 0 {
 		var err error
-		sessions, err = session.ScanSessions(claudeDir)
+		allSessions, err = session.ScanSessions(claudeDir)
 		if err != nil {
 			return fmt.Errorf("no sessions found: %w", err)
 		}
 	}
-	if len(sessions) == 0 {
+	if len(allSessions) == 0 {
 		return fmt.Errorf("no sessions found")
+	}
+
+	var sessions []session.Session
+	if all {
+		sessions = allSessions
+	} else {
+		// Filter to current tmux window's project paths
+		projPaths := tmux.CurrentWindowClaudes()
+		if len(projPaths) == 0 {
+			live := tmux.FindLiveProjectPaths()
+			for p := range live {
+				projPaths = append(projPaths, p)
+			}
+		}
+		if len(projPaths) == 0 {
+			return fmt.Errorf("no Claude session found in current window (use --all for all sessions)")
+		}
+		absSet := make(map[string]bool)
+		for _, p := range projPaths {
+			abs, _ := filepath.Abs(p)
+			if abs != "" {
+				absSet[abs] = true
+			}
+			absSet[p] = true
+		}
+		for _, s := range allSessions {
+			abs, _ := filepath.Abs(s.ProjectPath)
+			if absSet[s.ProjectPath] || (abs != "" && absSet[abs]) {
+				sessions = append(sessions, s)
+			}
+		}
+		if len(sessions) == 0 {
+			return fmt.Errorf("no sessions found for current window projects (use --all for all sessions)")
+		}
 	}
 
 	sort.Slice(sessions, func(i, j int) bool {

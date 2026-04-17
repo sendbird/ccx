@@ -34,7 +34,17 @@ func main() {
 	// Handle subcommands before global flag parsing
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "urls", "files", "changes", "images", "conversation", "sessions", "help":
+		case "sessions":
+			fs := flag.NewFlagSet("sessions", flag.ExitOnError)
+			all := fs.Bool("all", false, "list all sessions (default: current tmux window only)")
+			fs.Parse(os.Args[2:])
+			dir := resolveClaudeDir("")
+			if err := cli.RunSessions(dir, *all); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "urls", "files", "changes", "images", "conversation", "help":
 			subcmd := os.Args[1]
 			fs := flag.NewFlagSet(subcmd, flag.ExitOnError)
 			plain := fs.Bool("plain", false, "force plain text output (no interactive picker)")
