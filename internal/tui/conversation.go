@@ -1415,12 +1415,19 @@ func buildConversationPreviewEntry(header string, fallbackTS time.Time, entries 
 		blocks = append(blocks, session.ContentBlock{Type: "text", Text: header})
 	}
 
-	for idx, e := range entries {
-		if idx > 0 {
-			blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.Repeat("─", 24)})
-		}
+	emitted := 0
+	for _, e := range entries {
 		if ts.IsZero() && !e.Timestamp.IsZero() {
 			ts = e.Timestamp
+		}
+		// Skip entries that have no meaningful text (only role+timestamp header)
+		// These are typically auto-generated user turns containing only tool results.
+		hasText := entryFullText(e) != ""
+		if !hasText {
+			continue
+		}
+		if emitted > 0 {
+			blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.Repeat("─", 24)})
 		}
 		if msg := previewMessageText(e); msg != "" {
 			blocks = append(blocks, session.ContentBlock{Type: "text", Text: msg})
@@ -1436,6 +1443,7 @@ func buildConversationPreviewEntry(header string, fallbackTS time.Time, entries 
 			}
 			blocks = append(blocks, b)
 		}
+		emitted++
 	}
 
 	if len(blocks) == 0 {
