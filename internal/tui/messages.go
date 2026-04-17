@@ -555,13 +555,18 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				break
 			}
 			if text != "" && !isSystemText(text) {
-				buf.WriteString(cursorPrefix)
-				if formatted {
-					text = tryFormatJSON(text)
+				if isDecorativeSeparator(text) {
+					// Render separator without cursor prefix (not navigable)
+					buf.WriteString(dimStyle.Render(strings.Repeat("─", max(w-3, 10))) + "\n\n")
+				} else {
+					buf.WriteString(cursorPrefix)
+					if formatted {
+						text = tryFormatJSON(text)
+					}
+					text = formatMarkdownTables(text)
+					wrapped := wrapText(text, max(w-2, 10))
+					buf.WriteString(wrapped + "\n\n")
 				}
-				text = formatMarkdownTables(text)
-				wrapped := wrapText(text, max(w-2, 10))
-				buf.WriteString(wrapped + "\n\n")
 			}
 		case "tool_use":
 			buf.WriteString(cursorPrefix)
@@ -728,6 +733,21 @@ func applyBgToLine(line string, width int) string {
 	padded := padToWidth(line, width)
 	inner := strings.ReplaceAll(padded, resetCode, resetCode+bgCode)
 	return bgCode + inner + resetCode
+}
+
+// isDecorativeSeparator returns true if the text block is a purely decorative
+// separator line (e.g. ─── between messages in agent/task previews).
+func isDecorativeSeparator(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	for _, r := range t {
+		if r != '─' {
+			return false
+		}
+	}
+	return true
 }
 
 // formatMarkdownTables detects markdown tables in text and re-renders them

@@ -795,40 +795,55 @@ func (fs *FoldState) isBlockVisible(i int) bool {
 	return fs.BlockVisible[i]
 }
 
-// nextVisibleBlock returns the next visible block index after current, or -1.
+// isBlockNavigable returns whether block i can be selected by the block cursor.
+// Decorative separators (e.g. ─── lines between messages) are visible but not navigable.
+func (fs *FoldState) isBlockNavigable(i int) bool {
+	if !fs.isBlockVisible(i) {
+		return false
+	}
+	if i >= 0 && i < len(fs.Entry.Content) {
+		b := fs.Entry.Content[i]
+		if b.Type == "text" && isDecorativeSeparator(b.Text) {
+			return false
+		}
+	}
+	return true
+}
+
+// nextVisibleBlock returns the next navigable block index after current, or -1.
 func (fs *FoldState) nextVisibleBlock(current int) int {
 	for i := current + 1; i < len(fs.Entry.Content); i++ {
-		if fs.isBlockVisible(i) {
+		if fs.isBlockNavigable(i) {
 			return i
 		}
 	}
 	return -1
 }
 
-// prevVisibleBlock returns the previous visible block index before current, or -1.
+// prevVisibleBlock returns the previous navigable block index before current, or -1.
 func (fs *FoldState) prevVisibleBlock(current int) int {
 	for i := current - 1; i >= 0; i-- {
-		if fs.isBlockVisible(i) {
+		if fs.isBlockNavigable(i) {
 			return i
 		}
 	}
 	return -1
 }
 
-// firstVisibleBlock returns the first visible block index, or -1.
+// firstVisibleBlock returns the first navigable block index, or -1.
 func (fs *FoldState) firstVisibleBlock() int {
 	for i := 0; i < len(fs.Entry.Content); i++ {
-		if fs.isBlockVisible(i) {
+		if fs.isBlockNavigable(i) {
 			return i
 		}
 	}
 	return -1
 }
 
-// lastVisibleBlock returns the last visible block index, or -1.
+// lastVisibleBlock returns the last navigable block index, or -1.
 func (fs *FoldState) lastVisibleBlock() int {
 	for i := len(fs.Entry.Content) - 1; i >= 0; i-- {
-		if fs.isBlockVisible(i) {
+		if fs.isBlockNavigable(i) {
 			return i
 		}
 	}
@@ -841,7 +856,7 @@ func (fs *FoldState) SelectBlockAtLine(line int) {
 		return
 	}
 	// Find the last block whose start line is <= the clicked line
-	best := 0
+	best := -1
 	for i, start := range fs.BlockStarts {
 		if start <= line {
 			best = i
@@ -849,7 +864,19 @@ func (fs *FoldState) SelectBlockAtLine(line int) {
 			break
 		}
 	}
-	fs.BlockCursor = best
+	// If the clicked block is a non-navigable separator, snap to nearest navigable block
+	if best >= 0 && !fs.isBlockNavigable(best) {
+		if next := fs.nextVisibleBlock(best); next >= 0 {
+			best = next
+		} else if prev := fs.prevVisibleBlock(best); prev >= 0 {
+			best = prev
+		} else {
+			return
+		}
+	}
+	if best >= 0 {
+		fs.BlockCursor = best
+	}
 }
 
 // Reset initializes fold state for a new entry (cold start, no preferences).
@@ -857,8 +884,12 @@ func (fs *FoldState) Reset(entry session.Entry) {
 	fs.Entry = entry
 	fs.Collapsed = defaultFolds(entry)
 	fs.Formatted = nil
-	fs.BlockCursor = 0
 	fs.Selected = nil
+	// Start cursor on the first navigable block (skip decorative separators)
+	fs.BlockCursor = 0
+	if first := fs.firstVisibleBlock(); first >= 0 {
+		fs.BlockCursor = first
+	}
 }
 
 // ResetWithPrefs initializes fold state for a new entry using persistent
@@ -866,7 +897,6 @@ func (fs *FoldState) Reset(entry session.Entry) {
 func (fs *FoldState) ResetWithPrefs(entry session.Entry, foldPrefs map[string]bool, fmtPrefs map[string]bool) {
 	fs.Entry = entry
 	fs.Collapsed = make(foldSet)
-	fs.BlockCursor = 0
 
 	// Log block types for debugging
 	types := make([]string, len(entry.Content))
@@ -904,6 +934,12 @@ func (fs *FoldState) ResetWithPrefs(entry session.Entry, foldPrefs map[string]bo
 	} else {
 		fs.Formatted = nil
 	}
+
+	// Start cursor on the first navigable block (skip decorative separators)
+	fs.BlockCursor = 0
+	if first := fs.firstVisibleBlock(); first >= 0 {
+		fs.BlockCursor = first
+	}
 }
 
 // GrowBlocks extends fold defaults for newly-appended blocks (live tail).
@@ -935,5 +971,13 @@ func (fs *FoldState) GrowBlocks(entry session.Entry, oldBlockCount int, foldPref
 	}
 	if fs.BlockCursor >= len(entry.Content) {
 		fs.BlockCursor = max(len(entry.Content)-1, 0)
+	}
+	// Ensure cursor is on a navigable block
+	if !fs.isBlockNavigable(fs.BlockCursor) {
+		if next := fs.nextVisibleBlock(fs.BlockCursor); next >= 0 {
+			fs.BlockCursor = next
+		} else if prev := fs.prevVisibleBlock(fs.BlockCursor); prev >= 0 {
+			fs.BlockCursor = prev
+		}
 	}
 }
