@@ -44,6 +44,24 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "pick":
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "ccx pick: missing entity (expected: session)")
+				os.Exit(1)
+			}
+			entity := os.Args[2]
+			if entity != "session" {
+				fmt.Fprintf(os.Stderr, "ccx pick: unknown entity %q (expected: session)\n", entity)
+				os.Exit(1)
+			}
+			fs := flag.NewFlagSet("pick session", flag.ExitOnError)
+			query := fs.String("query", "", "initial filter query (same syntax as TUI /)")
+			multi := fs.Bool("multi", false, "allow multi-select")
+			dirFlag := fs.String("dir", "", "path to Claude data directory (default: ~/.claude)")
+			fs.Parse(os.Args[3:])
+
+			dir := resolveClaudeDir(*dirFlag)
+			os.Exit(int(cli.RunPickSession(dir, *query, *multi)))
 		case "urls", "files", "changes", "images", "conversation", "help":
 			subcmd := os.Args[1]
 			fs := flag.NewFlagSet(subcmd, flag.ExitOnError)

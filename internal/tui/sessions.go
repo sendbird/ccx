@@ -59,21 +59,16 @@ func substringFilter(term string, targets []string) []list.Rank {
 	for i, t := range targets {
 		lower := strings.ToLower(t)
 		allMatch := true
-		var firstIdx int
-		for ti, tt := range terms {
-			idx := strings.Index(lower, tt)
-			if idx < 0 {
+		for _, tt := range terms {
+			if !strings.Contains(lower, tt) {
 				allMatch = false
 				break
-			}
-			if ti == 0 {
-				firstIdx = idx
 			}
 		}
 		if !allMatch {
 			continue
 		}
-		// Use first term match for highlight indices
+		firstIdx := strings.Index(lower, terms[0])
 		matched := make([]int, len(terms[0]))
 		for j := range len(terms[0]) {
 			matched[j] = firstIdx + j
@@ -90,69 +85,7 @@ type sessionItem struct {
 }
 
 func (s sessionItem) FilterValue() string {
-	parts := []string{
-		s.sess.ProjectPath,
-		s.sess.ProjectName,
-		s.sess.GitBranch,
-		s.sess.ShortID,
-		s.sess.FirstPrompt,
-	}
-	if s.sess.ProjectName != "" {
-		parts = append(parts, "proj:"+s.sess.ProjectName)
-	}
-	if s.sess.TmuxWindowName != "" {
-		parts = append(parts, "win:"+s.sess.TmuxWindowName, s.sess.TmuxWindowName)
-	}
-	if s.sess.IsLive {
-		parts = append(parts, "is:live")
-	}
-	if s.sess.IsResponding {
-		parts = append(parts, "is:busy")
-	}
-	if s.sess.IsWorktree {
-		parts = append(parts, "is:wt")
-	}
-	if s.sess.HasMemory {
-		parts = append(parts, "has:mem")
-	}
-	if s.sess.HasTodos {
-		parts = append(parts, "has:todo")
-	}
-	if s.sess.HasTasks {
-		parts = append(parts, "has:task")
-	}
-	if s.sess.HasPlan {
-		parts = append(parts, "has:plan")
-	}
-	if s.sess.HasAgents {
-		parts = append(parts, "has:agent")
-	}
-	if s.sess.HasCompaction {
-		parts = append(parts, "has:compact")
-	}
-	if s.sess.HasSkills {
-		parts = append(parts, "has:skill")
-	}
-	if s.sess.HasMCP {
-		parts = append(parts, "has:mcp")
-	}
-	if s.sess.TeamName != "" {
-		parts = append(parts, "is:team", "team:"+s.sess.TeamName)
-	}
-	if s.sess.TeammateName != "" {
-		parts = append(parts, s.sess.TeammateName)
-	}
-	if s.sess.ParentSessionID != "" {
-		parts = append(parts, "is:fork")
-	}
-	// Custom badges
-	for _, badge := range s.sess.CustomBadges {
-		parts = append(parts, "tag:"+badge, badge)
-	}
-	if s.sess.IsRemote {
-		parts = append(parts, "is:remote", "remote", s.sess.RemotePodName, s.sess.RemoteStatus)
-	}
-	return strings.Join(parts, " ")
+	return session.FilterValueFor(s.sess, nil)
 }
 
 type sessionDelegate struct {
