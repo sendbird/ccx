@@ -55,13 +55,13 @@ func main() {
 				os.Exit(1)
 			}
 			fs := flag.NewFlagSet("pick session", flag.ExitOnError)
-			query := fs.String("query", "", "initial filter query (same syntax as TUI /)")
+			search := fs.String("search", "", "initial filter query (same syntax as TUI /)")
 			multi := fs.Bool("multi", false, "allow multi-select")
 			dirFlag := fs.String("dir", "", "path to Claude data directory (default: ~/.claude)")
 			fs.Parse(os.Args[3:])
 
 			dir := resolveClaudeDir(*dirFlag)
-			os.Exit(int(cli.RunPickSession(dir, *query, *multi)))
+			os.Exit(int(cli.RunPickSessionTUI(dir, *search, *multi)))
 		case "urls", "files", "changes", "images", "conversation", "help":
 			subcmd := os.Args[1]
 			fs := flag.NewFlagSet(subcmd, flag.ExitOnError)
