@@ -95,7 +95,6 @@ func RunPickSessionTUI(claudeDir, search string, multi bool) PickSessionExitCode
 			Sessions []sessionResultEntry `json:"sessions"`
 		}{Sessions: entries}
 		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
 		if err := enc.Encode(envelope); err != nil {
 			fmt.Fprintf(os.Stderr, "ccx: failed to encode result: %v\n", err)
 			return PickSessionError
