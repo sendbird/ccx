@@ -1420,11 +1420,20 @@ func buildConversationPreviewEntry(header string, fallbackTS time.Time, entries 
 		if ts.IsZero() && !e.Timestamp.IsZero() {
 			ts = e.Timestamp
 		}
-		// Skip entries that have no meaningful text (only role+timestamp header)
+		// Skip entries that have no text and no tool_use blocks (only tool_results).
 		// These are typically auto-generated user turns containing only tool results.
 		hasText := entryFullText(e) != ""
+		hasToolUse := false
 		if !hasText {
-			continue
+			for _, b := range e.Content {
+				if b.Type == "tool_use" {
+					hasToolUse = true
+					break
+				}
+			}
+			if !hasToolUse {
+				continue
+			}
 		}
 		if emitted > 0 {
 			blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.Repeat("─", 24)})
