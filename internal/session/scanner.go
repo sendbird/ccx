@@ -72,6 +72,7 @@ func ScanSessions(claudeDir string) ([]Session, error) {
 	for _, f := range files {
 		validPaths[f.path] = true
 		if cached, ok := cache.lookup(f.path, f.modTime); ok {
+			refreshSessionDerivedState(&cached, home)
 			if cached.MsgCount > 0 {
 				// Load custom badges for cached sessions
 				cached.CustomBadges = badgeStore.Get(cached.ID)

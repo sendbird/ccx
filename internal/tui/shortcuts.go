@@ -23,7 +23,8 @@ func DefaultShortcuts() Shortcuts {
 				"2": "preview:stats",
 				"3": "preview:mem",
 				"4": "preview:tasks",
-				"5": "preview:live",
+				"5": "preview:agents",
+				"6": "preview:live",
 			},
 		},
 		"conversation": {
@@ -84,6 +85,21 @@ func mergeShortcuts(dst Shortcuts, src Shortcuts) {
 		}
 		dst[viewName] = dstVS
 	}
+	migrateShortcuts(dst)
+}
+
+func migrateShortcuts(sc Shortcuts) {
+	sess, ok := sc["sessions"]
+	if !ok || sess.Left == nil {
+		return
+	}
+	if sess.Left["5"] == "preview:live" {
+		sess.Left["5"] = "preview:agents"
+		if _, exists := sess.Left["6"]; !exists {
+			sess.Left["6"] = "preview:live"
+		}
+		sc["sessions"] = sess
+	}
 }
 
 // handleShortcutKey checks if a key press matches a shortcut for the current
@@ -100,8 +116,14 @@ func (a *App) handleShortcutKey(key string) (tea.Model, tea.Cmd, bool) {
 	var sm ShortcutMap
 	if side == "right" {
 		sm = vs.Right
+		if len(sm) == 0 {
+			sm = vs.Left
+		}
 	} else {
 		sm = vs.Left
+		if len(sm) == 0 {
+			sm = vs.Right
+		}
 	}
 	if sm == nil {
 		return nil, nil, false
@@ -187,8 +209,14 @@ func (a *App) shortcutHint() string {
 	var sm ShortcutMap
 	if side == "right" {
 		sm = vs.Right
+		if len(sm) == 0 {
+			sm = vs.Left
+		}
 	} else {
 		sm = vs.Left
+		if len(sm) == 0 {
+			sm = vs.Right
+		}
 	}
 	if len(sm) == 0 {
 		return ""

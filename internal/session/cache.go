@@ -96,6 +96,7 @@ func LoadCachedSessions(claudeDir string) []Session {
 	sessions := make([]Session, 0, len(sc.entries))
 	for _, cached := range sc.entries {
 		if cached.Sess.MsgCount > 0 {
+			refreshSessionDerivedState(&cached.Sess, filepath.Dir(claudeDir))
 			sessions = append(sessions, cached.Sess)
 		}
 	}

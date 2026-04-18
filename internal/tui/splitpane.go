@@ -543,35 +543,82 @@ func (sp *SplitPane) RefreshFoldCursor(totalW, splitRatio int) {
 		return
 	}
 
-	// Fold state unchanged — re-render with new cursor position only
-	previewW := sp.PreviewWidth(totalW, splitRatio)
-	cursor := sp.Folds.BlockCursor
-	ro := renderOpts{visible: sp.Folds.BlockVisible, hideHooks: sp.Folds.HideHooks, selected: sp.Folds.Selected}
-	rp := renderFullMessageWithCursor(sp.Folds.Entry, previewW, sp.Folds.Collapsed, sp.Folds.Formatted, cursor, ro)
-	sp.Folds.BlockStarts = rp.blockStarts
-	sp.cachedRP = &rp
-
 	oldOffset := sp.Preview.YOffset
+	cursor := sp.Folds.BlockCursor
+	starts := sp.cachedRP.blockStarts
+	if len(starts) == 0 || cursor < 0 || cursor >= len(starts) {
+		sp.RefreshFoldPreview(totalW, splitRatio)
+		return
+	}
 
-	content := rp.content
-	padLines := 0
-	if sp.BottomAlign && rp.lineCount < sp.Preview.Height {
-		padLines = sp.Preview.Height - rp.lineCount
-		content = strings.Repeat("\n", padLines) + content
-		for i := range sp.Folds.BlockStarts {
-			sp.Folds.BlockStarts[i] += padLines
+	oldCursor := -1
+	for i, line := range starts {
+		if line >= oldOffset && line < oldOffset+sp.Preview.Height {
+			oldCursor = i
+			break
 		}
 	}
-	sp.Preview.SetContent(content)
 
-	totalLines := sp.Preview.TotalLineCount()
-	maxOffset := max(totalLines-sp.Preview.Height, 0)
+	lines := strings.Split(sp.cachedRP.content, "\n")
+	updateIndicator := func(idx int) {
+		if idx < 0 || idx >= len(starts) {
+			return
+		}
+		lineIdx := starts[idx]
+		if lineIdx < 0 || lineIdx >= len(lines) {
+			return
+		}
+		line := lines[lineIdx]
+		if len(line) < 2 {
+			return
+		}
+		indicator := "  "
+		if idx == cursor {
+			block := sp.Folds.Entry.Content[idx]
+			formatted := sp.Folds.Formatted != nil && sp.Folds.Formatted[idx]
+			folded := sp.Folds.Collapsed != nil && sp.Folds.Collapsed[idx]
+			isFoldable := block.Type == "tool_use" || block.Type == "tool_result" || block.Type == "thinking" || block.Type == "system_tag"
+			switch {
+			case formatted:
+				indicator = blockCursorStyle.Render("✦") + " "
+			case isFoldable && folded:
+				indicator = blockCursorStyle.Render("▸") + " "
+			case isFoldable:
+				indicator = blockCursorStyle.Render("▾") + " "
+			default:
+				indicator = blockCursorStyle.Render("›") + " "
+			}
+		} else {
+			block := sp.Folds.Entry.Content[idx]
+			formatted := sp.Folds.Formatted != nil && sp.Folds.Formatted[idx]
+			folded := sp.Folds.Collapsed != nil && sp.Folds.Collapsed[idx]
+			isFoldable := block.Type == "tool_use" || block.Type == "tool_result" || block.Type == "thinking" || block.Type == "system_tag"
+			switch {
+			case formatted:
+				indicator = dimStyle.Render("✦") + " "
+			case isFoldable && folded:
+				indicator = dimStyle.Render("▸") + " "
+			case isFoldable:
+				indicator = dimStyle.Render("▾") + " "
+			default:
+				indicator = "  "
+			}
+		}
+		if len(line) >= 2 {
+			lines[lineIdx] = indicator + line[2:]
+		}
+	}
+
+	updateIndicator(oldCursor)
+	updateIndicator(cursor)
+
+	sp.cachedRP.content = strings.Join(lines, "\n")
+	sp.Preview.SetContent(sp.cachedRP.content)
+	maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
 	if oldOffset > maxOffset {
 		oldOffset = maxOffset
 	}
 	sp.Preview.YOffset = oldOffset
-
-	// Ensure block cursor is visible after content update
 	sp.ScrollToBlock()
 }
 

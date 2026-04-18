@@ -68,10 +68,16 @@ func (a *App) sessHelpLine() string {
 	h := fmtKey(sk.Open, "open") + " " + fmtKey(sk.Edit, "edit") + " " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Views, "views") + " " + fmtKey(sk.Refresh, "refresh")
 	if !a.sessSplit.Show {
 		h += " →:preview tab:group"
-	} else if a.sessSplit.Focus && a.sessPreviewMode == sessPreviewConversation {
-		h += " ↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " →←:fold f/F:all " + fmtKey(sk.Search, "search") + " tab:mode"
 	} else if a.sessSplit.Focus {
-		h += " tab:mode ←:unfocus " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
+		switch a.sessPreviewMode {
+		case sessPreviewConversation:
+			h += " ↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " ←:unfocus /:search tab:mode"
+		case sessPreviewAgents:
+			h += " ↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
+		default:
+			h += " ↑↓:scroll ←:unfocus tab:mode"
+		}
+		h += " " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	} else {
 		h += " tab:group →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	}

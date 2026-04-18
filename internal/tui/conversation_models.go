@@ -14,9 +14,10 @@ import (
 type convItemKind int
 
 const (
-	convMsg   convItemKind = iota // user/assistant message turn
-	convTask                      // task item (under assistant message)
-	convAgent                     // agent reference (under assistant message)
+	convMsg         convItemKind = iota // user/assistant message turn
+	convTask                            // task item (under assistant message)
+	convAgent                           // agent reference (under assistant message)
+	convSessionMeta                     // session-level memory/tasks-plan shortcuts
 )
 
 // convItem represents a single row in the conversation list.
@@ -27,6 +28,7 @@ type convItem struct {
 	cron        session.CronItem  // for cron-related convTask rows
 	agent       session.Subagent  // for convAgent
 	agentStatus string            // "running", "completed", "stopped" for convAgent
+	sessionMeta string            // "memory" or "tasksplan" for convSessionMeta
 	bgTaskID    string            // background task ID for individual task op items
 	indent      int               // 0=message, 1=sub-item
 	folded      bool              // for expandable group headers (tasks/agents)
@@ -57,6 +59,14 @@ func (c convItem) FilterValue() string {
 	case convAgent:
 		parts = append(parts, c.agent.FirstPrompt, c.agent.ShortID, c.agent.AgentType)
 		parts = append(parts, "is:agent")
+	case convSessionMeta:
+		parts = append(parts, c.label)
+		switch c.sessionMeta {
+		case "memory":
+			parts = append(parts, "memory", "todos", "is:memory")
+		case "tasksplan":
+			parts = append(parts, "tasks", "plan", "agents", "crons", "is:tasksplan", "is:plan")
+		}
 	}
 	return strings.Join(parts, " ")
 }
@@ -85,5 +95,7 @@ func (d convDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		renderConvTaskOrAgent(w, ci, selected, width, clamp, filterTerm)
 	case convAgent:
 		renderConvTaskOrAgent(w, ci, selected, width, clamp, filterTerm)
+	case convSessionMeta:
+		renderConvSessionMeta(w, ci, selected, width, clamp, filterTerm)
 	}
 }

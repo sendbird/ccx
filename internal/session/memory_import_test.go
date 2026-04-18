@@ -24,6 +24,22 @@ func TestResolveMainProjectPath(t *testing.T) {
 	}
 }
 
+func TestHasProjectMemoryFallsBackToMainRepoForWorktree(t *testing.T) {
+	home := t.TempDir()
+	mainProject := "/Users/gavin.jeong/src/keyolk/ccproxy"
+	worktreeProject := "/Users/gavin.jeong/src/keyolk/ccproxy/.worktree/rebuild"
+	memDir := filepath.Join(home, ".claude", "projects", EncodeProjectPath(mainProject), "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatalf("mkdir memory dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "state.md"), []byte("memory"), 0o644); err != nil {
+		t.Fatalf("write memory file: %v", err)
+	}
+	if !hasProjectMemory(worktreeProject, home) {
+		t.Fatalf("expected worktree project to inherit memory from main repo")
+	}
+}
+
 func TestListMemoryDir(t *testing.T) {
 	dir := t.TempDir()
 

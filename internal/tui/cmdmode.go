@@ -83,10 +83,21 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewStats); return a, nil }},
 		{name: "preview:mem", aliases: []string{"p:mem"}, desc: "memory preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewMemory); return a, nil }},
-		{name: "preview:tasks", aliases: []string{"p:tasks"}, desc: "tasks preview", views: cmdSessions,
+		{name: "preview:tasks", aliases: []string{"p:tasks"}, desc: "tasks/plan preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewTasksPlan); return a, nil }},
+		{name: "preview:agents", aliases: []string{"p:agents"}, desc: "agents preview", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewAgents); return a, nil }},
 		{name: "preview:live", aliases: []string{"p:live"}, desc: "live preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewLive); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				sess, ok := a.selectedSession()
+				if !ok {
+					return a, nil
+				}
+				if sess.IsRemote {
+					return a.openRemoteLivePreview(sess)
+				}
+				return a.openLivePreview(sess)
+			}},
 
 		// Views
 		{
