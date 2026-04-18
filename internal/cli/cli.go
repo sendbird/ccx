@@ -18,6 +18,7 @@ var Commands = []struct {
 	Name string
 	Desc string
 }{
+	{"pick", "Interactively pick a session and print JSON to stdout"},
 	{"urls", "List URLs from the Claude session (interactive on TTY)"},
 	{"files", "List file paths touched by the session (interactive on TTY)"},
 	{"changes", "List file changes made by the session (interactive on TTY)"},

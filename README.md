@@ -35,30 +35,28 @@ ccx -preview stats         # start with stats preview open
 ccx -search "is:live"      # start filtered to live sessions
 ```
 
-### `ccx sessions -pick`
+### `ccx pick session`
 
-Interactive session resolver for shells, scripts, and agents. Launches the full `ccx` TUI on **stderr**; stdout is reserved for JSON.
-
-To confirm a pick, press `P`. Navigate with arrows, multi-select with `space`, filter with `/`.
+Interactive session resolver for shells, scripts, and agents. The picker renders on **stderr**; the result is printed as JSON on **stdout** on confirm, making it pipe-safe.
 
 ```bash
 # basic usage
-sid=$(ccx sessions -pick | jq -r '.sessions[0].id')
+sid=$(ccx pick session | jq -r '.sessions[0].id')
 claude --resume "$sid"
 
 # narrow with filter query (same syntax as TUI /)
-ccx sessions -pick -search "is:current is:live"
+ccx pick session -query "is:current is:live"
 
 # multi-select
-ccx sessions -pick -multi | jq '.sessions | length'
+ccx pick session -multi | jq '.sessions | length'
 ```
 
 **Flags:**
 
 | Flag | Description |
 |------|-------------|
-| `-search STR` | Initial filter query (same syntax as TUI `/` search) |
-| `-multi` | Allow multi-selection (space to toggle, `P` to confirm) |
+| `-query STR` | Initial filter query (same syntax as TUI `/` search) |
+| `-multi` | Allow multi-selection (space to toggle, enter to confirm) |
 | `-dir PATH` | Claude data directory (default: `~/.claude`) |
 
 **Output schema (stable):**
