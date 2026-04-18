@@ -122,7 +122,7 @@ func setupConvApp(t *testing.T, entries []session.Entry, width, height int) *App
 	app.conv.sess = sess
 	app.conv.messages = entries
 	app.conv.merged = filterConversation(mergeConversationTurns(entries))
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
 
 	contentH := ContentHeight(height)
 	app.conv.split.Focus = false
@@ -143,7 +143,7 @@ func setupTreeConvApp(t *testing.T, entries []session.Entry, tasks []session.Tas
 	app.currentSess.Tasks = tasks
 	app.conv.sess.Tasks = tasks
 	app.conv.agents = agents
-	app.conv.items = buildConvItems(app.conv.merged, agents, tasks, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, agents, tasks, nil)
 	app.conv.leftPaneMode = convPaneTree
 	app.rebuildConversationList(0)
 	app.updateConvPreview()
@@ -216,7 +216,53 @@ func testEntries() []session.Entry {
 	}
 }
 
-// --- Group 1: Preview Update on Navigation ---
+func TestBuildConvItemsAddsSessionMetaRows(t *testing.T) {
+	entries := testEntries()
+	sess := session.Session{
+		ID:        "test-sess",
+		ShortID:   "test",
+		ProjectPath: "/tmp/test",
+		HasMemory: true,
+		HasPlan:   true,
+		Todos:     []session.TodoItem{{Content: "remember this", Status: "pending"}},
+	}
+	merged := filterConversation(mergeConversationTurns(entries))
+	items := buildConvItems(sess, merged, nil, nil, nil)
+	if len(items) < 2 {
+		t.Fatalf("expected session meta rows, got %d items", len(items))
+	}
+	if items[0].kind != convSessionMeta || items[0].sessionMeta != "memory" {
+		t.Fatalf("first item = %#v, want memory session meta", items[0])
+	}
+	if items[1].kind != convSessionMeta || items[1].sessionMeta != "tasksplan" {
+		t.Fatalf("second item = %#v, want tasksplan session meta", items[1])
+	}
+	if fv := items[0].FilterValue(); !strings.Contains(fv, "is:memory") {
+		t.Fatalf("memory filter tokens missing: %q", fv)
+	}
+	if fv := items[1].FilterValue(); !strings.Contains(fv, "is:tasksplan") || !strings.Contains(fv, "is:plan") {
+		t.Fatalf("tasksplan filter tokens missing: %q", fv)
+	}
+}
+
+func TestConvPreviewSessionMetaUsesSessionRenderers(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.currentSess.HasMemory = true
+	app.currentSess.HasPlan = true
+	app.currentSess.Todos = []session.TodoItem{{Content: "saved todo", Status: "pending"}}
+	app.conv.sess = app.currentSess
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
+	contentH := ContentHeight(app.height)
+	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
+	app.conv.split.List = &app.convList
+
+	selectConvItemBy(t, app, func(ci convItem) bool { return ci.kind == convSessionMeta && ci.sessionMeta == "memory" })
+	app.updateConvPreview()
+	if got := app.conv.split.Preview.View(); !strings.Contains(got, "saved todo") {
+		t.Fatalf("memory preview did not use session memory renderer: %q", got)
+	}
+}
+
 
 func TestConvPreviewUpdatesOnCursorMove(t *testing.T) {
 	app := setupConvApp(t, testEntries(), 160, 50)
@@ -292,7 +338,7 @@ func TestConvPreviewGrowBlocksOnSameEntry(t *testing.T) {
 	// Simulate growing: add more blocks to the same entry
 	grown := makeGrowingEntry(base.Add(time.Second), 6)
 	app.conv.merged[1] = mergedMsg{entry: grown, startIdx: 1, endIdx: 1}
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
 
 	// Update preview — should use GrowBlocks, preserving existing folds
 	app.conv.split.CacheKey = fmt.Sprintf("%d:%d", 1, 3) // old block count
@@ -354,7 +400,7 @@ func TestLiveTailTracksNewMessages(t *testing.T) {
 	entries = append(entries, newEntry)
 	app.conv.messages = entries
 	app.conv.merged = filterConversation(mergeConversationTurns(entries))
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
 
 	contentH := ContentHeight(app.height)
 	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
@@ -392,7 +438,7 @@ func TestLiveTailGrowingContent(t *testing.T) {
 	// Grow the entry
 	grown := makeGrowingEntry(base.Add(time.Second), 8)
 	app.conv.merged[len(app.conv.merged)-1] = mergedMsg{entry: grown, startIdx: 1, endIdx: 1}
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
 	app.conv.split.CacheKey = fmt.Sprintf("%d:%d", 1, 2) // old count
 
 	app.updateConvPreview()
@@ -499,7 +545,7 @@ func TestLiveTailAlwaysSelectsLastItem(t *testing.T) {
 
 	// Simulate handleLiveTail inline (refreshConversation needs file I/O,
 	// so rebuild manually)
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
 	contentH := ContentHeight(app.height)
 	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
 	app.conv.split.List = &app.convList
@@ -564,7 +610,7 @@ func TestLiveTailRefreshNoCachePoisoning(t *testing.T) {
 	grown := makeGrowingEntry(base.Add(time.Second), 8)
 	app.conv.messages = []session.Entry{entries[0], grown}
 	app.conv.merged = filterConversation(mergeConversationTurns(app.conv.messages))
-	app.conv.items = buildConvItems(app.conv.merged, nil, nil, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
 
 	// Simulate what refreshConversation does (minus LoadMessages I/O)
 	oldIdx := app.convList.Index()
@@ -799,7 +845,7 @@ func TestBuildEntityTreeUsesCompactLabels(t *testing.T) {
 		Status:  "in_progress",
 	}}
 
-	items := buildEntityTree(merged, agents, tasks, nil, map[string]string{"agent-1": "running"})
+	items := buildEntityTree(session.Session{}, merged, agents, tasks, nil, map[string]string{"agent-1": "running"})
 
 	var agentLabel, bgLabel, taskLabel string
 	for _, item := range items {

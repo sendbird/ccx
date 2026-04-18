@@ -15,8 +15,11 @@ func TestDefaultShortcuts(t *testing.T) {
 	if sess.Left["1"] != "preview:conv" {
 		t.Errorf("sessions left 1 = %q, want preview:conv", sess.Left["1"])
 	}
-	if sess.Left["5"] != "preview:live" {
-		t.Errorf("sessions left 5 = %q, want preview:live", sess.Left["5"])
+	if sess.Left["5"] != "preview:agents" {
+		t.Errorf("sessions left 5 = %q, want preview:agents", sess.Left["5"])
+	}
+	if sess.Left["6"] != "preview:live" {
+		t.Errorf("sessions left 6 = %q, want preview:live", sess.Left["6"])
 	}
 
 	// Conversation view
@@ -111,8 +114,11 @@ func TestShortcutHint(t *testing.T) {
 	if !containsSubstring(hint, "1:conv") {
 		t.Errorf("hint %q should contain 1:conv", hint)
 	}
-	if !containsSubstring(hint, "5:live") {
-		t.Errorf("hint %q should contain 5:live", hint)
+	if !containsSubstring(hint, "5:agents") {
+		t.Errorf("hint %q should contain 5:agents", hint)
+	}
+	if !containsSubstring(hint, "6:live") {
+		t.Errorf("hint %q should contain 6:live", hint)
 	}
 }
 

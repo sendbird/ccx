@@ -68,7 +68,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	}
 	a.conv.sess = sess
 	a.currentSess = sess
-	a.conv.items = buildConvItems(a.conv.merged, agents, tasks, crons)
+	a.conv.items = buildConvItems(sess, a.conv.merged, agents, tasks, crons)
 
 	// Reset artifact page browser state on fresh conversation open.
 	a.convPageActive = false
@@ -758,6 +758,14 @@ func (a *App) updateConvPreview() {
 		entry = item.merged.entry
 	case convAgent:
 		entry = buildAgentPreviewEntry(item.agent)
+	case convSessionMeta:
+		switch item.sessionMeta {
+		case "memory":
+			a.setConvPreviewText(a.buildMemoryContent(a.conv.sess))
+		default:
+			a.setConvPreviewText(a.buildTasksPlanContent(a.conv.sess))
+		}
+		return
 	case convTask:
 		pw := sp.PreviewWidth(a.width, a.splitRatio)
 		if item.groupTag == "agents" && item.count > 0 {
@@ -1359,7 +1367,7 @@ func (a *App) openConvChangesPage() (tea.Model, tea.Cmd) {
 func (a *App) setConvPreviewText(content string) {
 	sp := &a.conv.split
 	sp.CacheKey = "text"
-	sp.Preview.SetContent(content)
+	sp.SetPreviewContent(content, a.width, a.height, a.splitRatio)
 	sp.Preview.YOffset = 0
 	// Clear stale fold state so fold keys don't re-render a previous message
 	if sp.Folds != nil {
@@ -1395,6 +1403,8 @@ func convPreviewBaseKey(item convItem) string {
 		return fmt.Sprintf("msg:%d", item.merged.startIdx)
 	case item.kind == convAgent:
 		return "agent:" + item.agent.ShortID
+	case item.kind == convSessionMeta:
+		return "sessionmeta:" + item.sessionMeta
 	case item.bgTaskID != "":
 		return "bg:" + item.bgTaskID
 	case item.cron.ID != "":
@@ -1415,12 +1425,28 @@ func buildConversationPreviewEntry(header string, fallbackTS time.Time, entries 
 		blocks = append(blocks, session.ContentBlock{Type: "text", Text: header})
 	}
 
-	for idx, e := range entries {
-		if idx > 0 {
-			blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.Repeat("─", 24)})
-		}
+	emitted := 0
+	for _, e := range entries {
 		if ts.IsZero() && !e.Timestamp.IsZero() {
 			ts = e.Timestamp
+		}
+		// Skip entries that have no text and no tool_use blocks (only tool_results).
+		// These are typically auto-generated user turns containing only tool results.
+		hasText := entryFullText(e) != ""
+		hasToolUse := false
+		if !hasText {
+			for _, b := range e.Content {
+				if b.Type == "tool_use" {
+					hasToolUse = true
+					break
+				}
+			}
+			if !hasToolUse {
+				continue
+			}
+		}
+		if emitted > 0 {
+			blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.Repeat("─", 24)})
 		}
 		if msg := previewMessageText(e); msg != "" {
 			blocks = append(blocks, session.ContentBlock{Type: "text", Text: msg})
@@ -1436,6 +1462,7 @@ func buildConversationPreviewEntry(header string, fallbackTS time.Time, entries 
 			}
 			blocks = append(blocks, b)
 		}
+		emitted++
 	}
 
 	if len(blocks) == 0 {
@@ -1979,7 +2006,7 @@ func (a *App) rebuildConversationList(selectIdx int) {
 	contentH := ContentHeight(a.height)
 	items := a.conv.items
 	if a.conv.leftPaneMode == convPaneTree {
-		a.conv.treeItems = buildEntityTree(a.conv.merged, a.conv.agents, a.conv.sess.Tasks, a.conv.sess.Crons, inferAgentStatuses(a.conv.merged))
+		a.conv.treeItems = buildEntityTree(a.conv.sess, a.conv.merged, a.conv.agents, a.conv.sess.Tasks, a.conv.sess.Crons, inferAgentStatuses(a.conv.merged))
 		items = a.conv.treeItems
 	}
 	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
@@ -2018,7 +2045,7 @@ func (a *App) refreshConversation() tea.Cmd {
 		crons = session.LoadCronsFromEntries(entries)
 		a.conv.sess.Crons = crons
 	}
-	a.conv.items = buildConvItems(a.conv.merged, agents, tasks, crons)
+	a.conv.items = buildConvItems(a.conv.sess, a.conv.merged, agents, tasks, crons)
 	a.conv.sess.Tasks = tasks
 
 	// Preserve cursor position
@@ -2584,7 +2611,7 @@ func (a *App) openCronConversation(cron session.CronItem) (tea.Model, tea.Cmd) {
 
 	merged := filterConversation(mergeConversationTurns(cronEntries))
 	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
-	items := buildConvItems(merged, agents, nil, nil)
+	items := buildConvItems(a.currentSess, merged, agents, nil, nil)
 
 	a.conv.sess = a.currentSess
 	a.conv.messages = cronEntries
@@ -2614,7 +2641,7 @@ func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 
 	merged := filterConversation(mergeConversationTurns(taskEntries))
 	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
-	items := buildConvItems(merged, agents, nil, nil)
+	items := buildConvItems(a.currentSess, merged, agents, nil, nil)
 
 	a.conv.sess = a.currentSess
 	a.conv.messages = taskEntries
@@ -2653,7 +2680,7 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 
 	merged := filterConversation(mergeConversationTurns(entries))
 	agents, _ := session.FindSubagents(agent.FilePath)
-	items := buildConvItems(merged, agents, nil, nil)
+	items := buildConvItems(a.currentSess, merged, agents, nil, nil)
 
 	a.conv.sess = a.currentSess
 	a.conv.messages = entries

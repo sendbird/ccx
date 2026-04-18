@@ -354,6 +354,7 @@ func TestPreviewModeConstants(t *testing.T) {
 		sessPreviewStats,
 		sessPreviewMemory,
 		sessPreviewTasksPlan,
+		sessPreviewAgents,
 		sessPreviewLive,
 		sessPreviewRemote,
 	}

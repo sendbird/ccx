@@ -260,6 +260,50 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 	fmt.Fprint(w, clamp.Render(line))
 }
 
+func renderConvSessionMeta(w io.Writer, ci convItem, selected bool, width int, clamp lipgloss.Style, filterTerm string) {
+	cursor := "  "
+	if selected {
+		cursor = convCursorStyle.Render("> ")
+	}
+
+	style := dimStyle
+	if selected {
+		style = selectedStyle
+	}
+
+	badge := "[?]"
+	title := ci.label
+	subtitle := ""
+	switch ci.sessionMeta {
+	case "memory":
+		badge = memoryBadge.Render("[M]")
+		if title == "" {
+			title = "Session Memory"
+		}
+		subtitle = "memory files and todos"
+	case "tasksplan":
+		badge = planBadge.Render("[P]")
+		if title == "" {
+			title = "Session Tasks/Plan"
+		}
+		subtitle = "tasks, cron jobs, agents, and plans"
+	}
+
+	text := title
+	if subtitle != "" {
+		text += "  " + subtitle
+	}
+	availW := max(width-10, 10)
+	if filterTerm != "" && availW > 0 {
+		text = highlightSnippet(text, filterTerm, availW, style)
+	} else {
+		text = style.Render(truncate(text, availW))
+	}
+
+	line := cursor + badge + " " + text
+	fmt.Fprint(w, clamp.Render(line))
+}
+
 // convMsgPreview returns a short text preview for a conversation message.
 func convMsgPreview(e session.Entry, maxW int) string {
 	if maxW <= 0 {
@@ -432,7 +476,7 @@ func inferAgentStatuses(merged []mergedMsg) map[string]string {
 // with inline task and agent sub-items under assistant messages.
 // A collapsible task group header appears at every task-touching message.
 // Individual task rows (expandable) are attached only under the LAST one.
-func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem, crons []session.CronItem) []convItem {
+func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem, crons []session.CronItem) []convItem {
 	// First pass: find all task-touching message indices and the last one.
 	// Always scan for task operations (TaskCreate, TaskOutput, etc.) regardless
 	// of whether a resolved task list exists — operations should be visible as
@@ -535,6 +579,20 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 	agentStatuses := inferAgentStatuses(merged)
 
 	var items []convItem
+	if sess.HasMemory || len(sess.Todos) > 0 {
+		items = append(items, convItem{
+			kind:        convSessionMeta,
+			sessionMeta: "memory",
+			label:       "Session Memory",
+		})
+	}
+	if sess.HasPlan || sess.HasTasks || sess.HasCrons || sess.HasAgents {
+		items = append(items, convItem{
+			kind:        convSessionMeta,
+			sessionMeta: "tasksplan",
+			label:       "Session Tasks/Plan",
+		})
+	}
 
 	for mi, m := range merged {
 		parentIdx := len(items)
@@ -726,6 +784,7 @@ func buildConvItems(merged []mergedMsg, agents []session.Subagent, tasks []sessi
 // buildEntityTree builds an entity-centric tree view: agents, background jobs,
 // and task board items grouped under collapsible section headers.
 func buildEntityTree(
+	sess session.Session,
 	merged []mergedMsg,
 	agents []session.Subagent,
 	tasks []session.TaskItem,
@@ -733,6 +792,20 @@ func buildEntityTree(
 	agentStatuses map[string]string,
 ) []convItem {
 	var items []convItem
+	if sess.HasMemory || len(sess.Todos) > 0 {
+		items = append(items, convItem{
+			kind:        convSessionMeta,
+			sessionMeta: "memory",
+			label:       "Session Memory",
+		})
+	}
+	if sess.HasPlan || sess.HasTasks || sess.HasCrons || sess.HasAgents {
+		items = append(items, convItem{
+			kind:        convSessionMeta,
+			sessionMeta: "tasksplan",
+			label:       "Session Tasks/Plan",
+		})
+	}
 
 	// --- Agents section ---
 	if len(agents) > 0 {

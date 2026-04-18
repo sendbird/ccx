@@ -1011,7 +1011,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{displayKey(sk.Group), "Group (flat→proj→tree→chain)"},
 		{displayKey(km.Views.Stats), "Global stats"},
 		{displayKey(sk.Refresh), "Refresh list"},
-		{displayKey(sk.Preview), "Cycle preview mode"},
+		{displayKey(sk.Preview), "Cycle preview mode (conv→stats→mem→tasks/plan)"},
 		{displayKey(sk.Live), "Live preview (^Q:unfocus)"},
 		{displayKey(sk.Select), "Toggle multi-select"},
 		{displayKey(sk.Help), "This help"},

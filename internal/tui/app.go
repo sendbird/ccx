@@ -532,9 +532,10 @@ const (
 	sessPreviewStats
 	sessPreviewMemory
 	sessPreviewTasksPlan
+	sessPreviewAgents
 	sessPreviewLive     // tmux pane capture
 	sessPreviewRemote   // remote session status/stream
-	numSessPreviewModes = 6
+	numSessPreviewModes = 7
 )
 
 // Config holds application configuration from CLI flags.
@@ -611,7 +612,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		}
 	}
 	if a.config.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "live": sessPreviewLive}
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
@@ -1443,8 +1444,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 			return a.jumpToConvMessage()
 		}
-		// If Tasks/Plan preview is focused with agents, jump to selected agent
-		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewTasksPlan && len(a.sessPreviewAgents) > 0 {
+		// If Agents preview is focused, jump to selected agent
+		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewAgents && len(a.sessPreviewAgents) > 0 {
 			m, cmd, _ := a.jumpToAgentConversation()
 			return m, cmd
 		}
@@ -1536,54 +1537,28 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.rebuildSessionList()
 		}
 		return a, nil
-	case km.Session.Left:
-		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation {
-			// Delegate to conversation handler (collapse), fall through below
-		} else if sp.Focus && sp.Show {
-			sp.Focus = false
-			return a, nil
-		} else if !sp.Focus && sp.Show {
-			idx := a.sessionList.Index()
-			sp.Show = false
-			contentH := max(a.height-3, 1)
-			a.sessionList.SetSize(sp.ListWidth(a.width, a.splitRatio), contentH)
-			a.sessionList.Select(idx)
-			return a, nil
-		}
-	case km.Session.Right:
-		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation {
-			// Delegate to conversation handler (expand), fall through below
-		} else {
-			if !sp.Show {
-				idx := a.sessionList.Index()
-				sp.Show = true
-				sp.CacheKey = ""
-				contentH := max(a.height-3, 1)
-				a.sessionList.SetSize(sp.ListWidth(a.width, a.splitRatio), contentH)
-				a.sessionList.Select(idx)
-			}
-			sp.Focus = true
-			if a.paneProxy != nil {
-				return a, capturePaneCmd(a.paneProxy.pane) // immediate capture on focus
-			}
-			return a, nil
-		}
-	case km.Session.ResizeShrink:
-		if sp.Show {
-			a.adjustSplitRatio(-5) // preview larger
-		}
-		return a, nil
-	case km.Session.ResizeGrow:
-		if sp.Show {
-			a.adjustSplitRatio(5) // preview smaller
-		}
-		return a, nil
 	}
 
 	// Translate navigation aliases (e.g. vim j→down, emacs ctrl+n→down)
 	if nav, navMsg := a.keymap.TranslateNav(key, msg); nav != "" {
 		key = nav
 		msg = navMsg
+	}
+
+	// Shared split-pane semantics for left/right/tab/esc/resize.
+	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, a.adjustSplitRatio)
+	switch result {
+	case splitKeyClosed:
+		return a, nil
+	case splitKeyFocused, splitKeyOpened:
+		if a.paneProxy != nil {
+			return a, capturePaneCmd(a.paneProxy.pane)
+		}
+		return a, a.updateSessionPreview()
+	case splitKeyUnfocused:
+		return a, nil
+	case splitKeyHandled:
+		return a, nil
 	}
 
 	// Focused preview: custom conversation nav or simple scroll
@@ -1641,7 +1616,7 @@ func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, te
 	if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 		return a.handleConvPreviewKeys(sp, key)
 	}
-	if a.sessPreviewMode == sessPreviewTasksPlan && len(a.sessPreviewAgents) > 0 {
+	if a.sessPreviewMode == sessPreviewAgents && len(a.sessPreviewAgents) > 0 {
 		return a.handleTasksPreviewKeys(sp, key)
 	}
 	switch key {
@@ -1668,7 +1643,11 @@ func (a *App) handleTasksPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.
 	// Flat cursor navigation over agents
 	switch HandleFlatCursorNav(&a.sessAgentCursor, len(a.sessPreviewAgents), key) {
 	case NavCursorMoved:
-		a.rebuildTasksPreviewContent()
+		if key == "up" || key == "k" {
+			sp.Preview.LineUp(1)
+		} else if key == "down" || key == "j" {
+			sp.Preview.LineDown(1)
+		}
 		return a, nil, true
 	case NavBoundaryDown:
 		a.sessPreviewBoundaryCross("down")
@@ -1776,13 +1755,16 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 				} else {
 					a.sessConvCursor = convFirstVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
 				}
+				if a.sessConvCursor > 0 {
+					a.sessConvCursor--
+				}
 			} else {
 				a.sessConvCursor--
 			}
 			a.sessPreviewPinned = true
 			a.refreshConvPreview()
 		} else {
-			// At top boundary: move to previous session
+			// At top boundary, stay within the current session preview.
 			a.sessPreviewBoundaryCross("up")
 		}
 		return a, nil, true
@@ -1798,12 +1780,15 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 				} else {
 					a.sessConvCursor = convLastVisible(visible, a.sessConvExpanded, previewW, vpTop, vpBottom)
 				}
+				if a.sessConvCursor < len(visible)-1 {
+					a.sessConvCursor++
+				}
 			} else {
 				a.sessConvCursor++
 			}
 			a.refreshConvPreview()
 		} else {
-			// At bottom boundary: move to next session
+			// At bottom boundary, stay within the current session preview.
 			a.sessPreviewBoundaryCross("down")
 		}
 		a.sessPreviewPinned = a.sessConvCursor < len(visible)-1
@@ -3797,6 +3782,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		a.updateSessionMemoryPreview(sess)
 	case sessPreviewTasksPlan:
 		a.updateSessionTasksPlanPreview(sess)
+	case sessPreviewAgents:
+		a.updateSessionAgentsPreview(sess)
 	case sessPreviewLive:
 		if sess.IsLive {
 			a.sessSplit.Preview.SetContent(dimStyle.Render("(connecting…)"))
@@ -4295,6 +4282,13 @@ func (a *App) updateSessionTasksPlanPreview(sess session.Session) {
 	a.sessSplit.Preview.SetContent(a.sessTasksCache)
 }
 
+func (a *App) updateSessionAgentsPreview(sess session.Session) {
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	contentH := max(a.height-3, 1)
+	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	a.sessSplit.Preview.SetContent(a.buildAgentsPreviewContent(sess))
+}
+
 func (a *App) buildTasksPlanContent(sess session.Session) string {
 	home, _ := os.UserHomeDir()
 	var sb strings.Builder
@@ -4404,65 +4398,7 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 		}
 	}
 
-	// Agents/teammates
-	if sess.HasAgents {
-		agents, err := session.FindSubagents(sess.FilePath)
-		a.sessPreviewAgents = agents
-		if a.sessAgentCursor >= len(agents) {
-			a.sessAgentCursor = 0
-		}
-		if err == nil && len(agents) > 0 {
-			running := 0
-			for _, ag := range agents {
-				if ag.MsgCount > 0 && ag.MsgCount%2 == 1 {
-					running++
-				}
-			}
-			label := fmt.Sprintf("── Agents [%d] ↵:jump ──", len(agents))
-			if running > 0 {
-				label = fmt.Sprintf("── Agents [%d, %d active] ↵:jump ──", len(agents), running)
-			}
-			sb.WriteString(dimStyle.Render(label) + "\n\n")
-			sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
-			for i, ag := range agents {
-				icon := "⊕"
-				style := dimStyle
-				if ag.MsgCount > 0 && ag.MsgCount%2 == 1 {
-					icon = "◉"
-					style = lipgloss.NewStyle().Foreground(colorAssistant)
-				} else if ag.MsgCount > 0 {
-					icon = "✓"
-					style = lipgloss.NewStyle().Foreground(colorAccent)
-				}
-				typeBadge := ag.AgentType
-				if typeBadge == "" {
-					typeBadge = "agent"
-				}
-				headline := fmt.Sprintf("%s %s", icon, typeBadge)
-				if ag.ShortID != "" {
-					headline += "  " + ag.ShortID
-				}
-				cursor := "  "
-				if i == a.sessAgentCursor && a.sessSplit.Focus {
-					cursor = sel.Render("> ")
-					sb.WriteString(cursor + sel.Render(headline) + "\n")
-				} else {
-					sb.WriteString(cursor + style.Render(headline) + "\n")
-				}
-				if ag.FirstPrompt != "" {
-					prompt := ag.FirstPrompt
-					if len(prompt) > 100 {
-						prompt = prompt[:97] + "..."
-					}
-					sb.WriteString(dimStyle.Render("    "+prompt) + "\n")
-				}
-				if !ag.Timestamp.IsZero() {
-					sb.WriteString(dimStyle.Render("    "+timeAgo(ag.Timestamp)) + "\n")
-				}
-			}
-			sb.WriteString("\n")
-		}
-	}
+	// Agents are shown in the dedicated agents preview mode.
 
 	// Plans (show all distinct plans in order)
 	for i, slug := range sess.PlanSlugs {
@@ -4481,6 +4417,71 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 
 	if sb.Len() == 0 {
 		return dimStyle.Render("No tasks, agents, cron jobs, or plans found for this session.")
+	}
+	return sb.String()
+}
+
+func (a *App) buildAgentsPreviewContent(sess session.Session) string {
+	a.sessPreviewAgents = nil
+	if !sess.HasAgents {
+		return dimStyle.Render("No agents found for this session.")
+	}
+	agents, err := session.FindSubagents(sess.FilePath)
+	if err != nil || len(agents) == 0 {
+		return dimStyle.Render("No agents found for this session.")
+	}
+	a.sessPreviewAgents = agents
+	if a.sessAgentCursor >= len(agents) {
+		a.sessAgentCursor = 0
+	}
+	running := 0
+	for _, ag := range agents {
+		if ag.MsgCount > 0 && ag.MsgCount%2 == 1 {
+			running++
+		}
+	}
+	var sb strings.Builder
+	label := fmt.Sprintf("── Agents [%d] ↵:jump ──", len(agents))
+	if running > 0 {
+		label = fmt.Sprintf("── Agents [%d, %d active] ↵:jump ──", len(agents), running)
+	}
+	sb.WriteString(dimStyle.Render(label) + "\n\n")
+	sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+	for i, ag := range agents {
+		icon := "⊕"
+		style := dimStyle
+		if ag.MsgCount > 0 && ag.MsgCount%2 == 1 {
+			icon = "◉"
+			style = lipgloss.NewStyle().Foreground(colorAssistant)
+		} else if ag.MsgCount > 0 {
+			icon = "✓"
+			style = lipgloss.NewStyle().Foreground(colorAccent)
+		}
+		typeBadge := ag.AgentType
+		if typeBadge == "" {
+			typeBadge = "agent"
+		}
+		headline := fmt.Sprintf("%s %s", icon, typeBadge)
+		if ag.ShortID != "" {
+			headline += "  " + ag.ShortID
+		}
+		cursor := "  "
+		if i == a.sessAgentCursor && a.sessSplit.Focus {
+			cursor = sel.Render("> ")
+			sb.WriteString(cursor + sel.Render(headline) + "\n")
+		} else {
+			sb.WriteString(cursor + style.Render(headline) + "\n")
+		}
+		if ag.FirstPrompt != "" {
+			prompt := ag.FirstPrompt
+			if len(prompt) > 100 {
+				prompt = prompt[:97] + "..."
+			}
+			sb.WriteString(dimStyle.Render("    "+prompt) + "\n")
+		}
+		if !ag.Timestamp.IsZero() {
+			sb.WriteString(dimStyle.Render("    "+timeAgo(ag.Timestamp)) + "\n")
+		}
 	}
 	return sb.String()
 }

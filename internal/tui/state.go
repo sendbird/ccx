@@ -75,6 +75,7 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config)
 
 	// Merge shortcut overrides over defaults
 	mergeShortcuts(sc, cfg.Shortcuts)
+	cfg.Shortcuts = sc
 
 	return &km, cfg.Preferences, sc, cfg.Remote
 }
@@ -259,6 +260,8 @@ func sessPreviewString(mode sessPreview) string {
 		return "mem"
 	case sessPreviewTasksPlan:
 		return "tasks"
+	case sessPreviewAgents:
+		return "agents"
 	case sessPreviewLive:
 		return "live"
 	}

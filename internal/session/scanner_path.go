@@ -234,10 +234,47 @@ func ResolveBaseRepo(projectPath string, worktreeDirs ...string) string {
 }
 
 func hasProjectMemory(projectPath, home string) bool {
-	encoded := EncodeProjectPath(projectPath)
-	memDir := filepath.Join(home, ".claude", "projects", encoded, "memory")
-	entries, err := os.ReadDir(memDir)
-	return err == nil && len(entries) > 0
+	paths := []string{projectPath}
+	if base := ResolveBaseRepo(projectPath); base != "" && base != projectPath {
+		paths = append(paths, base)
+	}
+	if main := ResolveMainProjectPath(projectPath); main != "" && main != projectPath {
+		paths = append(paths, main)
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		encoded := EncodeProjectPath(p)
+		memDir := filepath.Join(home, ".claude", "projects", encoded, "memory")
+		entries, err := os.ReadDir(memDir)
+		if err == nil && len(entries) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func refreshSessionDerivedState(sess *Session, home string) {
+	if sess == nil {
+		return
+	}
+	if len(sess.PlanSlugs) == 0 && sess.PlanSlug != "" {
+		sess.PlanSlugs = []string{sess.PlanSlug}
+	}
+	if sess.ProjectPath != "" {
+		sess.IsWorktree = isGitWorktree(sess.ProjectPath)
+		sess.HasMemory = hasProjectMemory(sess.ProjectPath, home)
+	}
+	sess.HasPlan = false
+	for _, slug := range sess.PlanSlugs {
+		if planFileExists(slug, home) {
+			sess.HasPlan = true
+			break
+		}
+	}
 }
 
 func hasSubagents(sessionFilePath string) bool {

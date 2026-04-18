@@ -66,7 +66,6 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 			if branch != "" {
 				sess.GitBranch = branch
 			}
-			continue
 		}
 
 		if bytes.Contains(line, bRoleUser) || bytes.Contains(line, bRoleUserS) {
@@ -170,8 +169,7 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 		}
 	}
 	if sess.ProjectPath != "" {
-		sess.IsWorktree = isGitWorktree(sess.ProjectPath)
-		sess.HasMemory = hasProjectMemory(sess.ProjectPath, home)
+		refreshSessionDerivedState(&sess, home)
 	}
 
 	// Load richer todos from ~/.claude/todos/ files if JSONL had none
