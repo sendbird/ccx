@@ -1113,9 +1113,9 @@ func (a *App) View() string {
 
 	// Conversation/message-full actions menu hint box
 	if a.convActionsMenu && (a.state == viewConversation || a.state == viewMessageFull) {
-		hintBox := renderConvActionsHintBox()
+		hintBox := a.renderConvActionsHintBox()
 		content = placeHintBox(content, hintBox, a.activeDividerCol())
-		help = formatHelp("x:actions — pick an action")
+		help = formatHelp(fmtKey(a.keymap.Conversation.Actions, "actions") + " — pick an action")
 	}
 
 	// Actions menu hint box floating above help line
@@ -1235,7 +1235,7 @@ func (a *App) View() string {
 			hintBox := renderBlockFilterHintBox()
 			content = placeHintBox(content, hintBox, a.activeDividerCol())
 		} else if a.msgFull.searching {
-			hintBox := renderMsgFullSearchHintBox()
+			hintBox := a.renderMsgFullSearchHintBox()
 			content = placeHintBox(content, hintBox, a.activeDividerCol())
 		}
 	}

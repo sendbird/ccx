@@ -414,15 +414,11 @@ func (a *App) clearMsgFullBlockFilter() {
 }
 
 // renderMsgFullSearchHintBox renders a floating hint box for the full-screen message search.
-func renderMsgFullSearchHintBox() string {
-	h := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
-	d := dimStyle
-
-	lines := []string{
-		d.Render("text search across rendered content"),
-		h.Render("n/N") + d.Render(": next/prev match after search"),
+func (a *App) renderMsgFullSearchHintBox() string {
+	lines := []string{dimStyle.Render("text search across rendered content")}
+	if line := renderInteractionLine(a.messageFullSearchHintActions()...); line != "" {
+		lines = append(lines, line)
 	}
-
 	body := strings.Join(lines, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

@@ -136,6 +136,7 @@ func DefaultKeymap() Keymap {
 			Jump:      "j",
 			URLs:      "u",
 			Files:     "f",
+				Changes:   "g",
 			Tags:      "t",
 			ImportMem: "M",
 			RemoveMem: "X",

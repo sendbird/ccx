@@ -99,35 +99,31 @@ func (a *App) convHelpLine(badges string) string {
 	}
 
 	sp := &a.conv.split
-	h := "↵:open e:edit p:page x:actions L:live " + a.keymap.Session.Refresh + ":refresh"
-	if a.config.TmuxEnabled && tmux.InTmux() && a.currentSess.IsLive {
-		h += " I:input J:jump"
-	}
+	h := interactionHelpText(a.conversationPrimaryHelpActions()...)
 	if sp.Show {
 		if sp.Focus {
-			if a.conv.rightPaneMode == previewText {
-				h += " ↑↓:scroll v:copy"
-			} else {
-				h += " ↑↓:blocks ←→:fold f/F:all /:filter"
-			}
 			next := previewModeLabels[(a.conv.rightPaneMode+1)%len(previewModeLabels)]
-			h += " tab:" + next
+			if a.conv.rightPaneMode == previewText {
+				h = joinHelpSections(h, interactionHelpText(a.conversationPreviewTextHelpActions(next)...))
+			} else {
+				h = joinHelpSections(h, interactionHelpText(a.conversationPreviewStructuredHelpActions(next)...))
+			}
 		} else {
 			next := convPaneModeLabels[(a.conv.leftPaneMode+1)%len(convPaneModeLabels)]
-			h += " tab:" + next + " →:focus"
+			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions(next)...))
 		}
-		h += " esc:close []:resize"
+		h = joinHelpSections(h, interactionHelpText(labelAction("", "esc", "close"), resizeHelpAction(a)))
 	} else {
-		h += " tab:preview →:preview"
+		h = joinHelpSections(h, interactionHelpText(a.conversationPreviewHiddenHelpActions()...))
 	}
 
 	if sp.Folds != nil && sp.Folds.BlockFilter != "" {
 		vis := countVisibleBlocks(sp.Folds.BlockVisible)
 		total := len(sp.Folds.Entry.Content)
 		filterInfo := filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, sp.Folds.BlockFilter))
-		return filterInfo + " " + badges + formatHelp(h+" /:search esc:back q:quit")
+		return filterInfo + " " + badges + formatHelp(joinHelpSections(h, "/:search", "esc:back", "q:quit"))
 	}
-	return badges + formatHelp(h+" /:search esc:back q:quit")
+	return badges + formatHelp(joinHelpSections(h, "/:search", "esc:back", "q:quit"))
 }
 
 // --- Config view help ---
@@ -211,33 +207,36 @@ func (a *App) msgFullHelpLine() string {
 	}
 	if a.msgFull.allMessages {
 		if a.copyModeActive {
-			return formatHelp("all messages  ↑↓:move v/sp:sel y/↵:copy home/end esc:cancel")
+			return formatHelp(joinHelpSections("all messages", interactionHelpText(a.messageFullCopyModeHelpActions()...)))
 		}
-		sh := "all messages  ↑↓:scroll v:copy y:all x:actions /:search"
+		h := joinHelpSections("all messages", interactionHelpText(a.messageFullAllMessagesHelpActions()...))
 		if a.msgFull.searchTerm != "" {
-			sh += fmt.Sprintf(" [%d/%d] n/N:match", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
+			h = joinHelpSections(h, fmt.Sprintf("[%d/%d]", a.msgFull.searchIdx+1, len(a.msgFull.searchLines)), "n/N:match")
 		}
-		return formatHelp(sh + " esc:back q:quit")
+		return formatHelp(joinHelpSections(h, "esc:back", "q:quit"))
 	}
 
 	pos := fmt.Sprintf("#%d/%d", a.msgFull.idx+1, len(a.msgFull.merged))
 	if a.copyModeActive {
-		return formatHelp(pos + "  ↑↓:move v/sp:sel y/↵:copy home/end esc:cancel")
+		return formatHelp(joinHelpSections(pos, interactionHelpText(a.messageFullCopyModeHelpActions()...)))
 	}
 
+	var h string
 	selCount := len(a.msgFull.folds.Selected)
-	sh := pos + "  ↑↓:blocks ←→:fold sp:select n/N:msg f/F:all v:copy y:all x:actions /:filter"
-	if selCount > 0 {
-		sh = pos + fmt.Sprintf("  [%d sel] ↑↓:blocks sp:select y:copy esc:clear", selCount)
-	} else if a.msgFull.searchTerm != "" {
-		sh = pos + fmt.Sprintf("  [%d/%d] n/N:match ↑↓:blocks ←→:fold sp:select f/F:all v:copy y:all", a.msgFull.searchIdx+1, len(a.msgFull.searchLines))
+	switch {
+	case selCount > 0:
+		h = joinHelpSections(pos, fmt.Sprintf("[%d sel]", selCount), interactionHelpText(a.messageFullSelectedHelpActions()...))
+	case a.msgFull.searchTerm != "":
+		h = joinHelpSections(pos, fmt.Sprintf("[%d/%d]", a.msgFull.searchIdx+1, len(a.msgFull.searchLines)), interactionHelpText(a.messageFullSearchHelpActions()...))
+	default:
+		h = joinHelpSections(pos, interactionHelpText(a.messageFullDetailHelpActions()...))
 	}
 
 	if a.msgFull.folds.BlockFilter != "" {
 		vis := countVisibleBlocks(a.msgFull.folds.BlockVisible)
 		total := len(a.msgFull.folds.Entry.Content)
 		filterInfo := filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, a.msgFull.folds.BlockFilter))
-		return filterInfo + " " + formatHelp(sh+" esc:back q:quit")
+		return filterInfo + " " + formatHelp(joinHelpSections(h, "esc:back", "q:quit"))
 	}
-	return formatHelp(sh + " esc:back q:quit")
+	return formatHelp(joinHelpSections(h, "esc:back", "q:quit"))
 }
