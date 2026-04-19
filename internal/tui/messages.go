@@ -532,7 +532,9 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 		case "text":
 			text := strings.TrimSpace(session.StripXMLTags(block.Text))
 			if text == "[separator]" || strings.HasPrefix(text, "[separator]\n\n") {
-				buf.WriteString(cursorPrefix)
+				if cursorPrefix != "" {
+					buf.WriteString(cursorPrefix)
+				}
 				buf.WriteString(dimStyle.Render(strings.Repeat("-", max(w-3, 10))) + "\n\n")
 				if strings.HasPrefix(text, "[separator]\n\n") {
 					text = strings.TrimPrefix(text, "[separator]\n\n")
@@ -543,9 +545,10 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 						}
 						text = formatMarkdownTables(text)
 						wrapped := wrapText(text, max(w-2, 10))
+						indent := strings.Repeat(" ", lipgloss.Width(cursorPrefix))
 						for i, line := range strings.Split(wrapped, "\n") {
 							if i > 0 {
-								buf.WriteString(cursorPrefix)
+								buf.WriteString(indent)
 							}
 							buf.WriteString(line + "\n")
 						}
@@ -559,17 +562,31 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 					// Render separator without cursor prefix (not navigable)
 					buf.WriteString(dimStyle.Render(strings.Repeat("─", max(w-3, 10))) + "\n\n")
 				} else {
-					buf.WriteString(cursorPrefix)
+					if cursorPrefix != "" {
+						buf.WriteString(cursorPrefix)
+					}
 					if formatted {
 						text = tryFormatJSON(text)
 					}
 					text = formatMarkdownTables(text)
 					wrapped := wrapText(text, max(w-2, 10))
-					buf.WriteString(wrapped + "\n\n")
+					wrappedLines := strings.Split(wrapped, "\n")
+					indent := strings.Repeat(" ", lipgloss.Width(cursorPrefix))
+					for i, line := range wrappedLines {
+						if i > 0 {
+							buf.WriteString(indent)
+						}
+						buf.WriteString(line)
+						buf.WriteString("\n")
+					}
+					buf.WriteString("\n")
 				}
 			}
+
 		case "tool_use":
-			buf.WriteString(cursorPrefix)
+			if cursorPrefix != "" {
+				buf.WriteString(cursorPrefix)
+			}
 			// Show skill name prominently for Skill tool_use blocks
 			if block.ToolName == "Skill" {
 				skillName := extractSkillFromInput(block.ToolInput)
@@ -624,7 +641,9 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				prefix = "Error: "
 				style = errorStyle
 			}
-			buf.WriteString(cursorPrefix)
+			if cursorPrefix != "" {
+				buf.WriteString(cursorPrefix)
+			}
 			if folded {
 				summary := session.StripXMLTags(stripANSI(block.Text))
 				if len(summary) > 60 {
@@ -641,7 +660,9 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				buf.WriteString(style.Render(wrapped) + "\n\n")
 			}
 		case "thinking":
-			buf.WriteString(cursorPrefix)
+			if cursorPrefix != "" {
+				buf.WriteString(cursorPrefix)
+			}
 			if folded {
 				summary := block.Text
 				if len(summary) > 60 {
@@ -654,7 +675,9 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				buf.WriteString(dimStyle.Render(wrapped) + "\n\n")
 			}
 		case "system_tag":
-			buf.WriteString(cursorPrefix)
+			if cursorPrefix != "" {
+				buf.WriteString(cursorPrefix)
+			}
 			label := "<" + block.TagName + ">"
 			if folded {
 				summary := session.StripXMLTags(stripANSI(block.Text))
@@ -671,7 +694,9 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				buf.WriteString(dimStyle.Render(wrapped) + "\n\n")
 			}
 		case "image":
-			buf.WriteString(cursorPrefix)
+			if cursorPrefix != "" {
+				buf.WriteString(cursorPrefix)
+			}
 			label := block.Text
 			if block.ImagePasteID > 0 {
 				label = fmt.Sprintf("▣ %s  (paste #%d — Enter to open)", block.Text, block.ImagePasteID)

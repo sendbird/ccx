@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 var (
@@ -24,6 +25,33 @@ func (a *App) enterCopyMode() {
 	switch a.state {
 	case viewMessageFull:
 		content = a.msgFull.content
+	case viewConversation:
+		if a.conv.rightPaneMode != previewText {
+			return
+		}
+		item, ok := a.convList.SelectedItem().(convItem)
+		if !ok {
+			return
+		}
+		var entry session.Entry
+		switch item.kind {
+		case convMsg:
+			entry = item.merged.entry
+		case convAgent:
+			entry = buildAgentPreviewEntry(item.agent)
+		default:
+			return
+		}
+		chunks := previewTextChunks(entry)
+		if len(chunks) == 0 {
+			return
+		}
+		a.copyLines = chunks
+		a.copyModeActive = true
+		a.copyCursor = 0
+		a.copyAnchor = -1
+		a.renderCopyMode()
+		return
 	}
 
 	a.copyLines = strings.Split(stripANSI(content), "\n")
@@ -51,6 +79,11 @@ func (a *App) activeDetailVP() *viewport.Model {
 	switch a.state {
 	case viewMessageFull:
 		return &a.msgFull.vp
+	case viewConversation:
+		if a.conv.split.Show && a.conv.split.Focus {
+			return &a.conv.split.Preview
+		}
+		return nil
 	default:
 		return nil
 	}

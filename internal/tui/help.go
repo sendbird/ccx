@@ -106,7 +106,7 @@ func (a *App) convHelpLine(badges string) string {
 	if sp.Show {
 		if sp.Focus {
 			if a.conv.rightPaneMode == previewText {
-				h += " ↑↓:scroll"
+				h += " ↑↓:scroll v:copy"
 			} else {
 				h += " ↑↓:blocks ←→:fold f/F:all /:filter"
 			}

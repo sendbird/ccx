@@ -1650,10 +1650,10 @@ func (a *App) handleTasksPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.
 		}
 		return a, nil, true
 	case NavBoundaryDown:
-		a.sessPreviewBoundaryCross("down")
+		// boundary crossing disabled in sessions preview
 		return a, nil, true
 	case NavBoundaryUp:
-		a.sessPreviewBoundaryCross("up")
+		// boundary crossing disabled in sessions preview
 		return a, nil, true
 	}
 	// pgup/pgdown/home/end: scroll viewport
@@ -1765,7 +1765,7 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 			a.refreshConvPreview()
 		} else {
 			// At top boundary, stay within the current session preview.
-			a.sessPreviewBoundaryCross("up")
+			// boundary crossing disabled in sessions preview
 		}
 		return a, nil, true
 	case "down":
@@ -1789,7 +1789,7 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 			a.refreshConvPreview()
 		} else {
 			// At bottom boundary, stay within the current session preview.
-			a.sessPreviewBoundaryCross("down")
+			// boundary crossing disabled in sessions preview
 		}
 		a.sessPreviewPinned = a.sessConvCursor < len(visible)-1
 		return a, nil, true

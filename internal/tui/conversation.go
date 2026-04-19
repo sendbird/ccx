@@ -537,6 +537,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case a.keymap.Conversation.Actions:
 		a.convActionsMenu = true
 		return a, nil
+	case a.keymap.Preview.CopyMode:
+		if sp.Focus && a.conv.rightPaneMode == previewText {
+			a.enterCopyMode()
+			return a, nil
+		}
 	case "p":
 		a.convPageMenu = true
 		return a, nil

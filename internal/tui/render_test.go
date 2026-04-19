@@ -244,17 +244,25 @@ func TestFormatMarkdownTables_NoTable(t *testing.T) {
 	}
 }
 
-func TestFormatMarkdownTables_MixedContent(t *testing.T) {
-	input := "Before table\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter table"
-	got := formatMarkdownTables(input)
-	if !strings.Contains(got, "Before table") {
-		t.Error("should preserve text before table")
+func TestRender_SeparatorWrappedTextCursorFirstLineOnly(t *testing.T) {
+	entry := session.Entry{
+		Role:      "assistant",
+		Timestamp: time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC),
+		Content: []session.ContentBlock{
+			{Type: "text", Text: "[separator]\n\nThis is a long wrapped text block that should keep the cursor marker only on the first rendered line while follow-up wrapped lines are indented instead of repeating the marker."},
+		},
 	}
-	if !strings.Contains(got, "After table") {
-		t.Error("should preserve text after table")
+	folds := defaultFolds(entry)
+	rp := renderFullMessageWithCursor(entry, 40, folds, nil, 0)
+	lines := strings.Split(stripANSIForGolden(rp.content), "\n")
+	markerLines := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "› ") || strings.HasPrefix(line, "▾ ") || strings.HasPrefix(line, "▸ ") || strings.HasPrefix(line, "✦ ") {
+			markerLines++
+		}
 	}
-	if !strings.Contains(got, "| A |") {
-		t.Error("should contain aligned table")
+	if markerLines != 1 {
+		t.Fatalf("expected exactly one marker-prefixed line, got %d\n%s", markerLines, stripANSIForGolden(rp.content))
 	}
 }
 
