@@ -37,31 +37,20 @@ func main() {
 		case "sessions":
 			fs := flag.NewFlagSet("sessions", flag.ExitOnError)
 			all := fs.Bool("all", false, "list all sessions (default: current tmux window only)")
+			pick := fs.Bool("pick", false, "launch interactive picker and emit JSON on stdout")
+			search := fs.String("search", "", "initial filter query (same syntax as TUI /)")
+			multi := fs.Bool("multi", false, "allow multi-select (with --pick)")
+			dirFlag := fs.String("dir", "", "path to Claude data directory (default: ~/.claude)")
 			fs.Parse(os.Args[2:])
-			dir := resolveClaudeDir("")
+			dir := resolveClaudeDir(*dirFlag)
+			if *pick {
+				os.Exit(int(cli.RunPickSessionTUI(dir, *search, *multi)))
+			}
 			if err := cli.RunSessions(dir, *all); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
 			os.Exit(0)
-		case "pick":
-			if len(os.Args) < 3 {
-				fmt.Fprintln(os.Stderr, "ccx pick: missing entity (expected: session)")
-				os.Exit(1)
-			}
-			entity := os.Args[2]
-			if entity != "session" {
-				fmt.Fprintf(os.Stderr, "ccx pick: unknown entity %q (expected: session)\n", entity)
-				os.Exit(1)
-			}
-			fs := flag.NewFlagSet("pick session", flag.ExitOnError)
-			search := fs.String("search", "", "initial filter query (same syntax as TUI /)")
-			multi := fs.Bool("multi", false, "allow multi-select")
-			dirFlag := fs.String("dir", "", "path to Claude data directory (default: ~/.claude)")
-			fs.Parse(os.Args[3:])
-
-			dir := resolveClaudeDir(*dirFlag)
-			os.Exit(int(cli.RunPickSessionTUI(dir, *search, *multi)))
 		case "urls", "files", "changes", "images", "conversation", "help":
 			subcmd := os.Args[1]
 			fs := flag.NewFlagSet(subcmd, flag.ExitOnError)

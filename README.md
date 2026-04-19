@@ -35,7 +35,7 @@ ccx -preview stats         # start with stats preview open
 ccx -search "is:live"      # start filtered to live sessions
 ```
 
-### `ccx pick session`
+### `ccx sessions -pick`
 
 Interactive session resolver for shells, scripts, and agents. Launches the full `ccx` TUI on **stderr**; stdout is reserved for JSON.
 
@@ -43,14 +43,14 @@ To confirm a pick, press `P`. Navigate with arrows, multi-select with `space`, f
 
 ```bash
 # basic usage
-sid=$(ccx pick session | jq -r '.sessions[0].id')
+sid=$(ccx sessions -pick | jq -r '.sessions[0].id')
 claude --resume "$sid"
 
 # narrow with filter query (same syntax as TUI /)
-ccx pick session -search "is:current is:live"
+ccx sessions -pick -search "is:current is:live"
 
 # multi-select
-ccx pick session -multi | jq '.sessions | length'
+ccx sessions -pick -multi | jq '.sessions | length'
 ```
 
 **Flags:**
