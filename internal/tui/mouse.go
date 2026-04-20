@@ -263,18 +263,19 @@ func mouseScrollList(l *list.Model, up bool) {
 // All list chrome (status bar, filter bar, pagination) is disabled,
 // so items start at Y=0 within the list widget.
 func mouseClickList(l *list.Model, contentY int, itemHeight int) {
-	if len(l.Items()) == 0 || contentY < 0 || itemHeight < 1 {
+	if contentY < 0 || itemHeight < 1 {
 		return
 	}
-	// Skip during active filtering (indices don't map cleanly)
-	if l.FilterState() == list.Filtering || l.FilterState() == list.FilterApplied {
+
+	visible := l.VisibleItems()
+	if len(visible) == 0 {
 		return
 	}
 
 	clickOffset := contentY / itemHeight
 	pageStart := l.Paginator.Page * l.Paginator.PerPage
 	target := pageStart + clickOffset
-	if target >= 0 && target < len(l.Items()) {
+	if target >= 0 && target < len(visible) {
 		l.Select(target)
 	}
 }
