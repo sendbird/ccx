@@ -17,18 +17,19 @@ import (
 // handleConvActionsMenu processes key events for the conversation actions menu.
 func (a *App) handleConvActionsMenu(key string) (tea.Model, tea.Cmd) {
 	a.convActionsMenu = false
-	switch key {
-	case "u":
+	actions := a.conversationActionMenuActions()
+	switch {
+	case interactionKeyMatches(actions, key, interactionActionURLs):
 		if a.state == viewMessageFull {
 			return a.openMsgFullURLMenu()
 		}
 		return a.openConvURLMenu()
-	case "f":
+	case interactionKeyMatches(actions, key, interactionActionFiles):
 		if a.state == viewMessageFull {
 			return a.openMsgFullFilesMenu()
 		}
 		return a.openConvFilesMenu()
-	case "g":
+	case interactionKeyMatches(actions, key, interactionActionChanges):
 		if a.state == viewMessageFull {
 			return a.openMsgFullChangesMenu()
 		}
@@ -38,18 +39,8 @@ func (a *App) handleConvActionsMenu(key string) (tea.Model, tea.Cmd) {
 }
 
 // renderConvActionsHintBox renders the actions hint box for conversation/message-full views.
-func renderConvActionsHintBox() string {
-	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	d := dimStyle
-	sp := "  "
-
-	line := hl.Render("u") + d.Render(":urls") + sp + hl.Render("f") + d.Render(":files") + sp + hl.Render("g") + d.Render(":changes")
-	body := line + "\n" + d.Render("esc:cancel")
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorDim).
-		Padding(0, 1)
-	return boxStyle.Render(body)
+func (a *App) renderConvActionsHintBox() string {
+	return renderInteractionHintBox([][]interactionAction{a.conversationActionMenuActions()}, "esc:cancel")
 }
 
 // --- URL menu state & handlers ---
