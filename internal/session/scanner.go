@@ -10,6 +10,49 @@ import (
 	"time"
 )
 
+// FindSessionByID finds a session whose ID starts with idPrefix. Returns the
+// scanned session and true if found, or zero value and false otherwise.
+func FindSessionByID(claudeDir, idPrefix string) (Session, bool) {
+	if claudeDir == "" {
+		claudeDir = os.Getenv("CLAUDE_CONFIG_DIR")
+	}
+	if claudeDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return Session{}, false
+		}
+		claudeDir = filepath.Join(home, ".claude")
+	}
+
+	home := filepath.Dir(claudeDir)
+	badgeStore := LoadBadges(claudeDir)
+	projectsDir := filepath.Join(claudeDir, "projects")
+
+	var found Session
+	filepath.Walk(projectsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if info.Name() == "subagents" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := info.Name()
+		if !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "agent-") {
+			return nil
+		}
+		id := strings.TrimSuffix(name, ".jsonl")
+		if strings.HasPrefix(id, idPrefix) {
+			found = scanSessionStream(path, info.ModTime(), home, badgeStore)
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found, found.ID != ""
+}
+
 // ScanSessions scans for Claude Code sessions. If claudeDir is empty,
 // defaults to ~/.claude. Uses a metadata cache to avoid re-scanning
 // unchanged files.
