@@ -604,11 +604,6 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.pauseLiveTail()
 		}
 		if key == "up" || key == "down" {
-			if a.conv.rightPaneMode == previewText {
-				// Text mode: scroll viewport directly
-				scrollPreview(&sp.Preview, key)
-				return a, nil
-			}
 			if sp.Folds != nil {
 				switch HandleFoldNav(sp.Folds, &sp.Preview, key) {
 				case NavCursorMoved:
@@ -752,15 +747,20 @@ func (a *App) updateConvPreview() {
 
 	baseKey := convPreviewBaseKey(item)
 	oldCacheKey := sp.CacheKey
+	anchor := captureConvPreviewAnchor(sp, baseKey)
 	if item.kind == convAgent && oldCacheKey != "" && strings.HasPrefix(oldCacheKey, baseKey+":") {
 		debugLog.Printf("updateConvPreview: CACHE HIT key=%q (agent)", oldCacheKey)
 		return
 	}
 
 	var entry session.Entry
+	var sourceEntries []session.Entry
 	switch item.kind {
 	case convMsg:
 		entry = item.merged.entry
+		if item.merged.startIdx >= 0 && item.merged.endIdx < len(a.conv.messages) && item.merged.startIdx <= item.merged.endIdx {
+			sourceEntries = append([]session.Entry(nil), a.conv.messages[item.merged.startIdx:item.merged.endIdx+1]...)
+		}
 	case convAgent:
 		entry = buildAgentPreviewEntry(item.agent)
 	case convSessionMeta:
@@ -774,22 +774,18 @@ func (a *App) updateConvPreview() {
 	case convTask:
 		pw := sp.PreviewWidth(a.width, a.splitRatio)
 		if item.groupTag == "agents" && item.count > 0 {
-			// Agents group header: show agent summary list
 			a.setConvPreviewText(a.renderAgentsSummary(pw))
 			return
 		}
 		if item.groupTag == "bgjobs" && item.count > 0 {
-			// Background jobs group header: show job summary
 			a.setConvPreviewText(a.renderBgJobsSummary(pw))
 			return
 		}
 		if item.groupTag != "" && item.count > 0 {
-			// Expandable group header (tasks): show full task board
 			a.setConvPreviewText(a.renderConvTaskBoard(pw))
 			return
 		}
 		if item.groupTag != "" {
-			// Marker header: show per-message operation summary
 			a.setConvPreviewText(renderTaskMarkerPreview(item, pw))
 			return
 		}
@@ -798,49 +794,37 @@ func (a *App) updateConvPreview() {
 		} else if a.conv.leftPaneMode == convPaneTree {
 			entry = a.buildTaskPreviewEntry(item.task)
 		} else {
-			// Individual task: show task details
 			a.setConvPreviewText(renderTaskSummary(item.task, pw))
 			return
 		}
 	}
 
-	// Compact preview: text only.
-	// Standard preview: conversation text + artifacts only.
-	// Verbose preview: full structured blocks + hooks.
 	if a.conv.leftPaneMode != convPaneTree {
 		if a.conv.rightPaneMode == previewText {
-			a.renderTextOnlyPreview(item, entry)
-			return
-		}
-		if a.conv.rightPaneMode == previewTool {
-			entry = buildStandardEntry(entry)
+			entry = buildCompactEntry(entry, sourceEntries)
+		} else if a.conv.rightPaneMode == previewTool {
+			entry = buildStandardEntryWithSources(entry, sourceEntries)
 		}
 	}
 
-	cacheKey := fmt.Sprintf("%s:%d", baseKey, len(entry.Content))
+	cacheKey := fmt.Sprintf("%s:%d:%x", baseKey, len(entry.Content), entryContentHash(entry.Content))
 	if cacheKey == sp.CacheKey {
 		debugLog.Printf("updateConvPreview: CACHE HIT key=%q", cacheKey)
 		return
 	}
 
 	isNewEntry := oldCacheKey == "" || !strings.HasPrefix(oldCacheKey, baseKey+":")
-
 	if isNewEntry {
-		debugLog.Printf("updateConvPreview: NEW ENTRY old=%q new=%q blocks=%d TypeFoldPrefs=%v TypeFmtPrefs=%v",
-			oldCacheKey, cacheKey, len(entry.Content), sp.TypeFoldPrefs, sp.TypeFmtPrefs)
 		sp.CacheKey = cacheKey
 		if sp.Folds != nil {
 			sp.Folds.ResetWithPrefs(entry, sp.TypeFoldPrefs, sp.TypeFmtPrefs)
 			sp.Folds.HideHooks = a.conv.rightPaneMode == previewTool
-			// Re-apply block filter to new entry
 			if sp.Folds.BlockFilter != "" {
 				sp.Folds.BlockVisible = applyBlockFilter(sp.Folds.BlockFilter, entry)
 				if first := sp.Folds.firstVisibleBlock(); first >= 0 {
 					sp.Folds.BlockCursor = first
 				}
 			}
-			debugLog.Printf("  after ResetWithPrefs: collapsed=%v formatted=%v blockCursor=%d",
-				sp.Folds.Collapsed, sp.Folds.Formatted, sp.Folds.BlockCursor)
 		}
 		sp.RefreshFoldPreview(a.width, a.splitRatio)
 		sp.Preview.YOffset = 0
@@ -849,15 +833,16 @@ func (a *App) updateConvPreview() {
 		if sp.Folds != nil {
 			oldBC = len(sp.Folds.Entry.Content)
 		}
-		debugLog.Printf("updateConvPreview: GROW old=%q new=%q oldBlocks=%d newBlocks=%d TypeFmtPrefs=%v",
-			oldCacheKey, cacheKey, oldBC, len(entry.Content), sp.TypeFmtPrefs)
 		sp.CacheKey = cacheKey
 		if sp.Folds != nil {
 			sp.Folds.GrowBlocks(entry, oldBC, sp.TypeFoldPrefs, sp.TypeFmtPrefs)
-			debugLog.Printf("  after GrowBlocks: collapsed=%v formatted=%v blockCursor=%d",
-				sp.Folds.Collapsed, sp.Folds.Formatted, sp.Folds.BlockCursor)
+			sp.Folds.HideHooks = a.conv.rightPaneMode == previewTool
 		}
 		sp.RefreshFoldPreview(a.width, a.splitRatio)
+	}
+
+	if !isNewEntry && anchor.baseKey != "" {
+		restoreConvPreviewAnchor(sp, anchor)
 	}
 }
 
@@ -876,9 +861,118 @@ func previewTextChunks(e session.Entry) []string {
 	return chunks
 }
 
+func entryContentHash(blocks []session.ContentBlock) uint64 {
+	var h uint64
+	for i, b := range blocks {
+		h ^= uint64(i+1) * 1469598103934665603
+		h ^= uint64(len(b.Type) + len(b.Text) + len(b.ToolName) + len(b.ToolInput) + b.ImagePasteID)
+	}
+	return h
+}
+
+func buildCompactEntry(entry session.Entry, sourceEntries []session.Entry) session.Entry {
+	if len(sourceEntries) == 0 {
+		blocks := make([]session.ContentBlock, 0, len(entry.Content))
+		first := true
+		for _, b := range entry.Content {
+			if b.Type != "text" {
+				continue
+			}
+			text := strings.TrimSpace(session.StripXMLTags(b.Text))
+			if text == "" {
+				continue
+			}
+			if !first {
+				text = "[separator]\n\n" + text
+			}
+			blocks = append(blocks, session.ContentBlock{Type: "text", Text: text})
+			first = false
+		}
+		if len(blocks) == 0 {
+			blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no text content)"})
+		}
+		entry.Content = blocks
+		return entry
+	}
+
+	blocks := make([]session.ContentBlock, 0, len(sourceEntries)*2)
+	first := true
+	for _, raw := range sourceEntries {
+		text := previewMessageText(raw)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		if !first {
+			text = "[separator]\n\n" + text
+		}
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: text})
+		first = false
+	}
+	if len(blocks) == 0 {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no text content)"})
+	}
+	entry.Content = blocks
+	return entry
+}
+
+func buildStandardEntryWithSources(entry session.Entry, sourceEntries []session.Entry) session.Entry {
+	if len(sourceEntries) == 0 {
+		sourceEntries = []session.Entry{{
+			Role:      entry.Role,
+			Timestamp: entry.Timestamp,
+			Content:   append([]session.ContentBlock(nil), entry.Content...),
+		}}
+	}
+
+	blocks := make([]session.ContentBlock, 0, len(sourceEntries)*4)
+	firstSection := true
+	for _, raw := range sourceEntries {
+		sectionBlocks := make([]session.ContentBlock, 0, len(raw.Content)+4)
+		if msg := previewMessageText(raw); msg != "" {
+			sectionBlocks = append(sectionBlocks, session.ContentBlock{Type: "text", Text: msg})
+		}
+		for _, b := range raw.Content {
+			if b.Type == "image" {
+				sectionBlocks = append(sectionBlocks, b)
+			}
+		}
+		for _, item := range extract.BlockFilePaths(raw.Content) {
+			sectionBlocks = append(sectionBlocks, session.ContentBlock{Type: "text", Text: "[file] " + item.URL})
+		}
+		for _, ch := range extract.BlockChanges(raw.Content) {
+			if len(ch.ToolInputs) > 0 {
+				sectionBlocks = append(sectionBlocks, session.ContentBlock{Type: "tool_use", ToolName: ch.ToolNames[0], ToolInput: ch.ToolInputs[0]})
+			} else {
+				sectionBlocks = append(sectionBlocks, session.ContentBlock{Type: "text", Text: "[change] " + ch.Item.URL})
+			}
+		}
+		for _, item := range extract.BlockURLs(raw.Content) {
+			sectionBlocks = append(sectionBlocks, session.ContentBlock{Type: "text", Text: "[url] " + item.URL})
+		}
+		if len(sectionBlocks) == 0 {
+			continue
+		}
+		for i := range sectionBlocks {
+			if !firstSection && i == 0 && sectionBlocks[i].Type == "text" {
+				sectionBlocks[i].Text = "[separator]\n\n" + sectionBlocks[i].Text
+			}
+		}
+		blocks = append(blocks, sectionBlocks...)
+		firstSection = false
+	}
+	if len(blocks) == 0 {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no content)"})
+	}
+	entry.Content = blocks
+	return entry
+}
+func buildStandardEntry(entry session.Entry) session.Entry {
+	return buildStandardEntryWithSources(entry, nil)
+}
+
 func renderPreviewHeader(entry session.Entry, textW int) string {
 	roleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
-	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
+	ds := lipgloss.NewStyle().Foreground(colorDim)
 
 	var sb strings.Builder
 	role := strings.ToUpper(entry.Role)
@@ -887,101 +981,14 @@ func renderPreviewHeader(entry session.Entry, textW int) string {
 	}
 	sb.WriteString(roleStyle.Render(role))
 	if !entry.Timestamp.IsZero() {
-		sb.WriteString(dimStyle.Render("  " + entry.Timestamp.Format("15:04:05")))
+		sb.WriteString(ds.Render("  " + entry.Timestamp.Format("15:04:05")))
 	}
 	if entry.Model != "" {
-		sb.WriteString(dimStyle.Render("  " + entry.Model))
+		sb.WriteString(ds.Render("  " + entry.Model))
 	}
 	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render(strings.Repeat("─", min(textW, 60))) + "\n\n")
+	sb.WriteString(ds.Render(strings.Repeat("─", min(textW, 60))) + "\n\n")
 	return sb.String()
-}
-
-// renderTextOnlyPreview renders a clean text-only view of the entry (no tool calls).
-func (a *App) renderTextOnlyPreview(item convItem, entry session.Entry) {
-	sp := &a.conv.split
-	pw := sp.PreviewWidth(a.width, a.splitRatio)
-	textW := max(pw-2, 10)
-
-	cacheKey := fmt.Sprintf("text:%s:%d", convPreviewBaseKey(item), len(entry.Content))
-	if cacheKey == sp.CacheKey {
-		return
-	}
-
-	var sb strings.Builder
-	sb.WriteString(renderPreviewHeader(entry, textW))
-
-	chunks := previewTextChunks(entry)
-	if len(chunks) == 0 {
-		sb.WriteString(dimStyle.Render("(no text content)"))
-	} else {
-		for i, chunk := range chunks {
-			if i > 0 {
-				sb.WriteString("\n\n" + dimStyle.Render(strings.Repeat("=", max(textW, 1))) + "\n\n")
-			}
-			sb.WriteString(wrapText(chunk, textW))
-		}
-	}
-
-	sp.CacheKey = cacheKey
-	sp.SetPreviewContent(sb.String(), a.width, a.height, a.splitRatio)
-	sp.Preview.YOffset = 0
-	// Clear fold state to prevent fold keys from acting on stale data
-	if sp.Folds != nil {
-		sp.Folds.Entry = session.Entry{}
-		sp.Folds.BlockStarts = nil
-	}
-}
-
-func buildStandardEntry(entry session.Entry) session.Entry {
-	blocks := make([]session.ContentBlock, 0, len(entry.Content)+8)
-
-	// Group text chunks with their artifacts per turn
-	chunks := previewTextChunks(entry)
-	for i, chunk := range chunks {
-		if i > 0 {
-			chunk = "[separator]\n\n" + chunk
-		}
-		blocks = append(blocks, session.ContentBlock{Type: "text", Text: chunk})
-	}
-
-	// Collect artifacts from the entire entry and place them after the text
-	var artifacts []session.ContentBlock
-	for _, b := range entry.Content {
-		if b.Type == "image" {
-			artifacts = append(artifacts, b)
-		}
-	}
-	for _, item := range extract.BlockFilePaths(entry.Content) {
-		artifacts = append(artifacts, session.ContentBlock{Type: "text", Text: "[file] " + item.URL})
-	}
-	for _, ch := range extract.BlockChanges(entry.Content) {
-		// Keep the original tool_use block so the tooltip can render diffs
-		if len(ch.ToolInputs) > 0 {
-			artifacts = append(artifacts, session.ContentBlock{
-				Type:      "tool_use",
-				ToolName:  ch.ToolNames[0],
-				ToolInput: ch.ToolInputs[0],
-			})
-		} else {
-			artifacts = append(artifacts, session.ContentBlock{Type: "text", Text: "[change] " + ch.Item.URL})
-		}
-	}
-	for _, item := range extract.BlockURLs(entry.Content) {
-		artifacts = append(artifacts, session.ContentBlock{Type: "text", Text: "[url] " + item.URL})
-	}
-
-	if len(artifacts) > 0 {
-		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "Artifacts"})
-		blocks = append(blocks, artifacts...)
-	}
-
-	if len(blocks) == 0 {
-		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no content)"})
-	}
-
-	entry.Content = blocks
-	return entry
 }
 
 func makeConvPageItem(item extract.Item, ts time.Time, turnPreview, userPrompt string, imagePasteID int) convPageItem {
@@ -1379,6 +1386,74 @@ func (a *App) setConvPreviewText(content string) {
 		sp.Folds.Entry = session.Entry{}
 		sp.Folds.BlockStarts = nil
 	}
+}
+
+type convPreviewAnchor struct {
+	baseKey    string
+	blockText  string
+	blockType  string
+	viewportY  int
+	blockIndex int
+}
+
+func captureConvPreviewAnchor(sp *SplitPane, baseKey string) convPreviewAnchor {
+	anchor := convPreviewAnchor{baseKey: baseKey, blockIndex: -1}
+	if sp == nil {
+		return anchor
+	}
+	anchor.viewportY = sp.Preview.YOffset
+	if sp.Folds == nil || len(sp.Folds.Entry.Content) == 0 {
+		return anchor
+	}
+	if sp.Folds.BlockCursor < 0 || sp.Folds.BlockCursor >= len(sp.Folds.Entry.Content) {
+		return anchor
+	}
+	block := sp.Folds.Entry.Content[sp.Folds.BlockCursor]
+	anchor.blockType = block.Type
+	anchor.blockText = strings.TrimSpace(session.StripXMLTags(block.Text))
+	anchor.blockIndex = sp.Folds.BlockCursor
+	return anchor
+}
+
+func restoreConvPreviewAnchor(sp *SplitPane, anchor convPreviewAnchor) {
+	if sp == nil || sp.Folds == nil || len(sp.Folds.Entry.Content) == 0 {
+		return
+	}
+
+	best := -1
+	for i, block := range sp.Folds.Entry.Content {
+		text := strings.TrimSpace(session.StripXMLTags(block.Text))
+		if anchor.blockText != "" && text == anchor.blockText && block.Type == anchor.blockType {
+			best = i
+			break
+		}
+	}
+	if best < 0 && anchor.blockText != "" {
+		for i, block := range sp.Folds.Entry.Content {
+			text := strings.TrimSpace(session.StripXMLTags(block.Text))
+			if text == anchor.blockText {
+				best = i
+				break
+			}
+		}
+	}
+	if best < 0 && anchor.blockIndex >= 0 {
+		best = min(anchor.blockIndex, len(sp.Folds.Entry.Content)-1)
+	}
+	if best < 0 {
+		if first := sp.Folds.firstVisibleBlock(); first >= 0 {
+			best = first
+		}
+	}
+	if best >= 0 {
+		sp.Folds.BlockCursor = best
+	}
+	sp.RefreshFoldPreview(sp.Preview.Width+sp.List.Width()+1, 50)
+	if anchor.viewportY > 0 {
+		maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
+		sp.Preview.YOffset = min(anchor.viewportY, maxOffset)
+	}
+	sp.ScrollToBlock()
 }
 
 // buildAgentPreviewEntry builds a synthetic Entry from an agent's messages
