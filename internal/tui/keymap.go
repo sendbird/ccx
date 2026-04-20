@@ -29,6 +29,7 @@ type SessionKeymap struct {
 	ResizeShrink string `yaml:"resize_shrink"`
 	ResizeGrow   string `yaml:"resize_grow"`
 	Command      string `yaml:"command"`
+	Pick         string `yaml:"pick"` // pick mode only (ccx pick session)
 }
 
 // ActionsKeymap defines configurable keybindings for the actions menu.
@@ -124,6 +125,7 @@ func DefaultKeymap() Keymap {
 			ResizeShrink: "[",
 			ResizeGrow:   "]",
 			Command:      ":",
+			Pick:         "P",
 		},
 		Actions: ActionsKeymap{
 			Delete:    "d",
@@ -259,6 +261,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Session.Command != "" {
 		dst.Session.Command = src.Session.Command
+	}
+	if src.Session.Pick != "" {
+		dst.Session.Pick = src.Session.Pick
 	}
 
 	// Actions

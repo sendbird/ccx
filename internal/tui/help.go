@@ -66,6 +66,9 @@ func (a *App) sessHelpLine() string {
 	// Normal session list/preview
 	sk := a.keymap.Session
 	h := fmtKey(sk.Open, "open") + " " + fmtKey(sk.Edit, "edit") + " " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Views, "views") + " " + fmtKey(sk.Refresh, "refresh")
+	if a.config.PickMode {
+		h = fmtKey(sk.Pick, "pick") + " " + h
+	}
 	if !a.sessSplit.Show {
 		h += " →:preview tab:group"
 	} else if a.sessSplit.Focus {

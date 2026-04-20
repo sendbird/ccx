@@ -35,6 +35,58 @@ ccx -preview stats         # start with stats preview open
 ccx -search "is:live"      # start filtered to live sessions
 ```
 
+### `ccx sessions -pick`
+
+Interactive session resolver for shells, scripts, and agents. Launches the full `ccx` TUI on **stderr**; stdout is reserved for JSON.
+
+To confirm a pick, press `P`. Navigate with arrows, multi-select with `space`, filter with `/`.
+
+```bash
+# basic usage
+sid=$(ccx sessions -pick | jq -r '.sessions[0].id')
+claude --resume "$sid"
+
+# narrow with filter query (same syntax as TUI /)
+ccx sessions -pick -search "is:current is:live"
+
+# multi-select
+ccx sessions -pick -multi | jq '.sessions | length'
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-search STR` | Initial filter query (same syntax as TUI `/` search) |
+| `-multi` | Allow multi-selection (space to toggle, `P` to confirm) |
+| `-dir PATH` | Claude data directory (default: `~/.claude`) |
+
+**Output schema (stable):**
+
+```json
+{
+  "sessions": [
+    {
+      "id": "a1b2c3…",
+      "project_root_path": "/Users/edgar/code/...",
+      "transcript_path": "/Users/edgar/.claude/projects/-Users-.../a1b2c3….jsonl"
+    }
+  ]
+}
+```
+
+`sessions` is always an array; single-select yields length 1.
+
+**Exit codes:**
+
+| Code | Condition |
+|------|-----------|
+| 0    | User confirmed; JSON printed to stdout |
+| 1    | Internal error (stderr message) |
+| 2    | No candidates after filtering |
+| 130  | User cancelled (Esc / Ctrl-C) |
+
+
 ### CLI Flags
 
 | Flag | Description |
@@ -90,6 +142,7 @@ Browse all Claude Code sessions across projects, sorted by recency.
 | `has:mcp` | Used MCP tools |
 | `team:NAME` | Filter by team name |
 | `win:NAME` | Filter by tmux window name |
+| `is:current` | Session's project path matches invoker cwd or tmux-window Claude process |
 
 Plain text terms match against project path, name, branch, session ID, first prompt, and teammate name. Multiple terms are AND-matched.
 

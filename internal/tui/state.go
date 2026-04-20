@@ -170,6 +170,9 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if s.Command == "" {
 		s.Command = d.Session.Command
 	}
+	if s.Pick == "" {
+		s.Pick = d.Session.Pick
+	}
 
 	a := &cfg.Keymaps.Actions
 	if a.Delete == "" {
@@ -285,7 +288,9 @@ func viewStateString(state viewState) string {
 
 // quit saves preferences and returns tea.Quit.
 func (a *App) quit() (tea.Model, tea.Cmd) {
-	SavePreferences(a.capturePreferences())
+	if !a.config.PickMode {
+		SavePreferences(a.capturePreferences())
+	}
 	return a, tea.Quit
 }
 

@@ -185,6 +185,9 @@ type App struct {
 	selectedSet    map[string]bool // multi-select: session ID → selected
 	liveInputPanes []tmux.Pane     // bulk input: multiple target panes
 
+	// Pick mode result — non-nil after user confirms a pick.
+	pickResult PickResult
+
 	// List models
 	sessionList list.Model
 
@@ -525,6 +528,10 @@ func (a *App) selectedSessions() []session.Session {
 	return out
 }
 
+// PickResult returns the result captured during pick mode, or nil if the
+// user cancelled or pick mode is disabled.
+func (a *App) PickResult() PickResult { return a.pickResult }
+
 type sessPreview int
 
 const (
@@ -551,6 +558,7 @@ type Config struct {
 	ViewMode     string  // initial view (sessions|config|plugins|stats)
 	JumpSession  string  // session ID to open and navigate to on launch
 	JumpUUID     string  // entry UUID to navigate to within the session
+	PickMode     bool    // true = running under `ccx pick session`: show "Pick" action, skip prefs save
 }
 
 func NewApp(sessions []session.Session, cfg Config) *App {
@@ -1409,6 +1417,19 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// View-specific keys
 	km := a.keymap
+	if a.config.PickMode && key == km.Session.Pick {
+		var items []session.Session
+		if a.hasMultiSelection() {
+			items = a.selectedSessions()
+		} else if sess, ok := a.selectedSession(); ok {
+			items = []session.Session{sess}
+		}
+		if len(items) == 0 {
+			return a, nil
+		}
+		a.pickResult = SessionsResult{Items: items}
+		return a, tea.Quit
+	}
 	switch key {
 	case km.Session.Quit:
 		return a.quit()

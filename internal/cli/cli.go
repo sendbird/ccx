@@ -23,7 +23,7 @@ var Commands = []struct {
 	{"changes", "List file changes made by the session (interactive on TTY)"},
 	{"images", "List image paths from the session (interactive on TTY)"},
 	{"conversation", "List conversation turns from the Claude session (interactive on TTY)"},
-	{"sessions", "List all session IDs with metadata"},
+	{"sessions", "List session IDs with metadata (use --pick for TUI JSON picker)"},
 	{"help", "Show available commands and usage"},
 }
 
