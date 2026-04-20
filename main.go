@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/cli"
@@ -27,6 +28,7 @@ func main() {
 		groupMode    string
 		previewMode  string
 		viewMode     string
+		sessionID    string
 		jumpSession  string
 		jumpUUID     string
 	)
@@ -79,6 +81,7 @@ func main() {
 		flag.StringVar(&groupMode, "group", "", "initial group mode (flat|proj|tree|chain|fork)")
 		flag.StringVar(&previewMode, "preview", "", "initial preview mode (conv|stats|mem|tasks)")
 		flag.StringVar(&viewMode, "view", "", "initial view (sessions|config|plugins|stats)")
+		flag.StringVar(&sessionID, "session", "", "open a specific session by ID (prefix match)")
 		flag.Usage = func() {
 			fmt.Fprintf(os.Stderr, "ccx — Claude Code Explorer\n\n")
 			fmt.Fprintf(os.Stderr, "Usage: ccx [flags]\n")
@@ -111,6 +114,26 @@ func main() {
 	if len(initialSessions) == 0 {
 		livePaths := tmux.DetectLiveProjectPaths()
 		initialSessions, _ = session.ScanSessionsForPaths(claudeDir, livePaths)
+	}
+
+	if sessionID != "" {
+		found := false
+		for _, s := range initialSessions {
+			if strings.HasPrefix(s.ID, sessionID) {
+				jumpSession = s.ID
+				found = true
+				break
+			}
+		}
+		if !found {
+			if s, ok := session.FindSessionByID(claudeDir, sessionID); ok {
+				initialSessions = append([]session.Session{s}, initialSessions...)
+				jumpSession = s.ID
+			} else {
+				fmt.Fprintf(os.Stderr, "Error: session %q not found\n", sessionID)
+				os.Exit(1)
+			}
+		}
 	}
 
 	app := tui.NewApp(initialSessions, tui.Config{
