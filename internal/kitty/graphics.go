@@ -21,11 +21,19 @@ var (
 // Supported returns true if the terminal supports Kitty graphics protocol.
 // Checks environment variables and tmux outer terminal hints.
 // Cached for the session lifetime.
+//
+// When running inside tmux with Kitty support, this function also promotes
+// the tmux `allow-passthrough` option to `all` if it is currently `on`.
+// Without `all`, tmux drops any passthrough sequences emitted from an
+// inactive (hidden) pane, which means a Kitty image placed while the pane
+// is visible stays stuck on screen after the user switches tmux windows:
+// our clear sequence can never reach the terminal from the hidden pane.
 func Supported() bool {
 	supportedOnce.Do(func() {
 		// Explicit user override
 		if os.Getenv("CCX_KITTY") == "1" {
 			supported = true
+			ensureTmuxAllowPassthrough()
 			return
 		}
 		if os.Getenv("CCX_KITTY") == "0" {
@@ -56,6 +64,9 @@ func Supported() bool {
 		if !supported && os.Getenv("TMUX") != "" {
 			supported = detectKittyViaTmux()
 		}
+		if supported {
+			ensureTmuxAllowPassthrough()
+		}
 	})
 	return supported
 }
@@ -82,6 +93,32 @@ func detectKittyViaTmux() bool {
 		}
 	}
 	return false
+}
+
+// ensureTmuxAllowPassthrough promotes tmux's `allow-passthrough` option from
+// `on` to `all`. The two settings differ in how tmux handles DCS passthrough
+// from a HIDDEN pane: `on` drops the sequence entirely, while `all` lets it
+// through. Without `all`, a Kitty image placed by ccx while its pane is the
+// active one stays visible on the terminal after the user switches to a
+// different tmux window — we can't emit the clear sequence from an invisible
+// pane. Promoting the option unblocks that clear path.
+//
+// No-op when not inside tmux or when the option is already `all`. Best-effort
+// — we swallow errors because Kitty rendering still works if the user
+// manually handles this, and we don't want to surface a fatal error.
+func ensureTmuxAllowPassthrough() {
+	if os.Getenv("TMUX") == "" {
+		return
+	}
+	out, err := exec.Command("tmux", "show-options", "-gv", "allow-passthrough").Output()
+	if err != nil {
+		return
+	}
+	current := strings.TrimSpace(string(out))
+	if current == "all" {
+		return
+	}
+	_ = exec.Command("tmux", "set-option", "-g", "allow-passthrough", "all").Run()
 }
 
 // ImageSize returns the pixel dimensions of an image file.
@@ -173,6 +210,30 @@ func PaneOffset() (top, left int) {
 	}
 	paneOffsetOnce.Do(fetchPaneOffset)
 	return cachedPaneTop, cachedPaneLeft
+}
+
+// PaneVisible reports whether our tmux pane is currently on-screen. This is
+// true when the pane belongs to the active window; moving focus between
+// panes within the same window keeps the pane visible, so Kitty graphics
+// should NOT be cleared in that case. When not running inside tmux we
+// optimistically assume the pane is visible.
+//
+// The check is a `tmux display-message -t $TMUX_PANE` query. It MUST target
+// our own pane by id, otherwise tmux resolves the default target against the
+// client's current pane — which, right after a window switch, lives in the
+// new window and reports `window_active=1` even though WE are now hidden.
+func PaneVisible() bool {
+	paneID := os.Getenv("TMUX_PANE")
+	if os.Getenv("TMUX") == "" || paneID == "" {
+		return true
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{window_active}").Output()
+	if err != nil {
+		// On query failure default to "visible" to avoid spurious clears
+		// when tmux returns transient errors during window switches.
+		return true
+	}
+	return strings.TrimSpace(string(out)) == "1"
 }
 
 // InvalidatePaneOffset forces re-query of tmux pane position on next call.

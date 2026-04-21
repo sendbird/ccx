@@ -1486,6 +1486,77 @@ func TestRenderStandardPreviewShowsArtifactNearRelatedTurn(t *testing.T) {
 	}
 }
 
+func TestStandardPreviewKeepsImageBlocksForKittyPreview(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "show image"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Here is an image"},
+				{Type: "image", Text: "[Image: image/png]", ImagePasteID: 42},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	app.conv.rightPaneMode = previewTool
+	app.conv.split.Focus = true
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	foundImage := false
+	for _, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "image" && b.ImagePasteID == 42 {
+			foundImage = true
+			break
+		}
+	}
+	if !foundImage {
+		t.Fatal("standard preview should retain image blocks for kitty preview")
+	}
+}
+
+func TestKittyImagePathReturnsEmptyWithoutCachedImage(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "show image"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Here is an image"},
+				{Type: "image", Text: "[Image: image/png]", ImagePasteID: 42},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	app.state = viewConversation
+	app.termFocused = true
+	app.conv.rightPaneMode = previewTool
+	app.conv.split.Focus = true
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	imageIdx := -1
+	for i, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "image" && b.ImagePasteID == 42 {
+			imageIdx = i
+			break
+		}
+	}
+	if imageIdx < 0 {
+		t.Fatal("expected image block in preview")
+	}
+	app.conv.split.Folds.BlockCursor = imageIdx
+	if path := app.kittyImagePath(); path != "" {
+		t.Fatalf("expected no kitty image path without cached image, got %q", path)
+	}
+}
 func TestFocusedArtifactTooltipForChangeBlock(t *testing.T) {
 	sp := &SplitPane{}
 	sp.Folds = &FoldState{

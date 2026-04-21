@@ -2396,21 +2396,35 @@ func (a *App) focusedArtifactTooltip(sp *SplitPane, width int) string {
 	return ""
 }
 
-// kittyImageActive returns true if the focused block is a renderable image.
-func (a *App) kittyImageActive() bool {
+// kittyImagePath returns the cached or extracted file path for the currently
+// focused preview image block, or empty string if the focused block is not a
+// renderable image.
+func (a *App) kittyImagePath() string {
 	if a.state != viewConversation || !kitty.Supported() || !a.termFocused {
-		return false
+		return ""
 	}
 	sp := &a.conv.split
 	if !sp.Focus || !sp.Show || sp.Folds == nil {
-		return false
+		return ""
 	}
 	bc := sp.Folds.BlockCursor
 	if bc < 0 || bc >= len(sp.Folds.Entry.Content) {
-		return false
+		return ""
 	}
 	block := sp.Folds.Entry.Content[bc]
-	return block.Type == "image" && block.ImagePasteID > 0
+	if block.Type != "image" || block.ImagePasteID <= 0 {
+		return ""
+	}
+	cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
+	if cachePath == "" {
+		cachePath = a.resolveImagePath(block.ImagePasteID)
+	}
+	return cachePath
+}
+
+// kittyImageActive returns true if the focused block is a renderable image.
+func (a *App) kittyImageActive() bool {
+	return a.kittyImagePath() != ""
 }
 
 // kittyImageLayer returns Kitty graphics escape sequences to draw an inline
@@ -2451,18 +2465,11 @@ func (a *App) kittyImageLayer() string {
 	}
 
 	// Default: focused image artifact in normal conversation view → left pane
-	if !a.kittyImageActive() {
+	cachePath := a.kittyImagePath()
+	if cachePath == "" {
 		return kitty.ClearImages()
 	}
 	sp := &a.conv.split
-	block := sp.Folds.Entry.Content[sp.Folds.BlockCursor]
-	cachePath := session.ImageCachePath(homeDir(), a.currentSess.ID, block.ImagePasteID)
-	if cachePath == "" {
-		cachePath = a.resolveImagePath(block.ImagePasteID)
-	}
-	if cachePath == "" {
-		return kitty.ClearImages()
-	}
 
 	listW := sp.ListWidth(a.width, a.splitRatio)
 	contentH := ContentHeight(a.height)
