@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/kitty"
 )
 
 var pickerDiffStyles = extract.DiffStyles{
@@ -60,6 +62,14 @@ type pickerModel struct {
 	width   int
 	height  int
 
+	// termFocused tracks whether the host terminal/tmux window is focused.
+	// When false we hide Kitty graphics so the image doesn't linger on
+	// unrelated windows. Starts true until we first receive a BlurMsg.
+	termFocused bool
+	// focusReportingEnabled is set after we ask the terminal to send focus
+	// events, so we only ask once per session.
+	focusReportingEnabled bool
+
 	result *PickerResult
 	quit   bool
 }
@@ -72,10 +82,22 @@ func newPickerModel(kind string, items []PickerItem) pickerModel {
 		selected:         make(map[int]bool),
 		artifactSelected: make(map[int]bool),
 		previewMode:      pickerPreviewConversation,
+		termFocused:      true,
 	}
 }
 
 func (m pickerModel) Init() tea.Cmd { return nil }
+
+// kittyPickerTickMsg fires every 250ms when Kitty is supported so we can
+// poll tmux pane visibility — tmux does NOT forward focus-out events on
+// window switch, so BlurMsg alone isn't enough to detect the transition.
+type kittyPickerTickMsg time.Time
+
+func kittyPickerTickCmd() tea.Cmd {
+	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
+		return kittyPickerTickMsg(t)
+	})
+}
 
 func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -84,6 +106,55 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.preview = viewport.New(m.previewWidth(), m.height-3)
 		m.updatePreview()
+		// tmux pane geometry changes on resize — invalidate the cached
+		// offset so Kitty cursor positioning recomputes next render.
+		kitty.InvalidatePaneOffset()
+		// Ask the terminal to send focus events the first time we have a
+		// real size (Bubbletea delivers the first WindowSizeMsg early). We
+		// only need this when Kitty is supported so we can hide the image
+		// while the user is on another tmux window.
+		var cmd tea.Cmd
+		if kitty.Supported() && !m.focusReportingEnabled {
+			m.focusReportingEnabled = true
+			cmd = tea.Batch(tea.EnableReportFocus, kittyPickerTickCmd())
+		}
+		return m, cmd
+	case kittyPickerTickMsg:
+		// Poll tmux pane visibility. BlurMsg arrives only when the outer
+		// terminal loses focus (cmd-tab, etc.) — tmux intra-session window
+		// switches do not surface a focus event, so we rely on this tick
+		// to notice that our pane is no longer on screen and wipe any
+		// lingering Kitty graphics before they bleed into the new window.
+		if kitty.Supported() {
+			visible := kitty.PaneVisible()
+			if !visible && m.termFocused {
+				m.termFocused = false
+				fmt.Fprint(os.Stdout, kitty.ClearImages())
+				_ = os.Stdout.Sync()
+			} else if visible && !m.termFocused {
+				m.termFocused = true
+				kitty.InvalidatePaneOffset()
+			}
+		}
+		return m, kittyPickerTickCmd()
+	case tea.BlurMsg:
+		// BlurMsg fires on BOTH same-window pane focus changes and on
+		// tmux window switches. We only want to clear Kitty graphics in
+		// the latter case — same-window pane moves leave our pane on
+		// screen and the image must stay visible.
+		if kitty.Supported() && !kitty.PaneVisible() {
+			m.termFocused = false
+			// tmux stops forwarding our pane's passthrough output as soon
+			// as the window switches away, so a clear emitted from the
+			// next render would be dropped. Write directly to stdout here
+			// while our pane is still being drained.
+			fmt.Fprint(os.Stdout, kitty.ClearImages())
+			_ = os.Stdout.Sync()
+		}
+		return m, nil
+	case tea.FocusMsg:
+		m.termFocused = true
+		kitty.InvalidatePaneOffset()
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -718,7 +789,54 @@ func (m pickerModel) View() string {
 		footer = dim.Render(actions + "  y:copy  sp:select  a:all  A:none  →:preview  /:search  esc:quit")
 	}
 
-	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, listBox, previewBox) + "\n" + footer
+	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, listBox, previewBox) + "\n" + footer + m.kittyImageLayer(contentH, listW, pw)
+}
+
+// kittyImageLayer returns Kitty graphics escape sequences to render the
+// focused image into the preview pane. Returns empty string (or a clear
+// sequence) when no image should be drawn.
+func (m pickerModel) kittyImageLayer(contentH, listW, previewW int) string {
+	if !kitty.Supported() {
+		return ""
+	}
+	// Don't draw while the terminal / tmux window is out of focus — the
+	// image would linger on top of whatever the user switched to.
+	if !m.termFocused {
+		return kitty.ClearImages()
+	}
+	if m.kind != "images" || m.previewFocused {
+		return kitty.ClearImages()
+	}
+	if m.cursor < 0 || m.cursor >= len(m.items) {
+		return kitty.ClearImages()
+	}
+	item := m.items[m.cursor]
+	// Image items use Item.URL as the cached file path (absolute) set by
+	// extractImagesWithContext. Only render when that points at a real file.
+	if item.Item.Category != "image" || item.Item.URL == "" {
+		return kitty.ClearImages()
+	}
+	cachePath := item.Item.URL
+	if _, err := os.Stat(cachePath); err != nil {
+		return kitty.ClearImages()
+	}
+
+	// Preview pane layout: title row (1) + preview box starts at row 2.
+	// Preview has a 1-col left border and 1-col left padding → image starts
+	// at column listW + 3 (1-based). Reserve a couple of rows for the preview
+	// header (category/label/path/metadata) before drawing the image.
+	headerRows := 5
+	maxCols := max(previewW-3, 10)
+	maxRows := max(contentH-headerRows-1, 4)
+	if maxCols <= 0 || maxRows <= 0 {
+		return kitty.ClearImages()
+	}
+	imgW, imgH := kitty.ImageSize(cachePath)
+	cols, rows := kitty.FitSize(imgW, imgH, maxCols, maxRows)
+	// Title row is row 1 → image row starts below that + headerRows.
+	imageY := 1 + headerRows + max((maxRows-rows)/2, 0)
+	imageX := listW + 3
+	return kitty.ClearImages() + kitty.PlaceImage(cachePath, imageY, imageX, cols, rows)
 }
 
 // --- Helpers ---
@@ -975,6 +1093,11 @@ func RunPicker(kind string, items []PickerItem) (*PickerResult, error) {
 	model := newPickerModel(kind, items)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()
+	// Clear any Kitty inline images before returning so they don't linger
+	// in the main shell screen.
+	if kitty.Supported() {
+		fmt.Print(kitty.ClearImages())
+	}
 	if err != nil {
 		return nil, err
 	}

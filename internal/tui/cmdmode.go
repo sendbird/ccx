@@ -354,12 +354,21 @@ func (a *App) setSessPreviewMode(mode sessPreview) {
 // setConvDetailLevel sets the conversation preview detail level and re-renders.
 func (a *App) setConvDetailLevel(level int) {
 	sp := &a.conv.split
+	baseKey := ""
+	if item, ok := a.convList.SelectedItem().(convItem); ok {
+		baseKey = convPreviewBaseKey(item)
+	}
+	anchor := captureConvPreviewAnchor(sp, baseKey)
+
 	a.conv.rightPaneMode = level
 	if sp.Folds != nil {
 		sp.Folds.HideHooks = level == previewTool
 	}
 	sp.CacheKey = ""
 	a.updateConvPreview()
+	if baseKey != "" {
+		restoreConvPreviewAnchor(sp, anchor)
+	}
 }
 
 // setConvLeftPaneMode switches the conversation list between flat and tree modes.

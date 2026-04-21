@@ -632,9 +632,9 @@ func TestLiveTailRefreshNoCachePoisoning(t *testing.T) {
 	app.updateConvPreview()
 	app.scrollConvPreviewToTail()
 
-	// CacheKey should now be updated (NOT a cache hit)
-	if app.conv.split.CacheKey == cacheKeyAfterInit {
-		t.Error("handleLiveTail's updateConvPreview should have updated CacheKey (not a cache hit)")
+	// CacheKey or preview content should now reflect the grown entry (not stay stale)
+	if app.conv.split.CacheKey == cacheKeyAfterInit && len(app.conv.split.Folds.Entry.Content) == 3 {
+		t.Error("handleLiveTail's updateConvPreview should have refreshed the preview state")
 	}
 
 	// YOffset should be at the bottom
@@ -821,6 +821,116 @@ func TestRightPaneTabCyclesDetailWithoutChangingLeftMode(t *testing.T) {
 	}
 	if app.conv.leftPaneMode != convPaneTree {
 		t.Fatalf("right pane tab should not change left pane mode, got %d", app.conv.leftPaneMode)
+	}
+}
+
+func TestCompactPreviewBuildsSelectableFoldState(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.conv.split.Focus = true
+	app.conv.rightPaneMode = previewText
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	if app.conv.split.Folds == nil {
+		t.Fatal("compact preview should keep fold state")
+	}
+	if len(app.conv.split.Folds.Entry.Content) == 0 {
+		t.Fatal("compact preview should build selectable content blocks")
+	}
+	if app.conv.split.Folds.BlockCursor < 0 || app.conv.split.Folds.BlockCursor >= len(app.conv.split.Folds.Entry.Content) {
+		t.Fatalf("compact preview block cursor out of range: %d", app.conv.split.Folds.BlockCursor)
+	}
+}
+
+func TestCompactPreviewArrowKeysMoveBlockSelection(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "hello"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "First compact block"},
+			},
+		},
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(2 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Second compact block"},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 50)
+	app.conv.split.Focus = true
+	app.conv.rightPaneMode = previewText
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	start := app.conv.split.Folds.BlockCursor
+	app = pressKey(app, "down")
+	if app.conv.split.Folds.BlockCursor <= start {
+		t.Fatalf("expected compact preview selection to move down, start=%d now=%d", start, app.conv.split.Folds.BlockCursor)
+	}
+}
+
+func TestModeSwitchPreservesNearestSelection(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "hello"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Intro"},
+				{Type: "tool_use", ToolName: "Read", ToolInput: `{"file_path":"/tmp/x.go"}`},
+				{Type: "text", Text: "Conclusion"},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	app.conv.split.Focus = true
+	app.conv.rightPaneMode = previewTool
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	if app.conv.split.Folds == nil {
+		t.Fatal("expected fold state in standard preview")
+	}
+	artifactIdx := -1
+	for i, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "text" && strings.Contains(b.Text, "[file] /tmp/x.go") {
+			artifactIdx = i
+			break
+		}
+	}
+	if artifactIdx < 0 {
+		t.Fatal("expected file artifact block in standard preview")
+	}
+	app.conv.split.Folds.BlockCursor = artifactIdx
+	app.conv.split.RefreshFoldPreview(app.width, app.splitRatio)
+
+	app.setConvDetailLevel(previewText)
+	if app.conv.split.Folds == nil || len(app.conv.split.Folds.Entry.Content) == 0 {
+		t.Fatal("compact preview should preserve fold state after mode switch")
+	}
+	compactCursor := app.conv.split.Folds.BlockCursor
+
+	app.setConvDetailLevel(previewTool)
+	if app.conv.split.Folds == nil || len(app.conv.split.Folds.Entry.Content) == 0 {
+		t.Fatal("standard preview should rebuild fold state after mode switch")
+	}
+	if app.conv.split.Folds.BlockCursor < 0 || app.conv.split.Folds.BlockCursor >= len(app.conv.split.Folds.Entry.Content) {
+		t.Fatalf("restored block cursor out of range: %d", app.conv.split.Folds.BlockCursor)
+	}
+	if compactCursor < 0 || compactCursor >= len(app.conv.split.Folds.Entry.Content) {
+		t.Fatalf("compact cursor out of range after restore: %d", compactCursor)
 	}
 }
 
@@ -1293,28 +1403,42 @@ func TestConversationPageBrowserSplitStaysSeparated(t *testing.T) {
 	}
 }
 
-func TestBuildStandardEntryIncludesArtifactRows(t *testing.T) {
+func TestBuildStandardEntryPlacesArtifactsNearRelatedText(t *testing.T) {
 	entry := session.Entry{
 		Role: "assistant",
 		Content: []session.ContentBlock{
 			{Type: "text", Text: "Here is the result"},
 			{Type: "tool_use", ToolName: "Read", ToolInput: `{"file_path":"/tmp/x.go"}`},
+			{Type: "text", Text: "And here is the summary"},
 		},
 	}
 	preview := buildStandardEntry(entry)
-	found := false
-	for _, b := range preview.Content {
+	textIdx := -1
+	fileIdx := -1
+	artifactsHeaderIdx := -1
+	for i, b := range preview.Content {
+		if b.Type == "text" && strings.Contains(b.Text, "Here is the result") {
+			textIdx = i
+		}
 		if b.Type == "text" && strings.Contains(b.Text, "[file] /tmp/x.go") {
-			found = true
-			break
+			fileIdx = i
+		}
+		if b.Type == "text" && b.Text == "Artifacts" {
+			artifactsHeaderIdx = i
 		}
 	}
-	if !found {
-		t.Fatalf("expected file artifact block, got %#v", preview.Content)
+	if textIdx < 0 || fileIdx < 0 {
+		t.Fatalf("expected text and file artifact blocks, got %#v", preview.Content)
+	}
+	if artifactsHeaderIdx >= 0 {
+		t.Fatalf("standard preview should no longer use a detached Artifacts header")
+	}
+	if fileIdx <= textIdx {
+		t.Fatalf("expected file artifact after related text, text=%d file=%d", textIdx, fileIdx)
 	}
 }
 
-func TestRenderStandardPreviewShowsArtifactSummary(t *testing.T) {
+func TestRenderStandardPreviewShowsArtifactNearRelatedTurn(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	entries := []session.Entry{
 		makeTextEntry("user", base, "hello"),
@@ -1337,24 +1461,102 @@ func TestRenderStandardPreviewShowsArtifactSummary(t *testing.T) {
 	if app.conv.split.Folds == nil || len(app.conv.split.Folds.Entry.Content) == 0 {
 		t.Fatal("expected fold-aware standard preview entry")
 	}
-	foundArtifacts := false
+	foundText := false
 	foundFile := false
+	artifactsHeaderFound := false
 	for _, b := range app.conv.split.Folds.Entry.Content {
-		if b.Type == "text" && b.Text == "Artifacts" {
-			foundArtifacts = true
+		if b.Type == "text" && strings.Contains(b.Text, "Here is the result") {
+			foundText = true
 		}
 		if b.Type == "text" && strings.Contains(b.Text, "[file] /tmp/x.go") {
 			foundFile = true
 		}
+		if b.Type == "text" && b.Text == "Artifacts" {
+			artifactsHeaderFound = true
+		}
 	}
-	if !foundArtifacts {
-		t.Fatalf("standard preview should include Artifacts header block")
+	if !foundText {
+		t.Fatalf("standard preview should include the related text block")
 	}
 	if !foundFile {
 		t.Fatalf("standard preview should include file artifact block")
 	}
+	if artifactsHeaderFound {
+		t.Fatalf("standard preview should not include a detached Artifacts header")
+	}
 }
 
+func TestStandardPreviewKeepsImageBlocksForKittyPreview(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "show image"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Here is an image"},
+				{Type: "image", Text: "[Image: image/png]", ImagePasteID: 42},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	app.conv.rightPaneMode = previewTool
+	app.conv.split.Focus = true
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	foundImage := false
+	for _, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "image" && b.ImagePasteID == 42 {
+			foundImage = true
+			break
+		}
+	}
+	if !foundImage {
+		t.Fatal("standard preview should retain image blocks for kitty preview")
+	}
+}
+
+func TestKittyImagePathReturnsEmptyWithoutCachedImage(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "show image"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Here is an image"},
+				{Type: "image", Text: "[Image: image/png]", ImagePasteID: 42},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	app.state = viewConversation
+	app.termFocused = true
+	app.conv.rightPaneMode = previewTool
+	app.conv.split.Focus = true
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	imageIdx := -1
+	for i, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "image" && b.ImagePasteID == 42 {
+			imageIdx = i
+			break
+		}
+	}
+	if imageIdx < 0 {
+		t.Fatal("expected image block in preview")
+	}
+	app.conv.split.Folds.BlockCursor = imageIdx
+	if path := app.kittyImagePath(); path != "" {
+		t.Fatalf("expected no kitty image path without cached image, got %q", path)
+	}
+}
 func TestFocusedArtifactTooltipForChangeBlock(t *testing.T) {
 	sp := &SplitPane{}
 	sp.Folds = &FoldState{

@@ -24,6 +24,7 @@ import (
 )
 
 type tickMsg time.Time
+type kittyTickMsg time.Time
 type liveTickMsg time.Time // slow live capture (2s, unfocused)
 type spinnerTickMsg time.Time
 type globalStatsMsg session.GlobalStats
@@ -72,6 +73,16 @@ func spinnerTickCmd() tea.Cmd {
 func tickCmd() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+// kittyTickCmd fires a fast tick used only to watch for tmux window-switch
+// transitions. tmux does not forward focus-out events on window switch, so
+// we have to poll `PaneVisible()` ourselves. 250ms feels responsive without
+// thrashing the tmux control channel.
+func kittyTickCmd() tea.Cmd {
+	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
+		return kittyTickMsg(t)
 	})
 }
 
@@ -672,17 +683,30 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Enable focus reporting so we get BlurMsg on tmux window switch
 		if first && kitty.Supported() {
-			cmd = tea.Batch(cmd, tea.EnableReportFocus)
+			cmd = tea.Batch(cmd, tea.EnableReportFocus, kittyTickCmd())
 		}
 		return a, cmd
 
 	case tea.BlurMsg:
-		// Terminal lost focus (e.g. tmux window switch) — clear Kitty images
-		a.termFocused = false
+		// BlurMsg fires on BOTH same-window pane focus changes and on
+		// tmux window switches. We only want to clear Kitty graphics
+		// when the user actually switches windows — moving focus between
+		// panes in the same window keeps our pane on screen, and the
+		// image should stay visible there.
+		if kitty.Supported() && !kitty.PaneVisible() {
+			a.termFocused = false
+			// tmux stops forwarding our pane's passthrough output once
+			// the window switches away, so a clear emitted on the next
+			// render would be dropped. Writing directly to stdout here
+			// fires before tmux finishes the switch.
+			fmt.Fprint(os.Stdout, kitty.ClearImages())
+			_ = os.Stdout.Sync()
+		}
 		return a, nil
 
 	case tea.FocusMsg:
 		a.termFocused = true
+		kitty.InvalidatePaneOffset()
 		return a, nil
 
 	case initViewMsg:
@@ -779,6 +803,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmd := a.handleTick()
 		return a, tea.Batch(cmd, tickCmd())
+
+	case kittyTickMsg:
+		// Fast visibility poll: detect tmux window-switch transitions that
+		// don't surface as BlurMsg. When our pane becomes invisible, clear
+		// any lingering Kitty graphics so they don't bleed through to the
+		// window the user switched to.
+		if kitty.Supported() {
+			visible := kitty.PaneVisible()
+			if !visible && a.termFocused {
+				a.termFocused = false
+				fmt.Fprint(os.Stdout, kitty.ClearImages())
+				_ = os.Stdout.Sync()
+			} else if visible && !a.termFocused {
+				a.termFocused = true
+				kitty.InvalidatePaneOffset()
+			}
+		}
+		return a, kittyTickCmd()
 
 	case liveTickMsg:
 		// 2s tick: async capture for passive updates (process output, unfocused view)
