@@ -209,19 +209,27 @@ func injectProjectTrust(data []byte, projectPath string) []byte {
 		return data
 	}
 
-	// Ensure the project entry exists with trust accepted
+	// Ensure the project entry exists with trust accepted.
+	// Recent Claude builds also gate isolated test env startup on the
+	// CLAUDE.md external-includes approval bits; without these, the
+	// config-test popup immediately exits after showing the approval
+	// question even though trust/onboarding are already marked done.
 	entry, exists := projects[projectPath]
 	if !exists {
 		entry = map[string]interface{}{
-			"allowedTools":                  []interface{}{},
-			"mcpContextUris":                []interface{}{},
-			"mcpServers":                    map[string]interface{}{},
-			"hasCompletedProjectOnboarding": true,
-			"projectOnboardingSeenCount":    10,
+			"allowedTools":                            []interface{}{},
+			"mcpContextUris":                          []interface{}{},
+			"mcpServers":                              map[string]interface{}{},
+			"hasCompletedProjectOnboarding":           true,
+			"projectOnboardingSeenCount":              10,
+			"hasClaudeMdExternalIncludesApproved":     true,
+			"hasClaudeMdExternalIncludesWarningShown": true,
 		}
 	}
 	entry["hasTrustDialogAccepted"] = true
 	entry["hasCompletedProjectOnboarding"] = true
+	entry["hasClaudeMdExternalIncludesApproved"] = true
+	entry["hasClaudeMdExternalIncludesWarningShown"] = true
 	projects[projectPath] = entry
 
 	// Write back
