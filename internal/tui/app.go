@@ -238,6 +238,7 @@ type App struct {
 	lastMsgLoadTime time.Time
 	liveTail        bool // auto-scroll to latest message on tick
 	termFocused     bool // terminal has focus (for Kitty image cleanup)
+	sessPendingG    bool // sessions view: first 'g' of a possible gg top-jump
 
 	// Mouse state
 	dragResizing   bool
@@ -1375,6 +1376,10 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	sp := &a.sessSplit
 	key := msg.String()
 
+	if key != "g" {
+		a.sessPendingG = false
+	}
+
 	// Help overlay: any key closes it
 	if a.showHelp {
 		a.showHelp = false
@@ -1565,10 +1570,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a.openEditMenu(sess)
-	case km.Session.Group:
-		a.sessGroupMode = (a.sessGroupMode + 1) % numGroupModes
-		a.rebuildSessionList()
-		return a, nil
 	case km.Session.Refresh:
 		cmd := a.doRefresh()
 		a.copiedMsg = "Refreshed"
@@ -1600,6 +1601,33 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.rebuildSessionList()
 		}
 		return a, nil
+	}
+
+	// Sessions list vim-style jumps: gg = top, G = end.
+	// Handle these before TranslateNav so user-configured navigation aliases
+	// cannot reinterpret the first `g` as Home.
+	if !sp.Focus {
+		switch key {
+		case "g":
+			if a.sessPendingG {
+				a.sessPendingG = false
+				a.sessionList.Select(0)
+				return a, a.schedulePreviewUpdate()
+			}
+			a.sessPendingG = true
+			return a, nil
+		case "G", "end":
+			a.sessPendingG = false
+			items := a.sessionList.VisibleItems()
+			if len(items) > 0 {
+				a.sessionList.Select(len(items) - 1)
+			}
+			return a, a.schedulePreviewUpdate()
+		case "home":
+			a.sessPendingG = false
+			a.sessionList.Select(0)
+			return a, a.schedulePreviewUpdate()
+		}
 	}
 
 	// Translate navigation aliases (e.g. vim j→down, emacs ctrl+n→down)
@@ -1635,6 +1663,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !sp.Focus && sp.HandleListBoundary(key) {
 		return a, a.schedulePreviewUpdate()
 	}
+
 
 	// Default list update
 	oldIdx := a.sessionList.Index()

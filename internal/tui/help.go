@@ -70,7 +70,7 @@ func (a *App) sessHelpLine() string {
 		h = fmtKey(sk.Pick, "pick") + " " + h
 	}
 	if !a.sessSplit.Show {
-		h += " →:preview tab:group"
+		h += " g/G:top/end →:preview tab/S-tab:group"
 	} else if a.sessSplit.Focus {
 		switch a.sessPreviewMode {
 		case sessPreviewConversation:
@@ -82,7 +82,7 @@ func (a *App) sessHelpLine() string {
 		}
 		h += " " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	} else {
-		h += " tab:group →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
+		h += " g/G:top/end tab/S-tab:group →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	}
 	if a.config.TmuxEnabled && tmux.InTmux() {
 		h += " " + fmtKey(sk.Live, "live")
