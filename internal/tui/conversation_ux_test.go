@@ -878,6 +878,34 @@ func TestCompactPreviewArrowKeysMoveBlockSelection(t *testing.T) {
 	}
 }
 
+func TestBuildCompactEntrySkipsToolOnlyTurns(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	sourceEntries := []session.Entry{
+		makeTextEntry("user", base, "Investigate the failure"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ToolName: "Read", ToolInput: `{"file_path":"main.go"}`},
+				{Type: "tool_result", Text: "package main"},
+			},
+		},
+		makeTextEntry("assistant", base.Add(2*time.Second), "Found the issue in main.go"),
+	}
+
+	entry := buildCompactEntry(session.Entry{Role: "assistant"}, sourceEntries)
+	if got := len(entry.Content); got != 2 {
+		t.Fatalf("compact entry block count = %d, want 2", got)
+	}
+	full := entryFullText(entry)
+	if strings.Contains(full, "READ") || strings.Contains(full, "package main") {
+		t.Fatalf("compact preview should skip tool-only turns, got %q", full)
+	}
+	if !strings.Contains(full, "Investigate the failure") || !strings.Contains(full, "Found the issue in main.go") {
+		t.Fatalf("compact preview should keep text turns, got %q", full)
+	}
+}
+
 func TestModeSwitchPreservesNearestSelection(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	entries := []session.Entry{
