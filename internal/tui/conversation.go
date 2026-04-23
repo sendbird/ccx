@@ -898,7 +898,7 @@ func buildCompactEntry(entry session.Entry, sourceEntries []session.Entry) sessi
 	blocks := make([]session.ContentBlock, 0, len(sourceEntries)*2)
 	first := true
 	for _, raw := range sourceEntries {
-		text := previewMessageText(raw)
+		text := compactPreviewMessageText(raw)
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
@@ -1578,6 +1578,29 @@ func summarizeToolResult(b session.ContentBlock) session.ContentBlock {
 	tail := strings.Join(lines[len(lines)-3:], "\n")
 	b.Text = head + "\n  ... (" + fmt.Sprintf("%d", len(lines)-13) + " more lines) ...\n" + tail
 	return b
+}
+
+func compactPreviewMessageText(e session.Entry) string {
+	role := strings.ToUpper(e.Role)
+	if role == "" {
+		role = "ENTRY"
+	}
+	header := role
+	if !e.Timestamp.IsZero() {
+		header += "  " + e.Timestamp.Format("15:04:05")
+	}
+
+	text := entryFullText(e)
+	if text == "" {
+		return ""
+	}
+
+	const maxPreviewLines = 6
+	lines := strings.Split(text, "\n")
+	if len(lines) > maxPreviewLines {
+		text = strings.Join(lines[:maxPreviewLines], "\n") + "\n..."
+	}
+	return header + "\n" + text
 }
 
 func previewMessageText(e session.Entry) string {
