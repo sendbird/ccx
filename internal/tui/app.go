@@ -265,10 +265,10 @@ type App struct {
 	convPageVP         viewport.Model
 	convPageChangeMap  map[string]extract.ChangeItem
 	// Browser search filter
-	convPageSearching bool
-	convPageSearchTI  textinput.Model
+	convPageSearching  bool
+	convPageSearchTI   textinput.Model
 	convPageSearchTerm string
-	convPageAllItems  []convPageItem // unfiltered items (set when filter is active)
+	convPageAllItems   []convPageItem // unfiltered items (set when filter is active)
 	// Conversation artifact browser actions menu
 	convPageActionsMenu bool
 
@@ -1663,7 +1663,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !sp.Focus && sp.HandleListBoundary(key) {
 		return a, a.schedulePreviewUpdate()
 	}
-
 
 	// Default list update
 	oldIdx := a.sessionList.Index()
@@ -3485,7 +3484,7 @@ func (a *App) refreshRespondingState() {
 			changed = true
 		}
 	}
-	if changed && !a.isFiltering() && !a.hasFilterApplied() {
+	if changed && !a.isFiltering() {
 		a.rebuildSessionList()
 	}
 }
@@ -3519,26 +3518,11 @@ func (a *App) doRefresh() tea.Cmd {
 			// Preserve live state detection
 			tmux.MarkLiveSessions(fresh)
 
-			// Remember cursor position
-			selectedID := ""
-			if sess, ok := a.selectedSession(); ok {
-				selectedID = sess.ID
-			}
-
 			a.sessions = a.injectRemoteSessions(fresh)
 			a.globalStatsCache = nil // invalidate cached stats
 
-			if !a.isFiltering() && !a.hasFilterApplied() {
-				items := buildGroupedItems(a.sessions, a.sessGroupMode)
-				newIdx := 0
-				for i, item := range items {
-					if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
-						newIdx = i
-						break
-					}
-				}
-				a.sessionList.SetItems(items)
-				a.sessionList.Select(newIdx)
+			if !a.isFiltering() {
+				a.rebuildSessionList()
 			}
 		} else {
 			// Fallback: lightweight stat-only refresh
@@ -3570,24 +3554,13 @@ func (a *App) doRefresh() tea.Cmd {
 					needsRefresh = true
 				}
 			}
-			if (needsSort || needsRefresh) && !a.isFiltering() && !a.hasFilterApplied() {
-				selectedID := ""
-				if sess, ok := a.selectedSession(); ok {
-					selectedID = sess.ID
+			if (needsSort || needsRefresh) && !a.isFiltering() {
+				if needsSort {
+					sort.Slice(a.sessions, func(i, j int) bool {
+						return a.sessions[i].ModTime.After(a.sessions[j].ModTime)
+					})
 				}
-				sort.Slice(a.sessions, func(i, j int) bool {
-					return a.sessions[i].ModTime.After(a.sessions[j].ModTime)
-				})
-				items := buildGroupedItems(a.sessions, a.sessGroupMode)
-				newIdx := 0
-				for i, item := range items {
-					if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
-						newIdx = i
-						break
-					}
-				}
-				a.sessionList.SetItems(items)
-				a.sessionList.Select(newIdx)
+				a.rebuildSessionList()
 			}
 		}
 
