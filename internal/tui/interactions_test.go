@@ -1,11 +1,24 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sendbird/ccx/internal/session"
 )
+
+func writeChangeSession(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name+".jsonl")
+	body := `{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/tmp/` + name + `.go","old_string":"a","new_string":"b"}}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write change session: %v", err)
+	}
+	return path
+}
 
 func TestConversationActionMenuUsesKeymapBindings(t *testing.T) {
 	app := newTestApp(fakeSessions())
@@ -92,5 +105,56 @@ func TestHandleConvActionsMenuUsesConfigurableChangeBinding(t *testing.T) {
 	}
 	if !strings.Contains(app.urlScope, "message") && !strings.Contains(app.urlScope, "block") {
 		t.Fatalf("expected change scope label, got %q", app.urlScope)
+	}
+}
+
+func TestHandleActionsMenuOpensSessionChanges(t *testing.T) {
+	path := writeChangeSession(t, "single")
+	sessions := []session.Session{{
+		ID: "aaa", ShortID: "aaa",
+		FilePath:    path,
+		ProjectPath: "/tmp/proj-a", ProjectName: "proj-a",
+		ModTime: time.Now(), MsgCount: 1,
+	}}
+	app := newTestApp(sessions)
+	app.actionsSess = sessions[0]
+	app.actionsMenu = true
+	app.keymap.Actions.Changes = "g"
+
+	m, _ := app.handleActionsMenu("g")
+	app = m.(*App)
+	if !app.urlMenu {
+		t.Fatal("expected actions menu to open URL menu for session changes")
+	}
+	if !strings.Contains(app.urlScope, "changes") {
+		t.Fatalf("expected changes scope, got %q", app.urlScope)
+	}
+	if len(app.urlChangeMap) == 0 {
+		t.Fatal("expected change map populated for diff preview")
+	}
+}
+
+func TestHandleBulkActionsMenuOpensBulkChanges(t *testing.T) {
+	pathA := writeChangeSession(t, "bulk-a")
+	pathB := writeChangeSession(t, "bulk-b")
+	sessions := []session.Session{
+		{ID: "aaa", ShortID: "aaa", FilePath: pathA, ProjectPath: "/tmp/proj-a", ProjectName: "proj-a"},
+		{ID: "bbb", ShortID: "bbb", FilePath: pathB, ProjectPath: "/tmp/proj-b", ProjectName: "proj-b"},
+	}
+	app := newTestApp(sessions)
+	app.selectedSet = map[string]bool{"aaa": true, "bbb": true}
+	app.actionsMenu = true
+	app.keymap.Actions.Changes = "g"
+
+	m, _ := app.handleActionsMenu("g")
+	app = m.(*App)
+	if !app.urlMenu {
+		t.Fatal("expected bulk actions menu to open URL menu for changes")
+	}
+	if !strings.Contains(app.urlScope, "changes") {
+		t.Fatalf("expected bulk changes scope, got %q", app.urlScope)
+	}
+	if len(app.urlChangeMap) < 2 {
+		t.Fatalf("expected change map populated for both sessions, got %d", len(app.urlChangeMap))
 	}
 }

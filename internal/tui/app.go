@@ -2523,6 +2523,12 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.openURLMenuFromItems(extract.SessionURLs(sess.FilePath), "session")
 	case akm.Files:
 		return a.openURLMenuFromItems(extract.SessionFilePaths(sess.FilePath), "session files")
+	case akm.Changes:
+		changes := extract.SessionChanges(sess.FilePath)
+		items, cmap := changeItemsFromSlice(changes)
+		a.urlChangeMap = cmap
+		a.initDiffViewport()
+		return a.openURLMenuFromItems(items, "session changes")
 	case akm.Tags:
 		a.tagMenu = true
 		a.tagSessID = sess.ID
@@ -2609,6 +2615,8 @@ func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.openBulkURLMenu(selected, false)
 	case akm.Files:
 		return a.openBulkURLMenu(selected, true)
+	case akm.Changes:
+		return a.openBulkChangesMenu(selected)
 	}
 	return a, nil
 }
@@ -2616,17 +2624,21 @@ func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
 // openBulkURLMenu merges URLs or file paths from multiple sessions into the URL menu.
 func (a *App) openBulkChangesMenu(selected []session.Session) (tea.Model, tea.Cmd) {
 	seen := make(map[string]bool)
-	var merged []extract.Item
+	var merged []extract.ChangeItem
 	for _, s := range selected {
-		items := sessionChangeItems(s.FilePath)
-		for _, item := range items {
-			if !seen[item.URL] {
-				seen[item.URL] = true
-				merged = append(merged, item)
+		for _, ch := range extract.SessionChanges(s.FilePath) {
+			url := ch.Item.URL
+			if seen[url] {
+				continue
 			}
+			seen[url] = true
+			merged = append(merged, ch)
 		}
 	}
-	return a.openURLMenuFromItems(merged, fmt.Sprintf("%d sessions changes", len(selected)))
+	items, cmap := changeItemsFromSlice(merged)
+	a.urlChangeMap = cmap
+	a.initDiffViewport()
+	return a.openURLMenuFromItems(items, fmt.Sprintf("%d sessions changes", len(selected)))
 }
 
 func (a *App) openBulkURLMenu(selected []session.Session, files bool) (tea.Model, tea.Cmd) {
