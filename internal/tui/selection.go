@@ -229,10 +229,14 @@ func stripANSI(s string) string {
 	return ansiRegex.ReplaceAllString(s, "")
 }
 
-func copyToClipboard(text string) error {
+var clipboardWrite = func(text string) error {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
+}
+
+func copyToClipboard(text string) error {
+	return clipboardWrite(text)
 }
 
 func openInPager(styledContent string) tea.Cmd {

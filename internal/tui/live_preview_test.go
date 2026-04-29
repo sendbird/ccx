@@ -9,6 +9,10 @@ import (
 	"github.com/sendbird/ccx/internal/tmux"
 )
 
+func init() {
+	clipboardWrite = func(_ string) error { return nil }
+}
+
 func newTestApp(sessions []session.Session) *App {
 	app := NewApp(sessions, Config{TmuxEnabled: true})
 	m, _ := app.Update(tea.WindowSizeMsg{Width: 160, Height: 50})
