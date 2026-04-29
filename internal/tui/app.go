@@ -1524,6 +1524,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.currentSess = sess
 		return a, a.openConversation(sess)
 	case km.Session.Select:
+		if sp.Focus && sp.Show {
+			return a, nil
+		}
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
@@ -1885,13 +1888,15 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 		a.sessPreviewPinned = a.sessConvCursor < len(visible)-1
 		return a, nil, true
 	case "c":
-		if a.sessConvCursor < len(visible) {
-			text := entryFullText(visible[a.sessConvCursor].entry)
-			if text != "" {
-				a.sessConvFullText = text
-				a.sessConvFullScroll = 0
-			}
+		return a.openSessionPreviewFullText(visible), nil, true
+	case a.keymap.Session.Actions:
+		if sess, ok := a.selectedSession(); ok {
+			a.actionsSess = sess
 		}
+		a.actionsMenu = true
+		return a, nil, true
+	case a.keymap.Actions.Copy:
+		a.copySessionPreviewSelection()
 		return a, nil, true
 	case "enter":
 		m, cmd := a.jumpToConvMessage()
@@ -2278,6 +2283,67 @@ func (a *App) copySelectedSessionPath() (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+func (a *App) openSessionPreviewFullText(visible []mergedMsg) *App {
+	if a.sessConvCursor < 0 || a.sessConvCursor >= len(visible) {
+		return a
+	}
+	text := entryFullText(visible[a.sessConvCursor].entry)
+	if text == "" {
+		return a
+	}
+	a.sessConvFullText = text
+	a.sessConvFullScroll = 0
+	return a
+}
+
+func (a *App) copySessionPreviewSelection() {
+	visible := a.convVisibleEntries()
+	if a.sessPreviewMode != sessPreviewConversation || a.sessConvCursor < 0 || a.sessConvCursor >= len(visible) {
+		a.copiedMsg = "Nothing to copy"
+		return
+	}
+	text := entryFullText(visible[a.sessConvCursor].entry)
+	if text == "" {
+		a.copiedMsg = "Nothing to copy"
+		return
+	}
+	if err := copyToClipboard(text); err != nil {
+		a.copiedMsg = "Copy failed"
+		return
+	}
+	a.copiedMsg = "Copied message!"
+}
+
+func (a *App) copySessionAction() (tea.Model, tea.Cmd) {
+	if a.sessSplit.Focus && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
+		a.copySessionPreviewSelection()
+		return a, nil
+	}
+	return a.copySelectedSessionPath()
+}
+
+func (a *App) copySelectedSessionPaths(selected []session.Session) (tea.Model, tea.Cmd) {
+	var paths []string
+	for _, sess := range selected {
+		if sess.FilePath != "" {
+			paths = append(paths, sess.FilePath)
+		}
+	}
+	if len(paths) == 0 {
+		a.copiedMsg = "No session files"
+		return a, nil
+	}
+	if err := copyToClipboard(strings.Join(paths, "\n")); err != nil {
+		a.copiedMsg = "Copy failed"
+		return a, nil
+	}
+	a.copiedMsg = fmt.Sprintf("Copied %d session path", len(paths))
+	if len(paths) != 1 {
+		a.copiedMsg += "s"
+	}
+	return a, nil
+}
+
 // --- Edit file with $EDITOR ---
 
 type editChoice struct {
@@ -2430,10 +2496,14 @@ func (a *App) renderEditHintBox() string {
 	return boxStyle.Render(body)
 }
 
+func (a *App) sessionPreviewActionsActive() bool {
+	return a.sessSplit.Focus && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation
+}
+
 func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	a.actionsMenu = false
 	a.copiedMsg = ""
-	if a.hasMultiSelection() {
+	if !a.sessionPreviewActionsActive() && a.hasMultiSelection() {
 		return a.handleBulkActionsMenu(key)
 	}
 	akm := a.keymap.Actions
@@ -2452,6 +2522,8 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.resumeSession(sess)
 	case akm.CopyPath:
 		return a.copySelectedSessionPath()
+	case akm.Copy:
+		return a.copySessionAction()
 	case akm.Move:
 		if sess.ProjectPath == "" {
 			a.copiedMsg = "No project path"
@@ -2597,6 +2669,8 @@ func (a *App) handleBulkActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.bulkKill(selected)
 	case akm.Input:
 		return a.bulkInput(selected)
+	case akm.Copy, akm.CopyPath:
+		return a.copySelectedSessionPaths(selected)
 	case akm.Tags:
 		// Collect all selected session IDs
 		var sessIDs []string
@@ -4764,14 +4838,14 @@ func (a *App) renderActionsHintBox() string {
 	akm := a.keymap.Actions
 
 	var lines []string
-	if a.hasMultiSelection() {
+	if a.hasMultiSelection() && !a.sessionPreviewActionsActive() {
 		header := fmt.Sprintf("%d selected", len(a.selectedSet))
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
-		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
+		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Copy))+d.Render(":copy")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
 		lines = append(lines, hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Changes))+d.Render(":changes")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
 	} else {
 		sess := a.actionsSess
-		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
+		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Copy))+d.Render(":copy")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
 		line2 := hl.Render(displayKey(akm.Worktree)) + d.Render(":worktree") + sp + hl.Render(displayKey(akm.URLs)) + d.Render(":urls") + sp + hl.Render(displayKey(akm.Files)) + d.Render(":files") + sp + hl.Render(displayKey(akm.Changes)) + d.Render(":changes") + sp + hl.Render(displayKey(akm.Tags)) + d.Render(":tags")
 		if sess.HasMemory {
 			line2 += sp + hl.Render(displayKey(akm.RemoveMem)) + d.Render(":rm-mem")

@@ -216,3 +216,78 @@ func (a *App) renderCopyMode() {
 	vp.SetContent(sb.String())
 	vp.YOffset = offset
 }
+
+// copyConvSelection copies the currently selected conversation preview content
+// to the clipboard. If blocks are explicitly selected (via space toggling), only
+// those blocks are copied; otherwise the block under the cursor is copied. When
+// no fold state exists yet, falls back to the message-level text.
+func (a *App) copyConvSelection() {
+	sp := &a.conv.split
+	if sp.Folds == nil || len(sp.Folds.Entry.Content) == 0 {
+		a.copyConvSelectedMessage()
+		return
+	}
+	fs := sp.Folds
+	if len(fs.Selected) > 0 {
+		var parts []string
+		count := 0
+		for i, block := range fs.Entry.Content {
+			if !fs.Selected[i] {
+				continue
+			}
+			if text := blockPlainText(block); text != "" {
+				parts = append(parts, text)
+				count++
+			}
+		}
+		if count == 0 {
+			a.copiedMsg = "Nothing to copy"
+			return
+		}
+		copyToClipboard(strings.Join(parts, "\n\n"))
+		a.copiedMsg = fmt.Sprintf("Copied %d block", count)
+		if count != 1 {
+			a.copiedMsg += "s"
+		}
+		a.copiedMsg += "!"
+		fs.Selected = nil
+		sp.RefreshFoldPreview(a.width, a.splitRatio)
+		return
+	}
+	if fs.BlockCursor >= 0 && fs.BlockCursor < len(fs.Entry.Content) {
+		text := blockPlainText(fs.Entry.Content[fs.BlockCursor])
+		if text != "" {
+			copyToClipboard(text)
+			a.copiedMsg = "Copied block!"
+			return
+		}
+	}
+	a.copyConvSelectedMessage()
+}
+
+// copyConvSelectedMessage copies the full text of the currently selected
+// conversation list item, used when there is no block-level selection.
+func (a *App) copyConvSelectedMessage() {
+	item, ok := a.convList.SelectedItem().(convItem)
+	if !ok {
+		a.copiedMsg = "Nothing to copy"
+		return
+	}
+	var entry session.Entry
+	switch item.kind {
+	case convMsg:
+		entry = item.merged.entry
+	case convAgent:
+		entry = buildAgentPreviewEntry(item.agent)
+	default:
+		a.copiedMsg = "Nothing to copy"
+		return
+	}
+	text := entryFullText(entry)
+	if text == "" {
+		a.copiedMsg = "Nothing to copy"
+		return
+	}
+	copyToClipboard(text)
+	a.copiedMsg = "Copied message!"
+}

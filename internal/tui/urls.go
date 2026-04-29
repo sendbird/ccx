@@ -34,6 +34,13 @@ func (a *App) handleConvActionsMenu(key string) (tea.Model, tea.Cmd) {
 			return a.openMsgFullChangesMenu()
 		}
 		return a.openConvChangesMenu()
+	case interactionKeyMatches(actions, key, interactionActionCopy):
+		if a.state == viewMessageFull {
+			a.copyMsgFullBlocks()
+			return a, nil
+		}
+		a.copyConvSelection()
+		return a, nil
 	}
 	return a, nil
 }

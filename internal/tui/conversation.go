@@ -2151,9 +2151,12 @@ func (a *App) refreshConversation() tea.Cmd {
 	a.conv.items = buildConvItems(a.conv.sess, a.conv.merged, agents, tasks, crons)
 	a.conv.sess.Tasks = tasks
 
-	// Preserve cursor position
+	// Preserve list cursor and preview selection across the rebuild
 	oldIdx := a.convList.Index()
+	prevCacheKey := a.conv.split.CacheKey
+	prevYOffset := a.conv.split.Preview.YOffset
 	a.rebuildConversationList(oldIdx)
+	a.conv.split.CacheKey = prevCacheKey
 	// During live tail, skip preview update here — handleLiveTail owns the
 	// preview lifecycle (select last → update → scroll-to-tail). Updating here
 	// would "consume" the CacheKey change, making handleLiveTail's update a
@@ -2161,6 +2164,9 @@ func (a *App) refreshConversation() tea.Cmd {
 	// RefreshFoldPreview→ScrollToBlock.
 	if !a.liveTail {
 		a.updateConvPreview()
+		if a.conv.split.Folds != nil {
+			a.conv.split.Preview.YOffset = prevYOffset
+		}
 	}
 	return nil
 }

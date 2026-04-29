@@ -45,6 +45,7 @@ type ActionsKeymap struct {
 	URLs      string `yaml:"urls"`
 	Files     string `yaml:"files"`
 	Changes   string `yaml:"changes"`
+	Copy      string `yaml:"copy"`
 	Tags      string `yaml:"tags"`
 	ImportMem string `yaml:"import_mem"`
 	RemoveMem string `yaml:"remove_mem"`
@@ -138,7 +139,8 @@ func DefaultKeymap() Keymap {
 			Jump:      "j",
 			URLs:      "u",
 			Files:     "f",
-				Changes:   "g",
+			Changes:   "g",
+			Copy:      "c",
 			Tags:      "t",
 			ImportMem: "M",
 			RemoveMem: "X",
@@ -299,6 +301,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Actions.Changes != "" {
 		dst.Actions.Changes = src.Actions.Changes
+	}
+	if src.Actions.Copy != "" {
+		dst.Actions.Copy = src.Actions.Copy
 	}
 	if src.Actions.ImportMem != "" {
 		dst.Actions.ImportMem = src.Actions.ImportMem

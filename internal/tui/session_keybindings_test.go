@@ -71,6 +71,19 @@ func TestSessionsTabStillCyclesGroupMode(t *testing.T) {
 	}
 }
 
+func TestSessionsSpaceDoesNotSelectWhenPreviewFocused(t *testing.T) {
+	app := newSessionKeybindingApp()
+	app.sessSplit.Show = true
+	app.sessSplit.Focus = true
+	app.sessPreviewMode = sessPreviewConversation
+
+	m, _ := app.handleSessionKeys(tea.KeyMsg{Type: tea.KeySpace})
+	app = m.(*App)
+	if app.hasMultiSelection() {
+		t.Fatalf("space in focused preview should not multi-select session, got %v", app.selectedSet)
+	}
+}
+
 func TestSessionsHelpShowsNavigationAndTabGrouping(t *testing.T) {
 	app := newSessionKeybindingApp()
 	app.sessSplit.Show = false
