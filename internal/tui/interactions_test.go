@@ -185,6 +185,78 @@ func TestHandleConvActionsMenuCopyCopiesSelectedBlock(t *testing.T) {
 	}
 }
 
+func TestHandleSessionPreviewActionsMenuCopyCopiesPreviewMessage(t *testing.T) {
+	entries := testEntries()
+	app := newTestApp(fakeSessions())
+	app.sessSplit.Show = true
+	app.sessSplit.Focus = true
+	app.sessPreviewMode = sessPreviewConversation
+	app.sessConvEntries = filterConversation(mergeConversationTurns(entries))
+	app.sessConvCursor = 0
+	app.keymap.Session.Actions = "x"
+	app.keymap.Actions.Copy = "c"
+
+	m, _, _ := app.handleConvPreviewKeys(&app.sessSplit, "x")
+	app = m.(*App)
+	if !app.actionsMenu {
+		t.Fatal("expected session preview actions menu to open")
+	}
+
+	m, _ = app.handleActionsMenu("c")
+	app = m.(*App)
+	if app.actionsMenu {
+		t.Fatal("expected actions menu to close after copy")
+	}
+	if !strings.Contains(app.copiedMsg, "Copied message") {
+		t.Fatalf("expected preview copy confirmation, got %q", app.copiedMsg)
+	}
+}
+
+func TestHandleSessionPreviewActionsMenuIgnoresExistingMultiSelection(t *testing.T) {
+	entries := testEntries()
+	app := newTestApp(fakeSessions())
+	app.sessSplit.Show = true
+	app.sessSplit.Focus = true
+	app.sessPreviewMode = sessPreviewConversation
+	app.sessConvEntries = filterConversation(mergeConversationTurns(entries))
+	app.sessConvCursor = 0
+	app.selectedSet = map[string]bool{"bbb": true}
+	app.keymap.Session.Actions = "x"
+
+	m, _, _ := app.handleConvPreviewKeys(&app.sessSplit, "x")
+	app = m.(*App)
+	if !app.actionsMenu {
+		t.Fatal("expected session preview actions menu to open")
+	}
+
+	hint := stripANSI(app.renderActionsHintBox())
+	if strings.Contains(hint, "selected") {
+		t.Fatalf("expected preview actions menu, got bulk hint %q", hint)
+	}
+	if !strings.Contains(hint, "copy-path") {
+		t.Fatalf("expected single-session action hint, got %q", hint)
+	}
+}
+
+func TestHandleBulkActionsMenuCopyCopiesSelectedSessionPaths(t *testing.T) {
+	sessions := fakeSessions()
+	sessions[0].FilePath = "/tmp/a.jsonl"
+	sessions[1].FilePath = "/tmp/b.jsonl"
+	app := newTestApp(sessions)
+	app.selectedSet = map[string]bool{"aaa": true, "bbb": true}
+	app.actionsMenu = true
+	app.keymap.Actions.Copy = "c"
+
+	m, _ := app.handleActionsMenu("c")
+	app = m.(*App)
+	if app.actionsMenu {
+		t.Fatal("expected bulk actions menu to close after copy")
+	}
+	if !strings.Contains(app.copiedMsg, "Copied 2 session paths") {
+		t.Fatalf("expected bulk copy confirmation, got %q", app.copiedMsg)
+	}
+}
+
 func TestRefreshConversationPreservesFoldSelection(t *testing.T) {
 	entries := testEntries()
 	app := setupConvApp(t, entries, 120, 30)

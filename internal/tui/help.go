@@ -74,7 +74,7 @@ func (a *App) sessHelpLine() string {
 	} else if a.sessSplit.Focus {
 		switch a.sessPreviewMode {
 		case sessPreviewConversation:
-			h += " ↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " ←:unfocus /:search tab:mode"
+			h += " ↑↓:nav c:full " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Open, "jump") + " ←:unfocus /:search tab:mode"
 		case sessPreviewAgents:
 			h += " ↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
 		default:
