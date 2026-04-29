@@ -162,6 +162,10 @@ func (a *App) handleMessageFullKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		a.convActionsMenu = true
 		return a, nil
+	case a.keymap.Session.Refresh:
+		a.refreshMsgFull()
+		a.copiedMsg = "Refreshed"
+		return a, nil
 	}
 
 	// Search navigation (when search term is active)
@@ -321,7 +325,55 @@ func (a *App) handleLiveTailMsgFull() {
 	a.msgFull.vp.YOffset = maxOffset
 }
 
-// refreshMsgFullPreview re-renders the message full viewport.
+// refreshMsgFull reloads messages for the current message-full session,
+// preserving the existing fold/cursor/selection state when possible.
+func (a *App) refreshMsgFull() {
+	entries, err := session.LoadMessages(a.msgFull.sess.FilePath)
+	if err != nil {
+		return
+	}
+	a.msgFull.messages = entries
+	a.msgFull.merged = filterConversation(mergeConversationTurns(entries))
+
+	if len(a.msgFull.merged) == 0 {
+		return
+	}
+
+	idx := a.msgFull.idx
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(a.msgFull.merged) {
+		idx = len(a.msgFull.merged) - 1
+	}
+	a.msgFull.idx = idx
+
+	newEntry := a.msgFull.merged[idx].entry
+	fs := &a.msgFull.folds
+	oldEntry := fs.Entry
+	oldBlockCount := len(oldEntry.Content)
+	newBlockCount := len(newEntry.Content)
+
+	if oldBlockCount == 0 || newBlockCount < oldBlockCount {
+		fs.Reset(newEntry)
+	} else {
+		fs.GrowBlocks(newEntry, oldBlockCount, nil, nil)
+	}
+	if fs.BlockCursor < 0 || fs.BlockCursor >= len(fs.Entry.Content) {
+		if last := fs.lastVisibleBlock(); last >= 0 {
+			fs.BlockCursor = last
+		}
+	}
+
+	contentH := ContentHeight(a.height)
+	a.msgFull.content = renderFullMessage(newEntry, a.width)
+	if a.msgFull.vp.Width == 0 || a.msgFull.vp.Height == 0 {
+		a.msgFull.vp = viewport.New(a.width, contentH)
+	}
+	a.refreshMsgFullPreview()
+}
+
+
 func (a *App) refreshMsgFullPreview() {
 	fs := &a.msgFull.folds
 	ro := renderOpts{visible: fs.BlockVisible, hideHooks: fs.HideHooks, selected: fs.Selected}

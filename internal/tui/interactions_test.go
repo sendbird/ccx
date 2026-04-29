@@ -158,3 +158,75 @@ func TestHandleBulkActionsMenuOpensBulkChanges(t *testing.T) {
 		t.Fatalf("expected change map populated for both sessions, got %d", len(app.urlChangeMap))
 	}
 }
+
+func TestHandleConvActionsMenuCopyCopiesSelectedBlock(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 120, 30)
+	app.conv.split.Show = true
+	app.conv.split.Focus = true
+	app.keymap.Actions.Copy = "c"
+
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+	if app.conv.split.Folds == nil || len(app.conv.split.Folds.Entry.Content) == 0 {
+		t.Fatal("expected fold state after preview update")
+	}
+	app.conv.split.Folds.BlockCursor = 0
+	app.copiedMsg = ""
+
+	m, _ := app.handleConvActionsMenu("c")
+	app = m.(*App)
+	if app.convActionsMenu {
+		t.Fatal("expected actions menu to close after handling copy")
+	}
+	if !strings.Contains(app.copiedMsg, "Copied") {
+		t.Fatalf("expected copy confirmation, got %q", app.copiedMsg)
+	}
+}
+
+func TestRefreshConversationPreservesFoldSelection(t *testing.T) {
+	entries := testEntries()
+	app := setupConvApp(t, entries, 120, 30)
+	app.conv.split.Show = true
+
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	if app.conv.split.Folds == nil || len(app.conv.split.Folds.Entry.Content) == 0 {
+		t.Fatal("expected fold state populated before refresh")
+	}
+	prevCursor := 1
+	if prevCursor >= len(app.conv.split.Folds.Entry.Content) {
+		prevCursor = len(app.conv.split.Folds.Entry.Content) - 1
+	}
+	app.conv.split.Folds.BlockCursor = prevCursor
+	app.conv.split.Folds.Selected = foldSet{prevCursor: true}
+	prevListIdx := app.convList.Index()
+	prevCacheKey := app.conv.split.CacheKey
+
+	// Simulate refreshConversation's rebuild step (no file I/O)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
+	prevYOffset := app.conv.split.Preview.YOffset
+	app.rebuildConversationList(prevListIdx)
+	app.conv.split.CacheKey = prevCacheKey
+	app.updateConvPreview()
+	if app.conv.split.Folds != nil {
+		app.conv.split.Preview.YOffset = prevYOffset
+	}
+
+	if app.convList.Index() != prevListIdx {
+		t.Fatalf("list cursor should be preserved across refresh: got %d want %d", app.convList.Index(), prevListIdx)
+	}
+	if app.conv.split.Folds == nil {
+		t.Fatal("fold state should remain after refresh")
+	}
+	if app.conv.split.Folds.BlockCursor != prevCursor {
+		t.Fatalf("block cursor should be preserved: got %d want %d", app.conv.split.Folds.BlockCursor, prevCursor)
+	}
+	if !app.conv.split.Folds.Selected[prevCursor] {
+		t.Fatal("block selection should be preserved across refresh")
+	}
+}
