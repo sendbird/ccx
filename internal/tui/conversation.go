@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2631,6 +2632,21 @@ func extractTaskEntries(entries []session.Entry, taskID string) []session.Entry 
 	var ranges []taskRange
 	curStart := -1
 
+	// Map TaskCreate ordinal → entry index, so we can locate the originating
+	// TaskCreate for sequentially-numbered task IDs (e.g. "1","2","3",...).
+	taskCreateEntryByOrdinal := make(map[int]int)
+	taskCreateOrdinal := 0
+	for i, e := range entries {
+		for _, b := range e.Content {
+			if b.Type == "tool_use" && b.ToolName == "TaskCreate" {
+				taskCreateOrdinal++
+				if _, exists := taskCreateEntryByOrdinal[taskCreateOrdinal]; !exists {
+					taskCreateEntryByOrdinal[taskCreateOrdinal] = i
+				}
+			}
+		}
+	}
+
 	for i, e := range entries {
 		for _, b := range e.Content {
 			if b.Type != "tool_use" || !isTaskTool(b.ToolName) {
@@ -2658,20 +2674,49 @@ func extractTaskEntries(entries []session.Entry, taskID string) []session.Entry 
 	}
 
 	if len(ranges) == 0 {
-		// Fallback: collect ALL entries that mention this task ID
-		// (TaskCreate, TaskUpdate, TaskGet, tool_results referencing the task)
+		// Fallback: collect ALL entries that reference this exact task ID.
+		// Use JSON field comparison so taskId "1" doesn't match "10", "11", etc.
+		// Also include the originating TaskCreate when the task ID is a
+		// 1-based ordinal (the in-memory loader assigns them in creation order).
 		var result []session.Entry
-		for _, e := range entries {
+		seen := make(map[int]bool)
+		if ord, err := strconv.Atoi(taskID); err == nil && ord > 0 {
+			if idx, ok := taskCreateEntryByOrdinal[ord]; ok {
+				result = append(result, entries[idx])
+				seen[idx] = true
+			}
+		}
+		for i, e := range entries {
+			if seen[i] {
+				continue
+			}
 			for _, b := range e.Content {
 				match := false
-				if b.Type == "tool_use" && isTaskTool(b.ToolName) && strings.Contains(b.ToolInput, taskID) {
-					match = true
+				if b.Type == "tool_use" && isTaskTool(b.ToolName) {
+					var in struct {
+						TaskID string `json:"taskId"`
+						ID     string `json:"id"`
+					}
+					if json.Unmarshal([]byte(b.ToolInput), &in) == nil {
+						if in.TaskID == taskID || in.ID == taskID {
+							match = true
+						}
+					}
 				}
-				if b.Type == "tool_result" && strings.Contains(b.Text, taskID) {
-					match = true
+				if !match && b.Type == "tool_result" && b.Text != "" {
+					var out struct {
+						TaskID string `json:"taskId"`
+						ID     string `json:"id"`
+					}
+					if json.Unmarshal([]byte(b.Text), &out) == nil {
+						if out.TaskID == taskID || out.ID == taskID {
+							match = true
+						}
+					}
 				}
 				if match {
 					result = append(result, e)
+					seen[i] = true
 					break
 				}
 			}
