@@ -38,20 +38,32 @@ func markLiveSessionsTmux(sessions []session.Session) {
 		return
 	}
 
+	currentKey := CurrentWindowKey() // "session|window" for the current ccx pane
+
 	// Group session indices by ProjectPath
 	pathIdx := map[string][]int{}
 	for i, s := range sessions {
 		pathIdx[s.ProjectPath] = append(pathIdx[s.ProjectPath], i)
 	}
 
-	// Set TmuxWindowName for ALL sessions by matching ProjectPath to pane CWD
+	// Set TmuxWindowName for ALL sessions by matching ProjectPath to pane CWD.
+	// Track which absolute paths appear in the current tmux window so even
+	// sessions without a live process can be pinned when their project path
+	// matches a pane in this window (e.g. shell-only panes).
 	pathWindow := make(map[string]string, len(panes))
+	currentWindowPaths := make(map[string]bool)
 	for _, p := range panes {
 		absPath, _ := filepath.Abs(p.Path)
-		if absPath != "" && p.WindowName != "" {
+		if absPath == "" {
+			continue
+		}
+		if p.WindowName != "" {
 			if _, exists := pathWindow[absPath]; !exists {
 				pathWindow[absPath] = p.WindowName
 			}
+		}
+		if currentKey != "" && p.Session+"|"+p.Window == currentKey {
+			currentWindowPaths[absPath] = true
 		}
 	}
 	for i := range sessions {
@@ -83,16 +95,18 @@ func markLiveSessionsTmux(sessions []session.Session) {
 
 	// Build pane PID → claude args map (direct children)
 	type claudeMatch struct {
-		args       string
-		windowName string
-		path       string
+		args          string
+		windowName    string
+		path          string
+		currentWindow bool
 	}
 	var cps []claudeMatch
 	for _, p := range panes {
 		if args, ok := directByPPID[p.PID]; ok {
 			absPath, _ := filepath.Abs(p.Path)
 			if absPath != "" {
-				cps = append(cps, claudeMatch{args: args, windowName: p.WindowName, path: absPath})
+				inCur := currentKey != "" && p.Session+"|"+p.Window == currentKey
+				cps = append(cps, claudeMatch{args: args, windowName: p.WindowName, path: absPath, currentWindow: inCur})
 			}
 		}
 	}
@@ -101,7 +115,7 @@ func markLiveSessionsTmux(sessions []session.Session) {
 	if len(orphaned) > 0 {
 		orphanCwds := resolveOrphanCwds(orphaned)
 		for _, oc := range orphanCwds {
-			cps = append(cps, claudeMatch{args: oc.args, path: oc.cwd})
+			cps = append(cps, claudeMatch{args: oc.args, path: oc.cwd, currentWindow: currentWindowPaths[oc.cwd]})
 		}
 	}
 
@@ -114,6 +128,9 @@ func markLiveSessionsTmux(sessions []session.Session) {
 			if strings.Contains(cp.args, sessions[si].ID) {
 				sessions[si].IsLive = true
 				sessions[si].TmuxWindowName = cp.windowName
+				if cp.currentWindow {
+					sessions[si].IsCurrentWindow = true
+				}
 				matched[ci] = true
 				break
 			}
@@ -137,6 +154,9 @@ func markLiveSessionsTmux(sessions []session.Session) {
 		if bestIdx >= 0 {
 			sessions[bestIdx].IsLive = true
 			sessions[bestIdx].TmuxWindowName = cp.windowName
+			if cp.currentWindow {
+				sessions[bestIdx].IsCurrentWindow = true
+			}
 		}
 	}
 }

@@ -362,6 +362,20 @@ func CurrentWindowClaudes() []string {
 	return paths
 }
 
+// CurrentWindowKey returns "session_name|window_index" for the current tmux window,
+// or "" when not running inside tmux.
+func CurrentWindowKey() string {
+	if !InTmux() {
+		return ""
+	}
+	out, err := exec.Command("tmux", "display-message", "-p",
+		"#{session_name}|#{window_index}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // MoveWithAndSwitchPane moves the current pane (CSB) to the target's tmux window
 // as a side-by-side split, then focuses the target pane.
 func MoveWithAndSwitchPane(target Pane) error {

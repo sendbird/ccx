@@ -280,6 +280,8 @@ type App struct {
 	sessMemoryCacheKey string
 	sessTasksCache     string
 	sessTasksCacheKey  string
+	sessShellsCache    string
+	sessShellsCacheKey string
 	sessPreviewAgents  []session.Subagent // agents shown in Tasks/Plan preview
 	sessAgentCursor    int                // cursor within agents list
 
@@ -552,9 +554,10 @@ const (
 	sessPreviewMemory
 	sessPreviewTasksPlan
 	sessPreviewAgents
+	sessPreviewShells
 	sessPreviewLive     // tmux pane capture
 	sessPreviewRemote   // remote session status/stream
-	numSessPreviewModes = 7
+	numSessPreviewModes = 8
 )
 
 // Config holds application configuration from CLI flags.
@@ -632,7 +635,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		}
 	}
 	if a.config.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "live": sessPreviewLive}
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "shells": sessPreviewShells, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
@@ -912,6 +915,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+			a.bumpPastHeader(0, +1)
 			return a, a.autoSelectSession()
 		}
 		return a, nil
@@ -920,11 +924,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		stats := session.GlobalStats(msg)
 		a.globalStatsCache = &stats
 		a.globalStatsLoading = false
-		// Switch to global stats view now that data is ready
+		// Only render/switch into the stats view if the user is still there.
+		// If they navigated away while stats were loading, just cache the
+		// result and stay where they are.
+		if a.state != viewGlobalStats {
+			return a, nil
+		}
 		contentH := a.height - 3
 		a.globalStatsVP = viewport.New(a.width, contentH)
 		a.globalStatsVP.SetContent(renderGlobalStats(stats, a.width))
-		a.state = viewGlobalStats
 		return a, nil
 
 	case searchBatchMsg:
@@ -1615,6 +1623,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if a.sessPendingG {
 				a.sessPendingG = false
 				a.sessionList.Select(0)
+				a.bumpPastHeader(0, +1)
 				return a, a.schedulePreviewUpdate()
 			}
 			a.sessPendingG = true
@@ -1624,11 +1633,13 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			items := a.sessionList.VisibleItems()
 			if len(items) > 0 {
 				a.sessionList.Select(len(items) - 1)
+				a.bumpPastHeader(len(items)-1, -1)
 			}
 			return a, a.schedulePreviewUpdate()
 		case "home":
 			a.sessPendingG = false
 			a.sessionList.Select(0)
+			a.bumpPastHeader(0, +1)
 			return a, a.schedulePreviewUpdate()
 		}
 	}
@@ -1671,6 +1682,14 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	oldIdx := a.sessionList.Index()
 	m, cmd := a.updateSessionList(msg)
 	newIdx := a.sessionList.Index()
+	// If the cursor landed on a section header (e.g. after Up/Down jumped
+	// across the "Sessions" divider), skip to the next session item.
+	if newIdx != oldIdx {
+		a.skipHeaderInDirection(oldIdx, newIdx)
+		newIdx = a.sessionList.Index()
+	} else {
+		a.skipHeaderInDirection(oldIdx, newIdx)
+	}
 	if sp.Show && oldIdx == newIdx {
 		switch key {
 		case "down", "up", "pgdown", "pgup":
@@ -1680,6 +1699,44 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	debounceCmd := a.schedulePreviewUpdate()
 	return m, tea.Batch(cmd, debounceCmd)
+}
+
+// skipHeaderInDirection moves the list cursor past header items in the same
+// direction the user was navigating (down if newIdx >= oldIdx, otherwise up).
+// At the boundaries it bumps the other way so we never get stuck on a header.
+func (a *App) skipHeaderInDirection(oldIdx, newIdx int) {
+	visible := a.sessionList.VisibleItems()
+	if len(visible) == 0 {
+		return
+	}
+	cur := a.sessionList.Index()
+	if cur < 0 || cur >= len(visible) {
+		return
+	}
+	if _, ok := visible[cur].(sessionItem); ok {
+		return
+	}
+	dir := 1
+	if newIdx < oldIdx {
+		dir = -1
+	}
+	idx := cur + dir
+	for idx >= 0 && idx < len(visible) {
+		if _, ok := visible[idx].(sessionItem); ok {
+			a.sessionList.Select(idx)
+			return
+		}
+		idx += dir
+	}
+	// Reverse direction if we hit a boundary on a header.
+	idx = cur - dir
+	for idx >= 0 && idx < len(visible) {
+		if _, ok := visible[idx].(sessionItem); ok {
+			a.sessionList.Select(idx)
+			return
+		}
+		idx -= dir
+	}
 }
 
 // handlePaneProxyKey forwards a key to the tmux pane and captures the result.
@@ -3935,6 +3992,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		a.updateSessionTasksPlanPreview(sess)
 	case sessPreviewAgents:
 		a.updateSessionAgentsPreview(sess)
+	case sessPreviewShells:
+		a.updateSessionShellsPreview(sess)
 	case sessPreviewLive:
 		if sess.IsLive {
 			a.sessSplit.Preview.SetContent(dimStyle.Render("(connecting…)"))
@@ -4438,6 +4497,120 @@ func (a *App) updateSessionAgentsPreview(sess session.Session) {
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.buildAgentsPreviewContent(sess))
+}
+
+func (a *App) updateSessionShellsPreview(sess session.Session) {
+	if a.sessShellsCacheKey != sess.ID {
+		a.sessShellsCache = a.buildShellsPreviewContent(sess)
+		a.sessShellsCacheKey = sess.ID
+	}
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	contentH := max(a.height-3, 1)
+	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	a.sessSplit.Preview.SetContent(a.sessShellsCache)
+}
+
+func (a *App) buildShellsPreviewContent(sess session.Session) string {
+	if !sess.HasShellJobs {
+		return dimStyle.Render("No background shells or monitors found for this session.")
+	}
+	jobs := sess.ShellJobs
+	if len(jobs) == 0 {
+		entries, err := session.LoadMessages(sess.FilePath)
+		if err != nil {
+			return dimStyle.Render("Failed to load session: " + err.Error())
+		}
+		jobs = session.LoadShellJobsFromEntries(entries)
+	}
+	if len(jobs) == 0 {
+		return dimStyle.Render("No background shells or monitors found for this session.")
+	}
+
+	bashCount, monCount, killed, polled := 0, 0, 0, 0
+	for _, j := range jobs {
+		switch j.ToolName {
+		case "Bash":
+			bashCount++
+		case "Monitor":
+			monCount++
+		}
+		switch j.Status {
+		case "killed", "stopped":
+			killed++
+		case "polled":
+			polled++
+		}
+	}
+
+	var sb strings.Builder
+	header := fmt.Sprintf("── Background shells [%d Bash, %d Monitor", bashCount, monCount)
+	if polled > 0 {
+		header += fmt.Sprintf(", %d polled", polled)
+	}
+	if killed > 0 {
+		header += fmt.Sprintf(", %d killed", killed)
+	}
+	header += "] ──"
+	sb.WriteString(dimStyle.Render(header) + "\n\n")
+
+	bashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true)
+	monStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
+
+	for _, j := range jobs {
+		icon, statusColor := "◉", colorAssistant
+		switch j.Status {
+		case "polled":
+			icon = "◑"
+			statusColor = colorAccent
+		case "killed", "stopped":
+			icon = "⏹"
+			statusColor = colorDim
+		}
+		statusStyle := lipgloss.NewStyle().Foreground(statusColor).Bold(true)
+
+		toolLabel := bashStyle.Render("Bash")
+		tag := ""
+		if j.ToolName == "Monitor" {
+			toolLabel = monStyle.Render("Monitor")
+			if j.Persistent {
+				tag = dimStyle.Render(" [persistent]")
+			}
+		} else {
+			tag = dimStyle.Render(" [bg]")
+		}
+
+		headline := fmt.Sprintf("%s %s%s  %s", statusStyle.Render(icon), toolLabel, tag, statusStyle.Render(j.Status))
+		if j.PollCount > 0 {
+			headline += dimStyle.Render(fmt.Sprintf("  (%d polls)", j.PollCount))
+		}
+		if j.TimeoutMS > 0 {
+			headline += dimStyle.Render(fmt.Sprintf("  timeout=%dms", j.TimeoutMS))
+		}
+		sb.WriteString(headline + "\n")
+
+		if j.Description != "" {
+			sb.WriteString(dimStyle.Render("    # "+j.Description) + "\n")
+		}
+		cmd := j.Command
+		if cmd == "" {
+			cmd = "(empty command)"
+		}
+		for _, line := range splitLines(cmd) {
+			if len(line) > 110 {
+				line = line[:107] + "..."
+			}
+			sb.WriteString(bashCmdStyle.Render("    $ "+line) + "\n")
+		}
+		if !j.StartedAt.IsZero() {
+			sb.WriteString(dimStyle.Render("    started: "+timeAgo(j.StartedAt)) + "\n")
+		}
+		if !j.LastEventAt.IsZero() && !j.LastEventAt.Equal(j.StartedAt) {
+			sb.WriteString(dimStyle.Render("    last:    "+timeAgo(j.LastEventAt)) + "\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }
 
 func (a *App) buildTasksPlanContent(sess session.Session) string {
@@ -5169,13 +5342,18 @@ func (a *App) updateActiveComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
 // one (sessions are sorted by ModTime descending, so first match wins).
 // If the matched session is live, auto-enters it with live tail enabled.
 func (a *App) autoSelectSession() tea.Cmd {
+	visible := a.sessionList.VisibleItems()
 	for _, projPath := range tmux.CurrentWindowClaudes() {
 		absProj, _ := filepath.Abs(projPath)
 		if absProj == "" {
 			absProj = projPath
 		}
-		for i, s := range a.sessions {
-			sp := s.ProjectPath
+		for i, item := range visible {
+			si, ok := item.(sessionItem)
+			if !ok {
+				continue
+			}
+			sp := si.sess.ProjectPath
 			absSP, _ := filepath.Abs(sp)
 			if absSP == "" {
 				absSP = sp
@@ -5183,15 +5361,38 @@ func (a *App) autoSelectSession() tea.Cmd {
 			if absSP == absProj {
 				a.sessionList.Select(i)
 				// Auto-enter live sessions (only if TmuxAutoLive is enabled)
-				if s.IsLive && a.config.TmuxAutoLive {
-					a.currentSess = s
-					return a.openConversation(s)
+				if si.sess.IsLive && a.config.TmuxAutoLive {
+					a.currentSess = si.sess
+					return a.openConversation(si.sess)
 				}
 				return nil
 			}
 		}
 	}
+	// Fallback: ensure cursor isn't parked on a header.
+	a.bumpPastHeader(0, +1)
 	return nil
+}
+
+// bumpPastHeader moves the list cursor in `dir` until it lands on a session
+// item (or hits the boundary). When called with start>=0 it Selects start
+// first.
+func (a *App) bumpPastHeader(start, dir int) {
+	visible := a.sessionList.VisibleItems()
+	if len(visible) == 0 {
+		return
+	}
+	if start < 0 || start >= len(visible) {
+		start = a.sessionList.Index()
+	}
+	idx := start
+	for idx >= 0 && idx < len(visible) {
+		if _, ok := visible[idx].(sessionItem); ok {
+			a.sessionList.Select(idx)
+			return
+		}
+		idx += dir
+	}
 }
 
 func (a *App) resizeAll() tea.Cmd {
@@ -5323,10 +5524,12 @@ func (a *App) rebuildSessionList() {
 		for i, item := range a.sessionList.VisibleItems() {
 			if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
 				a.sessionList.Select(i)
-				break
+				return
 			}
 		}
 	}
+	// Default: ensure cursor isn't parked on a header.
+	a.bumpPastHeader(0, +1)
 }
 
 func (a *App) listReady(l *list.Model) bool {

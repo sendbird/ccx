@@ -208,12 +208,14 @@ func isWriteTool(name string) bool {
 // --- Bash pretty-print ---
 
 type bashInput struct {
-	Command     string `json:"command"`
-	Description string `json:"description"`
-	Timeout     int    `json:"timeout"`
+	Command         string `json:"command"`
+	Description     string `json:"description"`
+	Timeout         int    `json:"timeout"`
+	RunInBackground bool   `json:"run_in_background"`
 }
 
 var bashCmdStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true) // yellow
+var bashBgBadge = lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
 
 func formatBashFolded(toolInput string) string {
 	var b bashInput
@@ -227,6 +229,9 @@ func formatBashFolded(toolInput string) string {
 	// Replace newlines with semicolons for compact display
 	cmd = strings.ReplaceAll(cmd, "\n", "; ")
 	s := bashCmdStyle.Render("$ " + cmd)
+	if b.RunInBackground {
+		s = bashBgBadge.Render("[bg]") + " " + s
+	}
 	if b.Description != "" {
 		s = dimStyle.Render(b.Description+"  ") + s
 	}
@@ -239,11 +244,69 @@ func formatBashExpanded(toolInput string, width int) string {
 		return ""
 	}
 	var buf strings.Builder
+	if b.RunInBackground {
+		buf.WriteString(bashBgBadge.Render("  [background shell]") + "\n")
+	}
 	if b.Description != "" {
 		buf.WriteString(dimStyle.Render("  # "+b.Description) + "\n")
 	}
 	for _, line := range splitLines(b.Command) {
 		buf.WriteString(bashCmdStyle.Render("  $ "+line) + "\n")
+	}
+	return buf.String()
+}
+
+// --- Monitor pretty-print ---
+
+type monitorInput struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+	Persistent  bool   `json:"persistent"`
+	TimeoutMS   int    `json:"timeout_ms"`
+}
+
+var monitorBadgeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
+
+func formatMonitorFolded(toolInput string) string {
+	var m monitorInput
+	if json.Unmarshal([]byte(toolInput), &m) != nil || m.Command == "" {
+		return ""
+	}
+	tag := "[monitor]"
+	if m.Persistent {
+		tag = "[monitor·persistent]"
+	}
+	cmd := m.Command
+	if len(cmd) > 70 {
+		cmd = cmd[:67] + "..."
+	}
+	cmd = strings.ReplaceAll(cmd, "\n", "; ")
+	s := monitorBadgeStyle.Render(tag) + " " + bashCmdStyle.Render("$ "+cmd)
+	if m.Description != "" {
+		s = dimStyle.Render(m.Description+"  ") + s
+	}
+	return s
+}
+
+func formatMonitorExpanded(toolInput string, width int) string {
+	var m monitorInput
+	if json.Unmarshal([]byte(toolInput), &m) != nil || m.Command == "" {
+		return ""
+	}
+	var buf strings.Builder
+	tag := "  [monitor]"
+	if m.Persistent {
+		tag = "  [monitor · persistent]"
+	}
+	buf.WriteString(monitorBadgeStyle.Render(tag) + "\n")
+	if m.Description != "" {
+		buf.WriteString(dimStyle.Render("  # "+m.Description) + "\n")
+	}
+	for _, line := range splitLines(m.Command) {
+		buf.WriteString(bashCmdStyle.Render("  $ "+line) + "\n")
+	}
+	if m.TimeoutMS > 0 {
+		buf.WriteString(dimStyle.Render(fmt.Sprintf("  timeout: %dms", m.TimeoutMS)) + "\n")
 	}
 	return buf.String()
 }
@@ -289,7 +352,7 @@ func formatGrepFolded(toolInput string) string {
 	if json.Unmarshal([]byte(toolInput), &g) != nil || g.Pattern == "" {
 		return ""
 	}
-	s := grepPatStyle.Render("/"+g.Pattern+"/")
+	s := grepPatStyle.Render("/" + g.Pattern + "/")
 	if g.Path != "" {
 		s += " " + dimStyle.Render(session.ShortenPath(g.Path, homeDir()))
 	}
@@ -358,6 +421,8 @@ func toolFoldedSummary(block session.ContentBlock) string {
 		return formatWriteFolded(block.ToolInput)
 	case block.ToolName == "Bash":
 		return formatBashFolded(block.ToolInput)
+	case block.ToolName == "Monitor":
+		return formatMonitorFolded(block.ToolInput)
 	case block.ToolName == "Read":
 		return formatReadFolded(block.ToolInput)
 	case block.ToolName == "Grep":
@@ -379,6 +444,8 @@ func toolDiffOutput(block session.ContentBlock, width int) string {
 		return formatWriteDiff(block.ToolInput, width)
 	case block.ToolName == "Bash":
 		return formatBashExpanded(block.ToolInput, width)
+	case block.ToolName == "Monitor":
+		return formatMonitorExpanded(block.ToolInput, width)
 	}
 	return ""
 }

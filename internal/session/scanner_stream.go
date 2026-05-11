@@ -134,6 +134,13 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 				sess.HasCrons = true
 			}
 		}
+		if !sess.HasShellJobs {
+			if bytes.Contains(line, bMonitorTool) || bytes.Contains(line, bMonitorToolS) {
+				sess.HasShellJobs = true
+			} else if bytes.Contains(line, bRunInBackground) || bytes.Contains(line, bRunInBackgroundS) {
+				sess.HasShellJobs = true
+			}
+		}
 
 		// Team detection (check any line for teamName/agentName)
 		if sess.TeamName == "" {

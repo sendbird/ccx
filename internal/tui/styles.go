@@ -3,15 +3,15 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	colorPrimary      = lipgloss.Color("#7C3AED")
-	colorTitleBg      = lipgloss.Color("#1E293B") // subtle dark bg for title bar
-	colorDim          = lipgloss.Color("#6B7280")
-	colorAccent       = lipgloss.Color("#10B981")
-	colorUser         = lipgloss.Color("#3B82F6")
-	colorAssistant    = lipgloss.Color("#F59E0B")
-	colorError        = lipgloss.Color("#EF4444")
-	colorWorktree     = lipgloss.Color("#8B5CF6")
-	colorFilter       = lipgloss.Color("#EC4899")
+	colorPrimary       = lipgloss.Color("#7C3AED")
+	colorTitleBg       = lipgloss.Color("#1E293B") // subtle dark bg for title bar
+	colorDim           = lipgloss.Color("#6B7280")
+	colorAccent        = lipgloss.Color("#10B981")
+	colorUser          = lipgloss.Color("#3B82F6")
+	colorAssistant     = lipgloss.Color("#F59E0B")
+	colorError         = lipgloss.Color("#EF4444")
+	colorWorktree      = lipgloss.Color("#8B5CF6")
+	colorFilter        = lipgloss.Color("#EC4899")
 	colorBorderFocused = lipgloss.Color("#38BDF8")
 	colorBorderDim     = lipgloss.Color("#374151")
 
@@ -37,9 +37,11 @@ var (
 	taskBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB923C")).Bold(true)
 	cronBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
 	planBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
+	shellBadge          = lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
 	liveBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
 	busyBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
 	forkBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
+	hereBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F472B6")).Bold(true)
 	customBadgeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#84CC16")).Bold(true).Italic(true)
 	blockCursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 	blockSelectedBg     = lipgloss.NewStyle().Background(lipgloss.Color("#1E293B"))

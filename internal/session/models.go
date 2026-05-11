@@ -18,39 +18,56 @@ type TaskItem struct {
 }
 
 type CronItem struct {
-	ID          string
-	Cron        string
-	Prompt      string
-	Recurring   bool
-	Status      string // active, deleted
-	CreatedAt   time.Time
-	DeletedAt   time.Time
+	ID        string
+	Cron      string
+	Prompt    string
+	Recurring bool
+	Status    string // active, deleted
+	CreatedAt time.Time
+	DeletedAt time.Time
+}
+
+// ShellJob represents a long-running shell or monitor invocation discovered in
+// the conversation: either a Bash tool call with run_in_background=true, or a
+// Monitor tool call. Status reflects the latest lifecycle event we observed.
+type ShellJob struct {
+	ID                        string // tool_use ID (links BashOutput/KillShell back)
+	ToolName                  string // "Bash" or "Monitor"
+	Command                   string
+	Description               string
+	Persistent                bool // Monitor.persistent
+	TimeoutMS                 int  // Bash.timeout (ms) or Monitor.timeout_ms
+	DangerouslyDisableSandbox bool
+	StartedAt                 time.Time
+	LastEventAt               time.Time
+	PollCount                 int    // BashOutput calls observed against this shell
+	Status                    string // "running", "polled", "killed", "stopped"
 }
 
 type Session struct {
-	ID          string
-	ShortID     string
-	FilePath    string
-	ProjectPath string
-	ProjectName string
-	GitBranch   string
-	ModTime     time.Time
-	MsgCount    int
-	FirstPrompt string
-	Created     time.Time
-	IsWorktree  bool
+	ID           string
+	ShortID      string
+	FilePath     string
+	ProjectPath  string
+	ProjectName  string
+	GitBranch    string
+	ModTime      time.Time
+	MsgCount     int
+	FirstPrompt  string
+	Created      time.Time
+	IsWorktree   bool
 	IsLive       bool
 	IsResponding bool
-	HasMemory   bool
-	HasTodos    bool
-	Todos       []TodoItem
-	HasTasks    bool
-	HasCrons    bool
-	HasPlan     bool
-	PlanSlug    string   // first plan slug (kept for compat)
-	PlanSlugs   []string // all distinct plan slugs in order
-	Tasks       []TaskItem
-	Crons       []CronItem
+	HasMemory    bool
+	HasTodos     bool
+	Todos        []TodoItem
+	HasTasks     bool
+	HasCrons     bool
+	HasPlan      bool
+	PlanSlug     string   // first plan slug (kept for compat)
+	PlanSlugs    []string // all distinct plan slugs in order
+	Tasks        []TaskItem
+	Crons        []CronItem
 	TeamName     string // e.g. "supports-build"
 	TeamRole     string // "leader", "teammate", ""
 	TeammateName string // e.g. "build-deploy" (teammate only)
@@ -61,10 +78,13 @@ type Session struct {
 	HasCompaction bool
 	HasSkills     bool
 	HasMCP        bool
+	HasShellJobs  bool       // background Bash or Monitor invocations present
+	ShellJobs     []ShellJob // populated lazily when HasShellJobs is true
 
 	CustomBadges []string // user-created badge tags
 
-	TmuxWindowName string // tmux window name (set if pane CWD matches ProjectPath)
+	TmuxWindowName  string // tmux window name (set if pane CWD matches ProjectPath)
+	IsCurrentWindow bool   // session lives in the same tmux window as ccx (pane CWD matches)
 
 	// Remote execution
 	IsRemote        bool   // virtual remote session
@@ -97,13 +117,13 @@ type HookInfo struct {
 }
 
 type ContentBlock struct {
-	Type      string
-	Text      string
-	ToolName  string
-	ToolInput string
-	IsError   bool
-	ID        string     // tool_use block ID (e.g., "toolu_01...")
-	Hooks     []HookInfo // hooks that ran for this tool_use block
+	Type         string
+	Text         string
+	ToolName     string
+	ToolInput    string
+	IsError      bool
+	ID           string     // tool_use block ID (e.g., "toolu_01...")
+	Hooks        []HookInfo // hooks that ran for this tool_use block
 	TagName      string     // for system_tag blocks: the XML tag name (e.g., "system-reminder")
 	ImagePasteID int        // for image blocks: the paste ID for cache lookup (0 = not set)
 }

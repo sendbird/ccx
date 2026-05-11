@@ -28,24 +28,57 @@ const (
 
 // buildGroupedItems returns list items for the given group mode.
 func buildGroupedItems(sessions []session.Session, groupMode int, worktreeDir ...string) []list.Item {
+	currentSessions, rest := splitCurrentWindow(sessions)
+
+	var restItems []list.Item
 	switch groupMode {
 	case groupProject:
-		return buildProjectGroupItems(sessions)
+		restItems = buildProjectGroupItems(rest)
 	case groupTree:
-		return buildTreeItems(sessions)
+		restItems = buildTreeItems(rest)
 	case groupChain:
-		return buildChainGroupItems(sessions)
+		restItems = buildChainGroupItems(rest)
 	case groupFork:
-		return buildForkGroupItems(sessions)
+		restItems = buildForkGroupItems(rest)
 	case groupBaseProject:
-		return buildBaseProjectGroupItems(sessions, worktreeDir...)
+		restItems = buildBaseProjectGroupItems(rest, worktreeDir...)
 	default:
-		items := make([]list.Item, len(sessions))
-		for i, s := range sessions {
-			items[i] = sessionItem{sess: s}
+		restItems = make([]list.Item, len(rest))
+		for i, s := range rest {
+			restItems[i] = sessionItem{sess: s}
 		}
-		return items
 	}
+
+	if len(currentSessions) == 0 {
+		return restItems
+	}
+
+	items := make([]list.Item, 0, len(currentSessions)+len(restItems)+2)
+	items = append(items, headerItem{label: "Current Window"})
+	for _, s := range currentSessions {
+		items = append(items, sessionItem{sess: s})
+	}
+	if len(restItems) > 0 {
+		items = append(items, headerItem{label: "Sessions"})
+		items = append(items, restItems...)
+	}
+	return items
+}
+
+// splitCurrentWindow partitions sessions into those in the current tmux window
+// (preserving most-recent-first order) and the rest.
+func splitCurrentWindow(sessions []session.Session) (current, rest []session.Session) {
+	for _, s := range sessions {
+		if s.IsCurrentWindow {
+			current = append(current, s)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+	sort.Slice(current, func(i, j int) bool {
+		return current[i].ModTime.After(current[j].ModTime)
+	})
+	return current, rest
 }
 
 // substringFilter matches items whose FilterValue contains the search term as a substring.
@@ -88,6 +121,24 @@ func (s sessionItem) FilterValue() string {
 	return session.FilterValueFor(s.sess, nil)
 }
 
+// headerSentinel is returned by headerItem.FilterValue so headers never match a
+// user filter via substring search. The filter wrapper still injects them back
+// in to keep section titles visible.
+const headerSentinel = "\x00ccx-header\x00"
+
+// headerItem is a non-selectable list item that renders a section divider.
+type headerItem struct {
+	label string
+}
+
+func (h headerItem) FilterValue() string { return headerSentinel }
+
+// isSeparator reports whether item is a non-session decorative row.
+func isSeparator(item list.Item) bool {
+	_, ok := item.(headerItem)
+	return ok
+}
+
 type sessionDelegate struct {
 	timeW        int             // max width of time-ago column
 	msgW         int             // max width of message count column
@@ -99,7 +150,33 @@ func (d sessionDelegate) Height() int                             { return 2 }
 func (d sessionDelegate) Spacing() int                            { return 0 }
 func (d sessionDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
+// renderHeader draws a section divider like "── Current Window ──".
+// It always occupies 2 rows (label + blank) so cursor math stays consistent
+// with sessionItem rows.
+func (d sessionDelegate) renderHeader(w io.Writer, m list.Model, h headerItem) {
+	width := m.Width()
+	if width <= 0 {
+		fmt.Fprint(w, "\n")
+		return
+	}
+	label := " " + h.label + " "
+	dashes := width - lipgloss.Width(label) - 2
+	if dashes < 0 {
+		dashes = 0
+	}
+	left := strings.Repeat("─", dashes/2)
+	right := strings.Repeat("─", dashes-dashes/2)
+	style := dimStyle.Bold(true)
+	line1 := style.Render(left + label + right)
+	clamp := lipgloss.NewStyle().MaxWidth(width)
+	fmt.Fprintf(w, "%s\n%s", clamp.Render(line1), "")
+}
+
 func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	if h, ok := item.(headerItem); ok {
+		d.renderHeader(w, m, h)
+		return
+	}
 	si, ok := item.(sessionItem)
 	if !ok {
 		return
@@ -161,6 +238,10 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	badges := ""
 	badgesW := 0
 	hide := d.hiddenBadges
+	if s.IsCurrentWindow && !hide["HERE"] {
+		badges += " " + hereBadge.Render("[HERE]")
+		badgesW += 7
+	}
 	if s.IsLive && !hide["LIVE"] {
 		if s.IsResponding {
 			badges += " " + busyBadge.Render("[BUSY]")
@@ -203,6 +284,10 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 	if s.HasMCP && !hide["X"] {
 		badges += " " + mcpBadgeStyle.Render("[X]")
+		badgesW += 4
+	}
+	if s.HasShellJobs && !hide["B"] {
+		badges += " " + shellBadge.Render("[B]")
 		badgesW += 4
 	}
 	if s.ParentSessionID != "" && !hide["F"] {
@@ -330,14 +415,86 @@ func newSessionList(sessions []session.Session, width, height int, groupMode int
 
 	// Use chain-aware filter for grouped modes so children stay visible
 	// when their parent matches (and vice versa).
+	var base list.FilterFunc
 	if groupMode == groupChain || groupMode == groupFork || groupMode == groupTree || groupMode == groupBaseProject {
-		l.Filter = buildChainAwareFilter(items)
+		base = buildChainAwareFilter(items)
 	} else {
-		l.Filter = substringFilter
+		base = substringFilter
 	}
+	l.Filter = wrapPinCurrentWindow(items, base)
 	configureListSearch(&l)
 	l.SetSize(width, height) // re-compute pagination after hiding bars
 	return l
+}
+
+// wrapPinCurrentWindow ensures that current-window sessions and section
+// headers are always included in filter results, regardless of the search
+// term. Matched items keep their highlight; pinned items are returned with
+// no MatchedIndexes so they render normally.
+func wrapPinCurrentWindow(items []list.Item, base list.FilterFunc) list.FilterFunc {
+	pinned := make(map[int]bool)
+	hasCurrent := false
+	for i, item := range items {
+		switch v := item.(type) {
+		case headerItem:
+			pinned[i] = true
+		case sessionItem:
+			if v.sess.IsCurrentWindow {
+				pinned[i] = true
+				hasCurrent = true
+			}
+		}
+	}
+	return func(term string, targets []string) []list.Rank {
+		ranks := base(term, targets)
+		if !hasCurrent && len(pinned) == 0 {
+			return ranks
+		}
+		seen := make(map[int]list.Rank, len(ranks))
+		for _, r := range ranks {
+			seen[r.Index] = r
+		}
+		for idx := range pinned {
+			if _, ok := seen[idx]; !ok {
+				seen[idx] = list.Rank{Index: idx}
+			}
+		}
+		out := make([]list.Rank, 0, len(seen))
+		for i := range items {
+			if r, ok := seen[i]; ok {
+				out = append(out, r)
+			}
+		}
+		// Drop any trailing/empty section headers (e.g. "Sessions" with no
+		// rest items left after filtering).
+		out = trimEmptyHeaders(out, items)
+		return out
+	}
+}
+
+// trimEmptyHeaders removes header items that have no non-header item following
+// them in the rank list.
+func trimEmptyHeaders(ranks []list.Rank, items []list.Item) []list.Rank {
+	if len(ranks) == 0 {
+		return ranks
+	}
+	keep := make([]bool, len(ranks))
+	hasNonHeaderAfter := false
+	for i := len(ranks) - 1; i >= 0; i-- {
+		if _, isHeader := items[ranks[i].Index].(headerItem); isHeader {
+			keep[i] = hasNonHeaderAfter
+		} else {
+			keep[i] = true
+			hasNonHeaderAfter = true
+		}
+	}
+	out := ranks[:0]
+	for i, r := range ranks {
+		if keep[i] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // buildChainAwareFilter returns a filter function that preserves parent-child
@@ -871,6 +1028,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		desc  string
 	}
 	allBadges := []badge{
+		{hereBadge, "[HERE]", "In current tmux window"},
 		{liveBadge, "[LIVE]", "Running Claude"},
 		{busyBadge, "[BUSY]", "Responding"},
 		{memoryBadge, "[M]", "Has memory"},
@@ -903,6 +1061,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 	sb.WriteString("\n" + headerStyle.Render(" Search Filters") + "\n")
 	type filter struct{ filter, desc string }
 	allFilters := []filter{
+		{"is:here", "In current window"},
 		{"is:live", "Live sessions"},
 		{"is:busy", "Busy sessions"},
 		{"is:wt", "Worktree sessions"},

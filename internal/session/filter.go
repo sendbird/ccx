@@ -26,6 +26,9 @@ func FilterValueFor(s Session, cwdProjectPaths []string) string {
 	if s.TmuxWindowName != "" {
 		parts = append(parts, "win:"+s.TmuxWindowName, s.TmuxWindowName)
 	}
+	if s.IsCurrentWindow {
+		parts = append(parts, "is:here")
+	}
 	if s.IsLive {
 		parts = append(parts, "is:live")
 	}
