@@ -789,13 +789,10 @@ func (a *App) updateConvPreview() {
 			a.setConvPreviewText(renderTaskMarkerPreview(item, pw))
 			return
 		}
-		if a.conv.leftPaneMode == convPaneTree && item.bgTaskID != "" {
+		if item.bgTaskID != "" {
 			entry = a.buildBgJobPreviewEntry(item.bgTaskID)
-		} else if a.conv.leftPaneMode == convPaneTree {
-			entry = a.buildTaskPreviewEntry(item.task)
 		} else {
-			a.setConvPreviewText(renderTaskSummary(item.task, pw))
-			return
+			entry = a.buildTaskPreviewEntry(item.task)
 		}
 	}
 
@@ -1793,28 +1790,6 @@ func renderTaskMarkerPreview(item convItem, width int) string {
 		}
 	} else {
 		sb.WriteString(dimStyle.Render("  No task operations at this point") + "\n")
-	}
-	return sb.String()
-}
-
-// renderTaskSummary renders a summary for a task in the preview pane.
-func renderTaskSummary(task session.TaskItem, width int) string {
-	var sb strings.Builder
-	status := "○ pending"
-	switch task.Status {
-	case "completed":
-		status = "✓ completed"
-	case "in_progress":
-		status = "◉ in progress"
-	}
-	sb.WriteString(taskBadgeStyle.Render("Task: "+task.ID) + "  " + status + "\n")
-	sb.WriteString("\n" + task.Subject + "\n")
-	if task.Description != "" {
-		sb.WriteString("\n" + dimStyle.Render("Description:") + "\n")
-		sb.WriteString(wrapText(task.Description, width-2) + "\n")
-	}
-	if len(task.BlockedBy) > 0 {
-		sb.WriteString("\n" + dimStyle.Render("Blocked by: ") + strings.Join(task.BlockedBy, ", ") + "\n")
 	}
 	return sb.String()
 }
