@@ -286,9 +286,9 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.bootstrapAndEditConfig() }},
 
 		// Badges
-		{name: "badge:toggle", aliases: []string{"bt"}, desc: "toggle badge (M,W,T,K,P,A,C,S,X,F,LIVE)",
+		{name: "badge:toggle", aliases: []string{"bt"}, desc: "toggle badge (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK)",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: badge:toggle <KEY> (M,W,T,K,P,A,C,S,X,F,LIVE)"
+				a.copiedMsg = "Usage: badge:toggle <KEY> (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK)"
 				return a, nil
 			}},
 
@@ -700,11 +700,11 @@ func (a *App) executeCmdBadgeRm(input string) (tea.Model, tea.Cmd) {
 func (a *App) executeCmdBadgeToggle(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: badge:toggle <KEY> (M,W,T,K,P,A,C,S,X,F,LIVE)"
+		a.copiedMsg = "Usage: badge:toggle <KEY> (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK)"
 		return a, nil
 	}
 	key := strings.ToUpper(parts[len(parts)-1])
-	valid := map[string]bool{"M": true, "W": true, "T": true, "K": true, "P": true, "A": true, "C": true, "S": true, "X": true, "F": true, "LIVE": true}
+	valid := map[string]bool{"HERE": true, "LIVE": true, "BUSY": true, "BG": true, "WAIT": true, "DONE": true, "STUCK": true}
 	if !valid[key] {
 		a.copiedMsg = "Unknown badge: " + key
 		return a, nil

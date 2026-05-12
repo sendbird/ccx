@@ -243,56 +243,35 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		badgesW += 7
 	}
 	if s.IsLive && !hide["LIVE"] {
-		if s.IsResponding {
-			badges += " " + busyBadge.Render("[BUSY]")
-		} else {
-			badges += " " + liveBadge.Render("[LIVE]")
-		}
+		badges += " " + liveBadge.Render("[LIVE]")
 		badgesW += 7
 	}
-	if s.HasMemory && !hide["M"] {
-		badges += " " + memoryBadge.Render("[M]")
-		badgesW += 4
-	}
-	if s.IsWorktree && !hide["W"] {
-		badges += " " + worktreeBadge.Render("[W]")
-		badgesW += 4
-	}
-	if s.HasTodos && !hide["T"] {
-		badges += " " + todoBadge.Render("[T]")
-		badgesW += 4
-	}
-	if s.HasTasks && !hide["K"] {
-		badges += " " + taskBadge.Render("[K]")
-		badgesW += 4
-	}
-	if s.HasPlan && !hide["P"] {
-		badges += " " + planBadge.Render("[P]")
-		badgesW += 4
-	}
-	if s.HasAgents && !hide["A"] {
-		badges += " " + agentBadgeStyle.Render("[A]")
-		badgesW += 4
-	}
-	if s.HasCompaction && !hide["C"] {
-		badges += " " + compactBadgeStyle.Render("[C]")
-		badgesW += 4
-	}
-	if s.HasSkills && !hide["S"] {
-		badges += " " + todoBadge.Render("[S]")
-		badgesW += 4
-	}
-	if s.HasMCP && !hide["X"] {
-		badges += " " + mcpBadgeStyle.Render("[X]")
-		badgesW += 4
-	}
-	if s.HasShellJobs && !hide["B"] {
-		badges += " " + shellBadge.Render("[B]")
-		badgesW += 4
-	}
-	if s.ParentSessionID != "" && !hide["F"] {
-		badges += " " + forkBadge.Render("[F]")
-		badgesW += 4
+	switch s.Lifecycle() {
+	case session.LifecycleBusy:
+		if !hide["BUSY"] {
+			badges += " " + busyBadge.Render("[BUSY]")
+			badgesW += 7
+		}
+	case session.LifecycleBG:
+		if !hide["BG"] {
+			badges += " " + bgBadgeStyle.Render("[BG]")
+			badgesW += 5
+		}
+	case session.LifecycleStuck:
+		if !hide["STUCK"] {
+			badges += " " + stuckBadgeStyle.Render("[STUCK]")
+			badgesW += 8
+		}
+	case session.LifecycleWait:
+		if !hide["WAIT"] {
+			badges += " " + waitBadgeStyle.Render("[WAIT]")
+			badgesW += 7
+		}
+	case session.LifecycleDone:
+		if !hide["DONE"] {
+			badges += " " + doneBadgeStyle.Render("[DONE]")
+			badgesW += 7
+		}
 	}
 	// Custom user badges
 	for _, badge := range s.CustomBadges {
@@ -1030,18 +1009,11 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 	allBadges := []badge{
 		{hereBadge, "[HERE]", "In current tmux window"},
 		{liveBadge, "[LIVE]", "Running Claude"},
-		{busyBadge, "[BUSY]", "Responding"},
-		{memoryBadge, "[M]", "Has memory"},
-		{worktreeBadge, "[W]", "Git worktree"},
-		{todoBadge, "[T]", "Has todos"},
-		{taskBadge, "[K]", "Has tasks"},
-		{cronBadge, "[R]", "Has cron jobs"},
-		{planBadge, "[P]", "Has plan"},
-		{agentBadgeStyle, "[A]", "Has subagents"},
-		{compactBadgeStyle, "[C]", "Compacted"},
-		{todoBadge, "[S]", "Used skills"},
-		{mcpBadgeStyle, "[X]", "Used MCP"},
-		{forkBadge, "[F]", "Forked session"},
+		{busyBadge, "[BUSY]", "Responding now"},
+		{bgBadgeStyle, "[BG]", "Background shell/monitor/cron"},
+		{waitBadgeStyle, "[WAIT]", "Idle, waiting for user"},
+		{doneBadgeStyle, "[DONE]", "All work completed"},
+		{stuckBadgeStyle, "[STUCK]", "Live but stale with unfinished work"},
 		{lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true), "[R·exp]", "Remote (experimental)"},
 	}
 	// Render badges in pairs (two per line)
@@ -1063,7 +1035,11 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 	allFilters := []filter{
 		{"is:here", "In current window"},
 		{"is:live", "Live sessions"},
-		{"is:busy", "Busy sessions"},
+		{"is:busy", "Responding now"},
+		{"is:bg", "Background work in flight"},
+		{"is:wait", "Idle, waiting for user"},
+		{"is:done", "All work completed"},
+		{"is:stuck", "Stale, unfinished"},
 		{"is:wt", "Worktree sessions"},
 		{"is:team", "Team sessions"},
 		{"has:mem", "With memory"},

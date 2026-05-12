@@ -3,6 +3,7 @@ package session
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFilterValueFor_Basics(t *testing.T) {
@@ -86,6 +87,53 @@ func TestMatches(t *testing.T) {
 		if got := Matches(fv, c.q); got != c.want {
 			t.Errorf("Matches(%q, %q) = %v, want %v", fv, c.q, got, c.want)
 		}
+	}
+}
+
+func TestFilterValueFor_LifecycleTokens(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name    string
+		sess    Session
+		want    string
+		notWant []string
+	}{
+		{
+			name: "bg",
+			sess: Session{IsLive: true, HasShellJobs: true, ModTime: now},
+			want: "is:bg",
+		},
+		{
+			name: "wait",
+			sess: Session{IsLive: true, ModTime: now, Todos: []TodoItem{{Status: "in_progress"}}},
+			want: "is:wait",
+		},
+		{
+			name: "done",
+			sess: Session{ModTime: now.Add(-time.Hour), Todos: []TodoItem{{Status: "completed"}}},
+			want: "is:done",
+		},
+		{
+			name: "stuck",
+			sess: Session{IsLive: true, ModTime: now.Add(-time.Hour), Tasks: []TaskItem{{Status: "pending"}}},
+			want: "is:stuck",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fv := FilterValueFor(tc.sess, nil)
+			if !strings.Contains(fv, tc.want) {
+				t.Errorf("expected %q in %q", tc.want, fv)
+			}
+			for _, other := range []string{"is:bg", "is:wait", "is:done", "is:stuck"} {
+				if other == tc.want {
+					continue
+				}
+				if strings.Contains(fv, other) {
+					t.Errorf("did not expect %q in %q", other, fv)
+				}
+			}
+		})
 	}
 }
 

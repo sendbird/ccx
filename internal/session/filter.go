@@ -35,6 +35,16 @@ func FilterValueFor(s Session, cwdProjectPaths []string) string {
 	if s.IsResponding {
 		parts = append(parts, "is:busy")
 	}
+	switch s.Lifecycle() {
+	case LifecycleBG:
+		parts = append(parts, "is:bg")
+	case LifecycleWait:
+		parts = append(parts, "is:wait")
+	case LifecycleDone:
+		parts = append(parts, "is:done")
+	case LifecycleStuck:
+		parts = append(parts, "is:stuck")
+	}
 	if s.IsWorktree {
 		parts = append(parts, "is:wt")
 	}
