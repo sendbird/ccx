@@ -893,7 +893,10 @@ func TestBuildCompactEntrySkipsToolOnlyTurns(t *testing.T) {
 		makeTextEntry("assistant", base.Add(2*time.Second), "Found the issue in main.go"),
 	}
 
-	entry := buildCompactEntry(session.Entry{Role: "assistant"}, sourceEntries)
+	entry, _ := compactPreview(previewBuild{
+		Sources:  sourceEntries,
+		Fallback: session.Entry{Role: "assistant"},
+	})
 	if got := len(entry.Content); got != 2 {
 		t.Fatalf("compact entry block count = %d, want 2", got)
 	}
@@ -959,6 +962,243 @@ func TestModeSwitchPreservesNearestSelection(t *testing.T) {
 	}
 	if compactCursor < 0 || compactCursor >= len(app.conv.split.Folds.Entry.Content) {
 		t.Fatalf("compact cursor out of range after restore: %d", compactCursor)
+	}
+}
+
+func TestModeCyclePreservesOriginalSelection(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "Question one"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "FIRST marker xyz1"},
+				{Type: "tool_use", ToolName: "Read", ID: "r1", ToolInput: `{"file_path":"/tmp/a.go"}`},
+				{Type: "tool_use", ToolName: "Read", ID: "r2", ToolInput: `{"file_path":"/tmp/b.go"}`},
+			},
+		},
+		{
+			Role:      "user",
+			Timestamp: base.Add(2 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_result", ID: "r1", Text: "package a"},
+				{Type: "tool_result", ID: "r2", Text: "package b"},
+			},
+		},
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(3 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "MIDDLE marker pqr3"},
+				{Type: "tool_use", ToolName: "Read", ID: "r3", ToolInput: `{"file_path":"/tmp/c.go"}`},
+				{Type: "tool_use", ToolName: "Read", ID: "r4", ToolInput: `{"file_path":"/tmp/d.go"}`},
+			},
+		},
+		{
+			Role:      "user",
+			Timestamp: base.Add(4 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_result", ID: "r3", Text: "package c"},
+				{Type: "tool_result", ID: "r4", Text: "package d"},
+			},
+		},
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(5 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "LAST marker abc2"},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	app.conv.split.Focus = true
+	app.conv.rightPaneMode = previewText
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	// In compact mode select the block containing the "pqr3" (middle) marker.
+	target := -1
+	for i, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "text" && strings.Contains(b.Text, "pqr3") {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatalf("expected compact preview to contain marker pqr3, blocks=%+v", app.conv.split.Folds.Entry.Content)
+	}
+	app.conv.split.Folds.BlockCursor = target
+	app.conv.split.RefreshFoldPreview(app.width, app.splitRatio)
+
+	// Cycle: compact -> standard -> verbose -> compact. At every step the
+	// selected block must remain the "pqr3" marker block — across modes the
+	// per-block text format differs (compact/standard wrap each turn with a
+	// "[separator]\n\nROLE  HH:MM:SS\n" prefix, verbose uses the raw content),
+	// so a naive exact-text match plus blockIndex fallback corrupts the
+	// cursor in verbose and propagates the error back through compact.
+	for _, step := range []struct {
+		mode  int
+		label string
+	}{
+		{previewTool, "standard"},
+		{previewHook, "verbose"},
+		{previewText, "compact"},
+	} {
+		app.setConvDetailLevel(step.mode)
+		bc := app.conv.split.Folds.BlockCursor
+		if bc < 0 || bc >= len(app.conv.split.Folds.Entry.Content) {
+			t.Fatalf("[%s] cursor out of range: %d (n=%d)", step.label, bc, len(app.conv.split.Folds.Entry.Content))
+		}
+		got := app.conv.split.Folds.Entry.Content[bc].Text
+		if !strings.Contains(got, "pqr3") {
+			t.Fatalf("[%s] expected cursor on pqr3 block; got %q", step.label, got)
+		}
+	}
+}
+
+func TestStandardToVerbosePreservesToolOnlyTurn(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "Please plan the work"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ToolName: "Edit", ID: "e1", ToolInput: `{"file_path":"/tmp/a.go"}`},
+			},
+		},
+		{
+			Role:      "user",
+			Timestamp: base.Add(2 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_result", ID: "e1", Text: "edited"},
+			},
+		},
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(3 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ToolName: "TaskUpdate", ID: "t1", ToolInput: `{"taskId":"1","status":"completed"}`},
+			},
+		},
+		{
+			Role:      "user",
+			Timestamp: base.Add(4 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_result", ID: "t1", Text: "ok"},
+			},
+		},
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(5 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ToolName: "Edit", ID: "e2", ToolInput: `{"file_path":"/tmp/b.go"}`},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	app.conv.split.Focus = true
+	app.conv.rightPaneMode = previewTool
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	// In standard mode the tool-only turn shows up as a "[TaskUpdate]" text summary.
+	target := -1
+	for i, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "text" && strings.Contains(b.Text, "[TaskUpdate]") {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatalf("expected standard preview to summarize TaskUpdate turn; blocks=%+v", app.conv.split.Folds.Entry.Content)
+	}
+	app.conv.split.Folds.BlockCursor = target
+	app.conv.split.RefreshFoldPreview(app.width, app.splitRatio)
+
+	app.setConvDetailLevel(previewHook)
+
+	bc := app.conv.split.Folds.BlockCursor
+	if bc < 0 || bc >= len(app.conv.split.Folds.Entry.Content) {
+		t.Fatalf("verbose cursor out of range: %d (n=%d)", bc, len(app.conv.split.Folds.Entry.Content))
+	}
+	got := app.conv.split.Folds.Entry.Content[bc]
+	if got.Type != "tool_use" || got.ToolName != "TaskUpdate" {
+		t.Fatalf("verbose cursor should land on the TaskUpdate tool_use block, got type=%s name=%q", got.Type, got.ToolName)
+	}
+}
+
+func TestVerboseToolToCompactFallsBackToPrecedingText(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		makeTextEntry("user", base, "kick off"),
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Plan: marker conv-A"},
+			},
+		},
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(2 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_use", ToolName: "TaskUpdate", ID: "t1", ToolInput: `{}`},
+			},
+		},
+		{
+			Role:      "user",
+			Timestamp: base.Add(3 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "tool_result", ID: "t1", Text: "ok"},
+			},
+		},
+		{
+			Role:      "assistant",
+			Timestamp: base.Add(4 * time.Second),
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Next: marker conv-B"},
+			},
+		},
+	}
+	app := setupConvApp(t, entries, 160, 40)
+	app.conv.split.Focus = true
+	app.conv.rightPaneMode = previewHook
+	selectConvItemBy(t, app, func(ci convItem) bool {
+		return ci.kind == convMsg && ci.merged.entry.Role == "assistant"
+	})
+	app.updateConvPreview()
+
+	// In verbose, select the TaskUpdate tool_use block (sandwiched between two
+	// text turns). Compact mode drops tool-only turns entirely, so the cursor
+	// should fall back to the nearest preceding plain-text turn ("conv-A").
+	target := -1
+	for i, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "tool_use" && b.ToolName == "TaskUpdate" {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatalf("expected verbose preview to contain TaskUpdate tool_use; blocks=%+v", app.conv.split.Folds.Entry.Content)
+	}
+	app.conv.split.Folds.BlockCursor = target
+	app.conv.split.RefreshFoldPreview(app.width, app.splitRatio)
+
+	app.setConvDetailLevel(previewText)
+
+	bc := app.conv.split.Folds.BlockCursor
+	if bc < 0 || bc >= len(app.conv.split.Folds.Entry.Content) {
+		t.Fatalf("compact cursor out of range: %d (n=%d)", bc, len(app.conv.split.Folds.Entry.Content))
+	}
+	got := app.conv.split.Folds.Entry.Content[bc]
+	if got.Type != "text" || !strings.Contains(got.Text, "conv-A") {
+		t.Fatalf("compact cursor should fall back to preceding 'conv-A' text turn, got type=%s text=%q", got.Type, got.Text)
 	}
 }
 
@@ -1069,16 +1309,95 @@ func TestTreeBgJobPreviewShowsCommandAndOutput(t *testing.T) {
 	}
 
 	app := setupTreeConvApp(t, entries, nil, nil, 160, 50)
-	app.conv.rightPaneMode = previewTool
 	selectConvItemBy(t, app, func(ci convItem) bool { return ci.bgTaskID == "bg-1" })
-	app.updateConvPreview()
 
-	if got := len(app.conv.split.Folds.Entry.Content); got < 3 {
-		t.Fatalf("background job tree preview should include command and output blocks, got %d", got)
+	// Standard mode: command lives in the synthetic header. Like regular
+	// conversation standard previews, tool_result bodies aren't expanded here.
+	app.setConvDetailLevel(previewTool)
+	stdText := entryFullText(app.conv.split.Folds.Entry)
+	if !strings.Contains(stdText, "Command: npm test --watch --runInBand") {
+		t.Fatalf("standard bg job preview should include command in header; got %q", stdText)
 	}
-	text := entryFullText(app.conv.split.Folds.Entry)
-	if !strings.Contains(text, "Command: npm test --watch --runInBand") {
-		t.Fatalf("background job preview should include command text, got %q", text)
+
+	// Verbose mode keeps the full synthetic entry, including the underlying
+	// tool_use / tool_result blocks for the bg job.
+	app.setConvDetailLevel(previewHook)
+	verbose := app.conv.split.Folds.Entry.Content
+	var verboseFull strings.Builder
+	hasToolResult := false
+	for _, b := range verbose {
+		verboseFull.WriteString(b.Text)
+		verboseFull.WriteByte('\n')
+		if b.Type == "tool_result" {
+			hasToolResult = true
+		}
+	}
+	if !strings.Contains(verboseFull.String(), "Command: npm test --watch --runInBand") {
+		t.Fatalf("verbose bg job preview should include command; got %q", verboseFull.String())
+	}
+	if !hasToolResult {
+		t.Fatalf("verbose bg job preview should include tool_result block; got blocks=%+v", verbose)
+	}
+	if !strings.Contains(verboseFull.String(), "all tests passed") {
+		t.Fatalf("verbose bg job preview should retain tool_result output text; got %q", verboseFull.String())
+	}
+}
+
+func TestTreeTaskCompactModeFiltersToTextOnly(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		{
+			Role:      "assistant",
+			Timestamp: base,
+			Content: []session.ContentBlock{
+				{Type: "text", Text: "Starting refactor with marker xyz"},
+				{Type: "tool_use", ToolName: "TaskUpdate", ToolInput: `{"taskId":"99","status":"in_progress"}`},
+				{Type: "tool_use", ToolName: "Edit", ToolInput: `{"file_path":"/tmp/a.go"}`},
+			},
+		},
+	}
+	tasks := []session.TaskItem{{ID: "99", Subject: "Demo task", Status: "in_progress", Description: "verify mode distinction"}}
+
+	app := setupTreeConvApp(t, entries, tasks, nil, 160, 50)
+	selectConvItemBy(t, app, func(ci convItem) bool { return ci.kind == convTask && ci.task.ID == "99" })
+
+	// Verbose: keeps the rich synthetic entry. Tool-use blocks survive.
+	app.setConvDetailLevel(previewHook)
+	verboseContent := app.conv.split.Folds.Entry.Content
+	hasToolUse := false
+	for _, b := range verboseContent {
+		if b.Type == "tool_use" {
+			hasToolUse = true
+			break
+		}
+	}
+	if !hasToolUse {
+		t.Fatalf("verbose tree task preview should retain tool_use blocks, blocks=%+v", verboseContent)
+	}
+
+	// Compact: text-only filter. No tool_use blocks should remain.
+	app.setConvDetailLevel(previewText)
+	compactContent := app.conv.split.Folds.Entry.Content
+	for _, b := range compactContent {
+		if b.Type != "text" {
+			t.Fatalf("compact tree task preview should keep text blocks only, got %s in %+v", b.Type, compactContent)
+		}
+	}
+	if !strings.Contains(entryFullText(app.conv.split.Folds.Entry), "Starting refactor with marker xyz") {
+		t.Fatalf("compact tree task preview should retain conversation text; got %q", entryFullText(app.conv.split.Folds.Entry))
+	}
+
+	// Switching back to verbose restores the rich view (tool_use returns).
+	app.setConvDetailLevel(previewHook)
+	hasToolUseAfter := false
+	for _, b := range app.conv.split.Folds.Entry.Content {
+		if b.Type == "tool_use" {
+			hasToolUseAfter = true
+			break
+		}
+	}
+	if !hasToolUseAfter {
+		t.Fatalf("verbose tree task preview should retain tool_use after round-trip, blocks=%+v", app.conv.split.Folds.Entry.Content)
 	}
 }
 
@@ -1116,6 +1435,111 @@ func TestTreeTaskPreviewShowsActivityLog(t *testing.T) {
 	text := entryFullText(app.conv.split.Folds.Entry)
 	if !strings.Contains(text, "Updated the renderer") {
 		t.Fatalf("task tree preview should include activity log text, got %q", text)
+	}
+}
+
+func TestPopNavFrameRestoresParentConvPosition(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.state = viewConversation
+
+	if items := app.convList.Items(); len(items) < 2 {
+		t.Fatalf("test needs at least 2 conv items; got %d", len(items))
+	}
+	originalIdx := 1
+	app.convList.Select(originalIdx)
+	originalItems := app.conv.items
+
+	// Simulate the drilldown push (cursor + parent state captured).
+	app.pushNavFrame()
+
+	// Mutate state as a real task drilldown would: cursor at 0, different items,
+	// task.ID set. popNavFrame should undo all of this.
+	app.conv.task = session.TaskItem{ID: "task-x"}
+	app.conv.items = []convItem{originalItems[0]} // truncated synthetic list
+	app.rebuildConversationList(0)
+
+	app.popNavFrame()
+	if app.state != viewConversation {
+		t.Fatalf("popNavFrame should leave us in viewConversation; got %v", app.state)
+	}
+	if app.conv.task.ID != "" {
+		t.Fatalf("popNavFrame should clear conv.task; got %+v", app.conv.task)
+	}
+	if got := len(app.conv.items); got != len(originalItems) {
+		t.Fatalf("conv.items should be restored (%d items); got %d", len(originalItems), got)
+	}
+	if got := app.convList.Index(); got != originalIdx {
+		t.Fatalf("cursor should restore to original idx=%d; got %d", originalIdx, got)
+	}
+}
+
+func TestEscFromTaskDrilldownReturnsToParentConv(t *testing.T) {
+	// Reproduce the user-reported flow: enter a session conv, drill into a
+	// task, then press ESC twice. The first ESC should land back in the parent
+	// session conversation (not the session list), and a second ESC should
+	// still leave us in the parent conv view — it must not skip past it.
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.state = viewConversation
+	originalIdx := 1
+	app.convList.Select(originalIdx)
+
+	// Simulate the drilldown the case "enter" handler does.
+	app.pushNavFrame()
+	app.conv.task = session.TaskItem{ID: "task-x", Subject: "drilldown probe"}
+	// Preview hidden when ESC fires reproduces the actual failing flow.
+	app.conv.split.Show = false
+
+	app = pressKey(app, "esc")
+
+	if app.state != viewConversation {
+		t.Fatalf("first ESC from task drilldown should stay in viewConversation; got state=%v", app.state)
+	}
+	if app.conv.task.ID != "" {
+		t.Fatalf("first ESC should clear conv.task (pop); got %+v", app.conv.task)
+	}
+	if !app.conv.split.Show {
+		t.Fatalf("first ESC should re-open the preview pane in the parent conv view")
+	}
+
+	// Second ESC closes the (re-opened) preview but stays in the parent
+	// conv view. The drilldown→pop ESC must not skip past the parent into
+	// the session list in one keystroke.
+	app = pressKey(app, "esc")
+	if app.state != viewConversation {
+		t.Fatalf("second ESC should still leave us in viewConversation; got state=%v", app.state)
+	}
+	if app.conv.split.Show {
+		t.Fatalf("second ESC should close the preview in the parent conv view")
+	}
+
+	// Third ESC (parent conv, preview closed) stays in the conv list — ESC
+	// never auto-exits the conv view.
+	app = pressKey(app, "esc")
+	if app.state != viewConversation {
+		t.Fatalf("third ESC must NOT exit to session list; got state=%v", app.state)
+	}
+}
+
+func TestEscFromPlainConvStaysInConvList(t *testing.T) {
+	// In a plain session conv view (no drilldown):
+	//   - preview shown   → ESC closes it (stay in conv list)
+	//   - preview closed  → ESC stays in conv list (no auto-exit; `left`
+	//                       is the explicit exit key)
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.state = viewConversation
+	app.conv.split.Show = true
+
+	app = pressKey(app, "esc")
+	if app.state != viewConversation {
+		t.Fatalf("first ESC should keep us in viewConversation; got state=%v", app.state)
+	}
+	if app.conv.split.Show {
+		t.Fatalf("first ESC should close the preview")
+	}
+
+	app = pressKey(app, "esc")
+	if app.state != viewConversation {
+		t.Fatalf("second ESC must NOT exit to session list; got state=%v", app.state)
 	}
 }
 
@@ -1440,7 +1864,7 @@ func TestBuildStandardEntryPlacesArtifactsNearRelatedText(t *testing.T) {
 			{Type: "text", Text: "And here is the summary"},
 		},
 	}
-	preview := buildStandardEntry(entry)
+	preview, _ := standardPreview(previewBuild{Fallback: entry})
 	textIdx := -1
 	fileIdx := -1
 	artifactsHeaderIdx := -1

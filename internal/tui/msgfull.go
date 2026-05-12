@@ -14,16 +14,19 @@ import (
 
 // navFrame stores state for navigating back from an agent drill-down.
 type navFrame struct {
-	sess     session.Session
-	messages []session.Entry
-	merged   []mergedMsg
-	agents   []session.Subagent
-	items    []convItem
-	listIdx  int // cursor position to restore
-	agent    session.Subagent
-	task     session.TaskItem
-	cron     session.CronItem
-	fromView viewState // which view pushed this frame
+	sess          session.Session
+	messages      []session.Entry
+	merged        []mergedMsg
+	agents        []session.Subagent
+	items         []convItem
+	treeItems     []convItem // tree-mode items (parallel to items; needed because list index is mode-specific)
+	leftPaneMode  int        // flat vs tree at push time — cursor index is meaningless without it
+	rightPaneMode int        // compact/standard/verbose at push time
+	listIdx       int        // cursor position to restore, indexes into items or treeItems per leftPaneMode
+	agent         session.Subagent
+	task          session.TaskItem
+	cron          session.CronItem
+	fromView      viewState // which view pushed this frame
 }
 
 // openMsgFullForEntry opens viewMessageFull for a specific merged message.
@@ -482,16 +485,19 @@ func (a *App) renderMsgFullSearchHintBox() string {
 // pushNavFrame saves current conversation state onto the nav stack.
 func (a *App) pushNavFrame() {
 	frame := navFrame{
-		sess:     a.conv.sess,
-		messages: a.conv.messages,
-		merged:   a.conv.merged,
-		agents:   a.conv.agents,
-		items:    a.conv.items,
-		listIdx:  a.convList.Index(),
-		agent:    a.conv.agent,
-		task:     a.conv.task,
-		cron:     a.conv.cron,
-		fromView: a.state,
+		sess:          a.conv.sess,
+		messages:      a.conv.messages,
+		merged:        a.conv.merged,
+		agents:        a.conv.agents,
+		items:         a.conv.items,
+		treeItems:     a.conv.treeItems,
+		leftPaneMode:  a.conv.leftPaneMode,
+		rightPaneMode: a.conv.rightPaneMode,
+		listIdx:       a.convList.Index(),
+		agent:         a.conv.agent,
+		task:          a.conv.task,
+		cron:          a.conv.cron,
+		fromView:      a.state,
 	}
 	a.navStack = append(a.navStack, frame)
 }
@@ -538,18 +544,18 @@ func (a *App) popNavFrame() (tea.Model, tea.Cmd) {
 		a.conv.merged = frame.merged
 		a.conv.agents = frame.agents
 		a.conv.items = frame.items
+		a.conv.treeItems = frame.treeItems
+		a.conv.leftPaneMode = frame.leftPaneMode
+		a.conv.rightPaneMode = frame.rightPaneMode
 		a.conv.agent = frame.agent
 		a.conv.task = frame.task
 		a.conv.cron = frame.cron
 		a.msgFull.allMessages = false
 
-		contentH := ContentHeight(a.height)
-		a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
-		a.conv.split.List = &a.convList
-
-		if frame.listIdx < len(a.conv.items) {
-			a.convList.Select(frame.listIdx)
-		}
+		// rebuildConversationList respects leftPaneMode (flat vs tree) so the
+		// cursor index lands on the correct slice — frame.listIdx was captured
+		// from whichever pane mode was active at push time.
+		a.rebuildConversationList(frame.listIdx)
 		a.conv.split.CacheKey = ""
 		a.state = viewConversation
 		a.updateConvPreview()

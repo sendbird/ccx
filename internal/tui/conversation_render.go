@@ -657,14 +657,26 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 					continue
 				}
 				if subject != "" {
-					// TaskCreate: show subject directly
+					// TaskCreate: show subject directly. Resolve the task ID
+					// from the session's task list by subject so the preview
+					// and Enter drilldown can target the right entries —
+					// without an ID, downstream filtering (extractTaskEntries
+					// / openTaskConversation) can't distinguish this task
+					// from any other ID-less TaskCreate match.
 					label := icon + " " + subject
 					if len(label) > 50 {
 						label = label[:47] + "..."
 					}
+					resolvedID := ""
+					for _, t := range tasks {
+						if t.Subject == subject {
+							resolvedID = t.ID
+							break
+						}
+					}
 					items = append(items, convItem{
 						kind:      convTask,
-						task:      session.TaskItem{Subject: label},
+						task:      session.TaskItem{Subject: label, ID: resolvedID},
 						indent:    1,
 						parentIdx: parentIdx,
 					})

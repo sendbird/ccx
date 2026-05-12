@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -417,9 +418,22 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.liveTail = false
 			a.conv.split.BottomAlign = false
 			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
-				return a.popNavFrame()
+				// Pop one level back into the originating conv view and
+				// re-open the preview pane. The next ESC will close that
+				// preview before considering further navigation, so the
+				// user lands cleanly in the parent conv view instead of
+				// skipping past it to the session list.
+				m, cmd := a.popNavFrame()
+				if app, ok := m.(*App); ok {
+					app.conv.split.Show = true
+					app.conv.split.CacheKey = ""
+					app.updateConvPreview()
+				}
+				return m, cmd
 			}
-			a.state = viewSessions
+			// Plain conv view (no drilldown, preview already closed): stay
+			// in the conv list. ESC never auto-exits to the session list;
+			// use `left` for that explicit navigation.
 			return a, nil
 		}
 	case "enter":
@@ -472,6 +486,21 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					a.pushNavFrame()
 					return a.openAgentConversation(agents[0])
 				}
+			}
+			// Tasks without a real ID (e.g. TaskCreate-only items built from
+			// the tool input alone) can't be filtered by ID. Falling through
+			// to openTaskConversation would mismatch and surface an unrelated
+			// task's content. Open the parent message in msgFull instead so
+			// the user lands on the turn that defined the task.
+			if item.task.ID == "" {
+				items := a.convList.Items()
+				if item.parentIdx >= 0 && item.parentIdx < len(items) {
+					if parent, ok := items[item.parentIdx].(convItem); ok && parent.kind == convMsg {
+						a.pushNavFrame()
+						return a.openMsgFullForEntry(parent.merged)
+					}
+				}
+				return a, nil
 			}
 			// Otherwise drill into task — show conversation entries related to this task
 			a.pushNavFrame()
@@ -754,16 +783,15 @@ func (a *App) updateConvPreview() {
 		return
 	}
 
-	var entry session.Entry
-	var sourceEntries []session.Entry
+	var build previewBuild
 	switch item.kind {
 	case convMsg:
-		entry = item.merged.entry
+		build.Fallback = item.merged.entry
 		if item.merged.startIdx >= 0 && item.merged.endIdx < len(a.conv.messages) && item.merged.startIdx <= item.merged.endIdx {
-			sourceEntries = append([]session.Entry(nil), a.conv.messages[item.merged.startIdx:item.merged.endIdx+1]...)
+			build.Sources = append([]session.Entry(nil), a.conv.messages[item.merged.startIdx:item.merged.endIdx+1]...)
 		}
 	case convAgent:
-		entry = buildAgentPreviewEntry(item.agent)
+		build = buildAgentPreview(item.agent)
 	case convSessionMeta:
 		switch item.sessionMeta {
 		case "memory":
@@ -791,18 +819,23 @@ func (a *App) updateConvPreview() {
 			return
 		}
 		if item.bgTaskID != "" {
-			entry = a.buildBgJobPreviewEntry(item.bgTaskID)
+			build = a.buildBgJobPreview(item.bgTaskID)
 		} else {
-			entry = a.buildTaskPreviewEntry(item.task)
+			build = a.buildTaskPreview(item.task)
 		}
 	}
 
-	if a.conv.leftPaneMode != convPaneTree {
-		if a.conv.rightPaneMode == previewText {
-			entry = buildCompactEntry(entry, sourceEntries)
-		} else if a.conv.rightPaneMode == previewTool {
-			entry = buildStandardEntryWithSources(entry, sourceEntries)
-		}
+	// Mode transformation is uniform: every preview kind expresses itself as
+	// a previewBuild, and the three transformers consume it the same way.
+	var entry session.Entry
+	var blockSrcIdx []int
+	switch a.conv.rightPaneMode {
+	case previewText:
+		entry, blockSrcIdx = compactPreview(build)
+	case previewTool:
+		entry, blockSrcIdx = standardPreview(build)
+	default:
+		entry, blockSrcIdx = verbosePreview(build)
 	}
 
 	cacheKey := fmt.Sprintf("%s:%d:%x", baseKey, len(entry.Content), entryContentHash(entry.Content))
@@ -816,6 +849,7 @@ func (a *App) updateConvPreview() {
 		sp.CacheKey = cacheKey
 		if sp.Folds != nil {
 			sp.Folds.ResetWithPrefs(entry, sp.TypeFoldPrefs, sp.TypeFmtPrefs)
+			sp.Folds.BlockSourceIdx = blockSrcIdx
 			sp.Folds.HideHooks = a.conv.rightPaneMode == previewTool
 			if sp.Folds.BlockFilter != "" {
 				sp.Folds.BlockVisible = applyBlockFilter(sp.Folds.BlockFilter, entry)
@@ -834,6 +868,7 @@ func (a *App) updateConvPreview() {
 		sp.CacheKey = cacheKey
 		if sp.Folds != nil {
 			sp.Folds.GrowBlocks(entry, oldBC, sp.TypeFoldPrefs, sp.TypeFmtPrefs)
+			sp.Folds.BlockSourceIdx = blockSrcIdx
 			sp.Folds.HideHooks = a.conv.rightPaneMode == previewTool
 		}
 		sp.RefreshFoldPreview(a.width, a.splitRatio)
@@ -868,34 +903,35 @@ func entryContentHash(blocks []session.ContentBlock) uint64 {
 	return h
 }
 
-func buildCompactEntry(entry session.Entry, sourceEntries []session.Entry) session.Entry {
-	if len(sourceEntries) == 0 {
-		blocks := make([]session.ContentBlock, 0, len(entry.Content))
-		first := true
-		for _, b := range entry.Content {
-			if b.Type != "text" {
-				continue
-			}
-			text := strings.TrimSpace(session.StripXMLTags(b.Text))
-			if text == "" {
-				continue
-			}
-			if !first {
-				text = "[separator]\n\n" + text
-			}
-			blocks = append(blocks, session.ContentBlock{Type: "text", Text: text})
-			first = false
-		}
-		if len(blocks) == 0 {
-			blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no text content)"})
-		}
-		entry.Content = blocks
-		return entry
-	}
+// previewBuild captures everything a preview transformer needs. Every preview
+// kind — flat conversation turn, task, agent, background job — produces one
+// of these, and the compact / standard / verbose transformers consume them
+// uniformly so there's no per-kind special casing downstream.
+//
+//   - Header   : optional descriptor (task subject, agent id, bg command).
+//                Prepended as a single text block in every mode so the user
+//                always sees the context.
+//   - Sources  : per-turn raw entries; compact and standard summarise each.
+//   - Fallback : pre-flattened entry used for verbose mode (and as the
+//                cache-key carrier even when Sources is empty).
+type previewBuild struct {
+	Header   string
+	Sources  []session.Entry
+	Fallback session.Entry
+}
 
-	blocks := make([]session.ContentBlock, 0, len(sourceEntries)*2)
-	first := true
-	for _, raw := range sourceEntries {
+// compactPreview emits one text block per turn (plus an optional header block
+// at the top). Returns the entry and a parallel slice mapping each output
+// block to its source-entry index (-1 for the synthetic header).
+func compactPreview(b previewBuild) (session.Entry, []int) {
+	blocks := make([]session.ContentBlock, 0, len(b.Sources)+1)
+	var srcIdx []int
+	if b.Header != "" {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.TrimSpace(b.Header)})
+		srcIdx = append(srcIdx, -1)
+	}
+	first := len(blocks) == 0
+	for i, raw := range b.Sources {
 		text := compactPreviewMessageText(raw)
 		if strings.TrimSpace(text) == "" {
 			continue
@@ -904,34 +940,47 @@ func buildCompactEntry(entry session.Entry, sourceEntries []session.Entry) sessi
 			text = "[separator]\n\n" + text
 		}
 		blocks = append(blocks, session.ContentBlock{Type: "text", Text: text})
+		srcIdx = append(srcIdx, i)
 		first = false
 	}
 	if len(blocks) == 0 {
 		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no text content)"})
+		srcIdx = append(srcIdx, -1)
 	}
-	entry.Content = blocks
-	return entry
+	out := b.Fallback
+	out.Content = blocks
+	return out, srcIdx
 }
 
-func buildStandardEntryWithSources(entry session.Entry, sourceEntries []session.Entry) session.Entry {
-	if len(sourceEntries) == 0 {
-		sourceEntries = []session.Entry{{
-			Role:      entry.Role,
-			Timestamp: entry.Timestamp,
-			Content:   append([]session.ContentBlock(nil), entry.Content...),
+// standardPreview emits a text summary + artifact rows (file / change / url)
+// per turn, with the optional header as the first block.
+func standardPreview(b previewBuild) (session.Entry, []int) {
+	sources := b.Sources
+	if len(sources) == 0 {
+		// No per-turn breakdown — treat the fallback entry as a single turn so
+		// we still get text-summary + artifact extraction.
+		sources = []session.Entry{{
+			Role:      b.Fallback.Role,
+			Timestamp: b.Fallback.Timestamp,
+			Content:   append([]session.ContentBlock(nil), b.Fallback.Content...),
 		}}
 	}
 
-	blocks := make([]session.ContentBlock, 0, len(sourceEntries)*4)
-	firstSection := true
-	for _, raw := range sourceEntries {
+	blocks := make([]session.ContentBlock, 0, len(sources)*4+1)
+	var srcIdx []int
+	if b.Header != "" {
+		blocks = append(blocks, session.ContentBlock{Type: "text", Text: strings.TrimSpace(b.Header)})
+		srcIdx = append(srcIdx, -1)
+	}
+	firstSection := len(blocks) == 0
+	for i, raw := range sources {
 		sectionBlocks := make([]session.ContentBlock, 0, len(raw.Content)+4)
 		if msg := previewMessageText(raw); msg != "" {
 			sectionBlocks = append(sectionBlocks, session.ContentBlock{Type: "text", Text: msg})
 		}
-		for _, b := range raw.Content {
-			if b.Type == "image" {
-				sectionBlocks = append(sectionBlocks, b)
+		for _, blk := range raw.Content {
+			if blk.Type == "image" {
+				sectionBlocks = append(sectionBlocks, blk)
 			}
 		}
 		for _, item := range extract.BlockFilePaths(raw.Content) {
@@ -950,22 +999,57 @@ func buildStandardEntryWithSources(entry session.Entry, sourceEntries []session.
 		if len(sectionBlocks) == 0 {
 			continue
 		}
-		for i := range sectionBlocks {
-			if !firstSection && i == 0 && sectionBlocks[i].Type == "text" {
-				sectionBlocks[i].Text = "[separator]\n\n" + sectionBlocks[i].Text
+		for j := range sectionBlocks {
+			if !firstSection && j == 0 && sectionBlocks[j].Type == "text" {
+				sectionBlocks[j].Text = "[separator]\n\n" + sectionBlocks[j].Text
 			}
 		}
 		blocks = append(blocks, sectionBlocks...)
+		for range sectionBlocks {
+			srcIdx = append(srcIdx, i)
+		}
 		firstSection = false
 	}
 	if len(blocks) == 0 {
 		blocks = append(blocks, session.ContentBlock{Type: "text", Text: "(no content)"})
+		srcIdx = append(srcIdx, -1)
 	}
-	entry.Content = blocks
-	return entry
+	out := b.Fallback
+	out.Content = blocks
+	return out, srcIdx
 }
-func buildStandardEntry(entry session.Entry) session.Entry {
-	return buildStandardEntryWithSources(entry, nil)
+
+// verbosePreview returns the pre-flattened fallback entry unchanged and a
+// parallel source-index map (when the fallback's block count matches the
+// concatenated Sources content shape). The mapping is nil for synthetic
+// fallbacks that insert their own header/divider blocks; anchor matching
+// then falls back to numeric block index, which is fine for verbose.
+func verbosePreview(b previewBuild) (session.Entry, []int) {
+	srcIdx := computeVerboseBlockSources(b.Fallback, b.Sources)
+	return b.Fallback, srcIdx
+}
+
+// computeVerboseBlockSources maps each block of the entry back to its
+// source-entry index by walking sources in order. Returns nil when the merged
+// content shape doesn't match the source content totals.
+func computeVerboseBlockSources(entry session.Entry, sources []session.Entry) []int {
+	if len(sources) == 0 {
+		return nil
+	}
+	total := 0
+	for _, src := range sources {
+		total += len(src.Content)
+	}
+	if total != len(entry.Content) {
+		return nil
+	}
+	out := make([]int, 0, len(entry.Content))
+	for i, src := range sources {
+		for range src.Content {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 func renderPreviewHeader(entry session.Entry, textW int) string {
@@ -1387,15 +1471,49 @@ func (a *App) setConvPreviewText(content string) {
 }
 
 type convPreviewAnchor struct {
-	baseKey    string
-	blockText  string
-	blockType  string
-	viewportY  int
-	blockIndex int
+	baseKey     string
+	blockText   string
+	blockCore   string
+	blockType   string
+	toolName    string // for tool_use blocks or text summaries like "[ToolName]"
+	toolOrdinal int    // 0-based occurrence index among same-name tool blocks before the cursor
+	sourceIdx   int    // source-entry index for this block (-1 = unknown)
+	viewportY   int
+	blockIndex  int
+}
+
+// previewBlockToolRef returns the tool name carried by a block — directly from
+// tool_use blocks, or extracted from "[ToolName]" summaries embedded in text
+// blocks. Returns "" if the block does not reference a single tool.
+func previewBlockToolRef(block session.ContentBlock) string {
+	if block.Type == "tool_use" {
+		return block.ToolName
+	}
+	if block.Type != "text" {
+		return ""
+	}
+	// Strip "[separator]\n\nROLE  HH:MM:SS\n" decorations first so the
+	// "[ToolName]" summary isn't shadowed by a leading "[separator]" match.
+	core := previewBlockCore(strings.TrimSpace(session.StripXMLTags(block.Text)))
+	if core == "" {
+		return ""
+	}
+	names := previewBlockToolNames(core)
+	if len(names) != 1 {
+		return ""
+	}
+	name := names[0]
+	// Skip pseudo-tags ("[file] /path", "[url] http://...", "[change] /path")
+	// emitted by standardPreview — they are not real tool names.
+	switch name {
+	case "file", "url", "change", "separator":
+		return ""
+	}
+	return name
 }
 
 func captureConvPreviewAnchor(sp *SplitPane, baseKey string) convPreviewAnchor {
-	anchor := convPreviewAnchor{baseKey: baseKey, blockIndex: -1}
+	anchor := convPreviewAnchor{baseKey: baseKey, blockIndex: -1, sourceIdx: -1}
 	if sp == nil {
 		return anchor
 	}
@@ -1409,8 +1527,70 @@ func captureConvPreviewAnchor(sp *SplitPane, baseKey string) convPreviewAnchor {
 	block := sp.Folds.Entry.Content[sp.Folds.BlockCursor]
 	anchor.blockType = block.Type
 	anchor.blockText = strings.TrimSpace(session.StripXMLTags(block.Text))
+	anchor.blockCore = previewBlockCore(anchor.blockText)
+	anchor.toolName = previewBlockToolRef(block)
+	if anchor.toolName != "" {
+		// Count preceding blocks that reference the same tool so we can pick
+		// the same occurrence in the new mode.
+		for i := 0; i < sp.Folds.BlockCursor; i++ {
+			if previewBlockToolRef(sp.Folds.Entry.Content[i]) == anchor.toolName {
+				anchor.toolOrdinal++
+			}
+		}
+	}
+	if len(sp.Folds.BlockSourceIdx) == len(sp.Folds.Entry.Content) {
+		anchor.sourceIdx = sp.Folds.BlockSourceIdx[sp.Folds.BlockCursor]
+	}
 	anchor.blockIndex = sp.Folds.BlockCursor
 	return anchor
+}
+
+// previewHeaderRE matches a role-header line like "USER" or "ASSISTANT  12:00:03"
+// produced by compactPreviewMessageText / previewMessageText.
+var previewHeaderRE = regexp.MustCompile(`^[A-Z][A-Z_]*(\s+\d{2}:\d{2}:\d{2})?$`)
+
+// previewToolSummaryRE extracts tool names from a previewMessageText summary
+// such as "[TaskUpdate]", "[[TaskUpdate]]", or "[Read×3, Edit]".
+var previewToolSummaryRE = regexp.MustCompile(`\[+([^\[\]]+)\]+`)
+
+// previewBlockToolNames returns the tool names referenced inside a "[Name, Name×N]"
+// style summary. Returns nil when no summary is present.
+func previewBlockToolNames(text string) []string {
+	m := previewToolSummaryRE.FindStringSubmatch(text)
+	if len(m) < 2 {
+		return nil
+	}
+	parts := strings.Split(m[1], ",")
+	names := make([]string, 0, len(parts))
+	for _, p := range parts {
+		name := strings.TrimSpace(p)
+		if idx := strings.Index(name, "×"); idx > 0 {
+			name = strings.TrimSpace(name[:idx])
+		}
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// previewBlockCore strips mode-specific decorations from a block's text so the
+// same logical block matches across compact / standard / verbose modes.
+// Compact and standard wrap each turn with a "[separator]\n\n" prefix and a
+// "ROLE  HH:MM:SS\n" header; verbose uses the raw content unchanged.
+func previewBlockCore(text string) string {
+	s := strings.TrimSpace(text)
+	s = strings.TrimPrefix(s, "[separator]")
+	s = strings.TrimLeft(s, "\n")
+	if idx := strings.IndexByte(s, '\n'); idx > 0 {
+		if previewHeaderRE.MatchString(s[:idx]) {
+			s = s[idx+1:]
+		}
+	} else if previewHeaderRE.MatchString(s) {
+		// Header-only block (e.g. user tool_result entry with no body).
+		return ""
+	}
+	return strings.TrimSpace(s)
 }
 
 func restoreConvPreviewAnchor(sp *SplitPane, anchor convPreviewAnchor) {
@@ -1426,13 +1606,81 @@ func restoreConvPreviewAnchor(sp *SplitPane, anchor convPreviewAnchor) {
 			break
 		}
 	}
-	if best < 0 && anchor.blockText != "" {
+	// Match on stripped-decoration text so a block selected in compact/standard
+	// (which carries a "[separator]\n\nROLE  HH:MM:SS\n" prefix) still matches
+	// the same logical block in verbose mode (which has only the raw text).
+	if best < 0 && anchor.blockCore != "" {
 		for i, block := range sp.Folds.Entry.Content {
+			if block.Type != anchor.blockType {
+				continue
+			}
 			text := strings.TrimSpace(session.StripXMLTags(block.Text))
-			if text == anchor.blockText {
+			if previewBlockCore(text) == anchor.blockCore {
 				best = i
 				break
 			}
+		}
+	}
+	// Source-idx bridge: blocks built from the same source entry should map
+	// to each other across modes. Prefer text-conversation blocks (the user
+	// asked tool/result blocks to fall back to the nearest plain-text turn
+	// when leaving verbose for compact/standard).
+	srcMap := sp.Folds.BlockSourceIdx
+	hasSrc := anchor.sourceIdx >= 0 && len(srcMap) == len(sp.Folds.Entry.Content)
+	if best < 0 && hasSrc {
+		// Same source, same type.
+		for i, src := range srcMap {
+			if src == anchor.sourceIdx && sp.Folds.Entry.Content[i].Type == anchor.blockType {
+				best = i
+				break
+			}
+		}
+		// Same source, text block (preferred conversation representation).
+		if best < 0 {
+			for i, src := range srcMap {
+				if src == anchor.sourceIdx && sp.Folds.Entry.Content[i].Type == "text" {
+					best = i
+					break
+				}
+			}
+		}
+		// Same source, any block.
+		if best < 0 {
+			for i, src := range srcMap {
+				if src == anchor.sourceIdx {
+					best = i
+					break
+				}
+			}
+		}
+		// Nearest preceding source that has a text block (handles verbose
+		// tool_use -> compact, where the tool's own source produced no text).
+		if best < 0 {
+			bestSrc := -1
+			for i, src := range srcMap {
+				if src >= 0 && src <= anchor.sourceIdx && src > bestSrc && sp.Folds.Entry.Content[i].Type == "text" {
+					best = i
+					bestSrc = src
+				}
+			}
+		}
+	}
+	// Tool-name bridge: standard mode collapses a tool-only turn into a single
+	// "[ToolName]" text summary, while verbose has the underlying tool_use
+	// blocks. Pick the same Nth occurrence by source order.
+	if best < 0 && anchor.toolName != "" {
+		var matches []int
+		for i, block := range sp.Folds.Entry.Content {
+			if previewBlockToolRef(block) == anchor.toolName {
+				matches = append(matches, i)
+			}
+		}
+		if len(matches) > 0 {
+			ord := anchor.toolOrdinal
+			if ord >= len(matches) {
+				ord = len(matches) - 1
+			}
+			best = matches[ord]
 		}
 	}
 	if best < 0 && anchor.blockIndex >= 0 {
@@ -1454,9 +1702,10 @@ func restoreConvPreviewAnchor(sp *SplitPane, anchor convPreviewAnchor) {
 	sp.ScrollToBlock()
 }
 
-// buildAgentPreviewEntry builds a synthetic Entry from an agent's messages
-// so the preview can use fold/unfold block cursor like regular messages.
-func buildAgentPreviewEntry(agent session.Subagent) session.Entry {
+// buildAgentPreview assembles the agent preview build (header + raw conv
+// entries + flattened fallback). External callers that only need the
+// flattened entry can use buildAgentPreviewEntry as a thin wrapper.
+func buildAgentPreview(agent session.Subagent) previewBuild {
 	entries, err := session.LoadMessages(agent.FilePath)
 	if err == nil && len(entries) > 0 {
 		entries = filterAgentContextEntries(entries)
@@ -1472,7 +1721,17 @@ func buildAgentPreviewEntry(agent session.Subagent) session.Entry {
 	if agent.FirstPrompt != "" {
 		header += "\nPrompt: " + agent.FirstPrompt
 	}
-	return buildConversationPreviewEntry(header, agent.Timestamp, entries)
+	return previewBuild{
+		Header:   header,
+		Sources:  entries,
+		Fallback: buildConversationPreviewEntry(header, agent.Timestamp, entries),
+	}
+}
+
+// buildAgentPreviewEntry is a backwards-compatible shim returning just the
+// flattened fallback entry. New code should use buildAgentPreview directly.
+func buildAgentPreviewEntry(agent session.Subagent) session.Entry {
+	return buildAgentPreview(agent).Fallback
 }
 
 func convPreviewBaseKey(item convItem) string {
@@ -1671,15 +1930,29 @@ func extractBgTaskEntries(merged []mergedMsg, taskID string) []session.Entry {
 	return entries
 }
 
-func (a *App) buildBgJobPreviewEntry(taskID string) session.Entry {
+// buildBgJobPreview assembles the bg-job preview build: header (job id +
+// command), per-turn sources, and a flattened fallback entry. Callers that
+// only need the fallback entry can use buildBgJobPreviewEntry as a shim.
+func (a *App) buildBgJobPreview(taskID string) previewBuild {
 	header := fmt.Sprintf("Background Job: %s", taskID)
 	if cmd := buildBgTaskMap(a.conv.merged)[taskID]; cmd != "" {
 		header += "\nCommand: " + cmd
 	}
-	return buildConversationPreviewEntry(header, time.Time{}, extractBgTaskEntries(a.conv.merged, taskID))
+	raws := extractBgTaskEntries(a.conv.merged, taskID)
+	return previewBuild{
+		Header:   header,
+		Sources:  raws,
+		Fallback: buildConversationPreviewEntry(header, time.Time{}, raws),
+	}
 }
 
-func (a *App) buildTaskPreviewEntry(task session.TaskItem) session.Entry {
+func (a *App) buildBgJobPreviewEntry(taskID string) session.Entry {
+	return a.buildBgJobPreview(taskID).Fallback
+}
+
+// buildTaskPreview assembles the task preview build: header (id + subject +
+// status + description), per-turn sources, and a flattened fallback entry.
+func (a *App) buildTaskPreview(task session.TaskItem) previewBuild {
 	header := "Task"
 	if task.ID != "" {
 		header += ": " + task.ID
@@ -1693,7 +1966,16 @@ func (a *App) buildTaskPreviewEntry(task session.TaskItem) session.Entry {
 	if task.Description != "" {
 		header += "\n\n" + task.Description
 	}
-	return buildConversationPreviewEntry(header, time.Time{}, extractTaskEntries(a.conv.messages, task.ID))
+	raws := extractTaskEntries(a.conv.messages, task.ID)
+	return previewBuild{
+		Header:   header,
+		Sources:  raws,
+		Fallback: buildConversationPreviewEntry(header, time.Time{}, raws),
+	}
+}
+
+func (a *App) buildTaskPreviewEntry(task session.TaskItem) session.Entry {
+	return a.buildTaskPreview(task).Fallback
 }
 
 func extractCronEntries(entries []session.Entry, cron session.CronItem) []session.Entry {

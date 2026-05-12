@@ -44,15 +44,16 @@ type SplitPane struct {
 // FoldState holds fold/unfold and block cursor state for previews
 // that render structured content blocks.
 type FoldState struct {
-	Collapsed    foldSet
-	Formatted    foldSet
-	Entry        session.Entry
-	BlockCursor  int
-	BlockStarts  []int
-	BlockVisible []bool  // nil = all visible; non-nil = per-block visibility
-	BlockFilter  string  // current filter expression (empty = no filter)
-	HideHooks    bool    // true = suppress hook badges/details in render
-	Selected     foldSet // block indices selected for copy
+	Collapsed      foldSet
+	Formatted      foldSet
+	Entry          session.Entry
+	BlockCursor    int
+	BlockStarts    []int
+	BlockVisible   []bool  // nil = all visible; non-nil = per-block visibility
+	BlockFilter    string  // current filter expression (empty = no filter)
+	HideHooks      bool    // true = suppress hook badges/details in render
+	Selected       foldSet // block indices selected for copy
+	BlockSourceIdx []int   // parallel to Entry.Content; -1 = unknown source
 }
 
 // ListWidth returns the list width given total width and split ratio.
