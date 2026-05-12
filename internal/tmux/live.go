@@ -78,22 +78,20 @@ func markLiveSessionsTmux(sessions []session.Session) {
 		return
 	}
 
-	// Separate direct-child procs (ppid matches a pane) from orphaned (ppid=1)
+	// Walk every claude process up its PPID chain to find which tmux pane
+	// shell — if any — owns it. This handles claudes that aren't direct
+	// children of a pane shell (e.g. wrapped by ccproxy/teen/sudo). Subagents
+	// (claude under another claude) and true orphans (no pane in the ancestor
+	// chain) are filtered out of pane attribution.
 	panePIDs := make(map[int]bool, len(panes))
 	for _, p := range panes {
 		panePIDs[p.PID] = true
 	}
-	directByPPID := make(map[int]string)   // ppid → args (for pane-matched procs)
-	var orphaned []ClaudeProc              // ppid=1 or ppid not matching any pane
-	for _, cp := range allProcs {
-		if panePIDs[cp.PPID] {
-			directByPPID[cp.PPID] = cp.Args
-		} else {
-			orphaned = append(orphaned, cp)
-		}
-	}
+	ppidOf := batchPPIDMap()
+	directByPaneShell, orphaned := classifyClaudeProcsByAncestry(allProcs, panePIDs, ppidOf)
 
-	// Build pane PID → claude args map (direct children)
+	// Build pane PID → claude args map. Only panes whose shell owns a real
+	// claude (per the PPID walk) get a cps entry.
 	type claudeMatch struct {
 		args          string
 		windowName    string
@@ -102,7 +100,7 @@ func markLiveSessionsTmux(sessions []session.Session) {
 	}
 	var cps []claudeMatch
 	for _, p := range panes {
-		if args, ok := directByPPID[p.PID]; ok {
+		if args, ok := directByPaneShell[p.PID]; ok {
 			absPath, _ := filepath.Abs(p.Path)
 			if absPath != "" {
 				inCur := currentKey != "" && p.Session+"|"+p.Window == currentKey
@@ -111,11 +109,15 @@ func markLiveSessionsTmux(sessions []session.Session) {
 		}
 	}
 
-	// For orphaned claude procs, resolve their cwd via lsof and match to sessions
+	// True orphans (no tmux pane in their ancestry) are still alive but don't
+	// belong to any visible window. Mark them LIVE via their cwd, but never
+	// mark them as belonging to the current window — even when their cwd
+	// matches a pane in this window, the orphan itself isn't in this window.
 	if len(orphaned) > 0 {
+		_ = currentWindowPaths // retained for documentation; orphans deliberately ignore it
 		orphanCwds := resolveOrphanCwds(orphaned)
 		for _, oc := range orphanCwds {
-			cps = append(cps, claudeMatch{args: oc.args, path: oc.cwd, currentWindow: currentWindowPaths[oc.cwd]})
+			cps = append(cps, claudeMatch{args: oc.args, path: oc.cwd, currentWindow: false})
 		}
 	}
 
@@ -166,6 +168,122 @@ type ClaudeProc struct {
 	PID  int
 	PPID int
 	Args string
+}
+
+// classifyClaudeProcsByAncestry walks each claude process up its PPID chain
+// using ppidOf and classifies it as:
+//   - direct: the chain reaches a tmux pane shell PID without first passing
+//     through another claude → return value `directByPaneShell` maps that
+//     pane shell PID → claude args.
+//   - subagent: the chain passes through another claude before reaching a
+//     pane shell → silently dropped (the parent claude already attributes
+//     the work to its own session).
+//   - true orphan: the chain ends at init (PPID 0 / 1) or a dead process
+//     without ever reaching a pane shell → returned in `orphaned`.
+//
+// The PPID walk is bounded by len(ppidOf) iterations to defend against
+// cycles in a corrupt process map. When ppidOf is empty (lookup unavailable)
+// the function falls back to the immediate PPID — only direct pane children
+// and direct subagents are recognised.
+func classifyClaudeProcsByAncestry(procs []ClaudeProc, panePIDs map[int]bool, ppidOf map[int]int) (directByPaneShell map[int]string, orphaned []ClaudeProc) {
+	claudePIDs := make(map[int]bool, len(procs))
+	for _, cp := range procs {
+		claudePIDs[cp.PID] = true
+	}
+	directByPaneShell = make(map[int]string)
+
+	walkOwningPane := func(startPID int) (paneShellPID int, isSubagent bool) {
+		cur := startPID
+		if ppid, ok := ppidOf[cur]; ok {
+			cur = ppid
+		} else {
+			// No process tree available; only direct parent is known via procs.
+			for _, cp := range procs {
+				if cp.PID == startPID {
+					cur = cp.PPID
+					break
+				}
+			}
+		}
+		// Bound the walk so a corrupt cycle can't hang us.
+		steps := len(ppidOf) + len(procs) + 4
+		for i := 0; i < steps && cur > 1; i++ {
+			if cur != startPID && claudePIDs[cur] {
+				return 0, true
+			}
+			if panePIDs[cur] {
+				return cur, false
+			}
+			next, ok := ppidOf[cur]
+			if !ok {
+				return 0, false
+			}
+			cur = next
+		}
+		return 0, false
+	}
+
+	for _, cp := range procs {
+		paneShell, sub := walkOwningPane(cp.PID)
+		if sub {
+			continue
+		}
+		if paneShell != 0 {
+			directByPaneShell[paneShell] = cp.Args
+			continue
+		}
+		orphaned = append(orphaned, cp)
+	}
+	return directByPaneShell, orphaned
+}
+
+// classifyClaudeProcs partitions claude processes by their immediate PPID.
+// This is the cheap pre-walk classification kept for backwards compatibility
+// with callers that only inspect direct parent relationships. New code should
+// prefer classifyClaudeProcsByAncestry.
+func classifyClaudeProcs(procs []ClaudeProc, panePIDs map[int]bool) (directByPPID map[int]string, orphaned []ClaudeProc) {
+	claudePIDs := make(map[int]bool, len(procs))
+	for _, cp := range procs {
+		claudePIDs[cp.PID] = true
+	}
+	directByPPID = make(map[int]string)
+	for _, cp := range procs {
+		if panePIDs[cp.PPID] {
+			directByPPID[cp.PPID] = cp.Args
+			continue
+		}
+		if claudePIDs[cp.PPID] {
+			continue // subagent of another claude
+		}
+		orphaned = append(orphaned, cp)
+	}
+	return directByPPID, orphaned
+}
+
+// batchPPIDMap returns a pid → ppid map for every process visible to ps.
+// Used by classifyClaudeProcsByAncestry to walk past intermediate wrappers
+// such as ccproxy / tee / sudo when looking for the owning pane shell.
+// Returns an empty map if the lookup fails — callers should still degrade
+// gracefully (treating claudes as direct or orphan based on immediate PPID).
+func batchPPIDMap() map[int]int {
+	out, err := exec.Command("ps", "-e", "-o", "pid=,ppid=").Output()
+	if err != nil {
+		return map[int]int{}
+	}
+	m := make(map[int]int)
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(fields[0])
+		ppid, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		m[pid] = ppid
+	}
+	return m
 }
 
 // BatchFindClaudeProcs finds all claude processes and maps parent PID → args.

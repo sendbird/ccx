@@ -3687,6 +3687,7 @@ func (a *App) doRefresh() tea.Cmd {
 				oldLive[i] = liveState{a.sessions[i].IsLive, a.sessions[i].IsResponding}
 				a.sessions[i].IsLive = false
 				a.sessions[i].IsResponding = false
+				a.sessions[i].IsCurrentWindow = false
 			}
 			tmux.MarkLiveSessions(a.sessions)
 			for i := range a.sessions {
