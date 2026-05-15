@@ -183,11 +183,18 @@ func LoadTasksFromEntries(entries []Entry) []TaskItem {
 			// Parse task data from tool input JSON
 			var input struct {
 				ID          string `json:"id"`
+				TaskID      string `json:"taskId"`
 				Subject     string `json:"subject"`
 				Status      string `json:"status"`
 				Description string `json:"description"`
 			}
-			if json.Unmarshal([]byte(b.ToolInput), &input) != nil || input.Subject == "" {
+			if json.Unmarshal([]byte(b.ToolInput), &input) != nil {
+				continue
+			}
+			if input.ID == "" {
+				input.ID = input.TaskID
+			}
+			if input.ID == "" && input.Subject == "" {
 				continue
 			}
 			if existing, ok := tasks[input.ID]; ok {

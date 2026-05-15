@@ -115,7 +115,7 @@ func main() {
 	}
 
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
-	km, _, _, _ := tui.LoadCCXConfig(configPath)
+	km, _, _, _, cc := tui.LoadCCXConfig(configPath)
 
 	initialSessions := session.LoadCachedSessions(claudeDir)
 	if len(initialSessions) == 0 {
@@ -155,6 +155,7 @@ func main() {
 		ViewMode:     viewMode,
 		JumpSession:  jumpSession,
 		JumpUUID:     jumpUUID,
+		Claude:       cc,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

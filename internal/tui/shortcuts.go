@@ -25,6 +25,7 @@ func DefaultShortcuts() Shortcuts {
 				"4": "preview:tasks",
 				"5": "preview:agents",
 				"6": "preview:live",
+				"7": "preview:contexts",
 			},
 		},
 		"conversation": {
@@ -98,8 +99,11 @@ func migrateShortcuts(sc Shortcuts) {
 		if _, exists := sess.Left["6"]; !exists {
 			sess.Left["6"] = "preview:live"
 		}
-		sc["sessions"] = sess
 	}
+	if _, exists := sess.Left["7"]; !exists {
+		sess.Left["7"] = "preview:contexts"
+	}
+	sc["sessions"] = sess
 }
 
 // handleShortcutKey checks if a key press matches a shortcut for the current

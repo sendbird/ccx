@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/remote"
@@ -173,14 +174,20 @@ const (
 	convPageImages
 	convPageChanges
 	convPageFiles
+	convPageContexts
 )
 
 type convPageItem struct {
 	extract.Item
-	timestamp    time.Time
-	turnPreview  string
-	userPrompt   string
-	imagePasteID int
+	timestamp                  time.Time
+	turnPreview                string
+	userPrompt                 string
+	imagePasteID               int
+	relatedView                string
+	relatedPath                string
+	relatedPluginID            string
+	relatedPluginComponentPath string
+	relatedPluginComponentType string
 }
 
 type App struct {
@@ -255,6 +262,7 @@ type App struct {
 	statsDetailVP      viewport.Model
 	statsPageMenu      bool // "p" page jump popup
 	convPageMenu       bool // conversation page jump popup
+	sessPageMenu       bool // sessions preview page jump popup
 	convPageActive     bool
 	convPageFocus      bool // true = right pane focused, false = left list focused
 	convPageKitty      bool // true = show kitty image preview in Images page
@@ -273,17 +281,19 @@ type App struct {
 	convPageActionsMenu bool
 
 	// Session preview mode
-	sessPreviewMode    sessPreview
-	sessStatsCache     *session.SessionStats
-	sessStatsCacheKey  string
-	sessMemoryCache    string // rendered memory content
-	sessMemoryCacheKey string
-	sessTasksCache     string
-	sessTasksCacheKey  string
-	sessShellsCache    string
-	sessShellsCacheKey string
-	sessPreviewAgents  []session.Subagent // agents shown in Tasks/Plan preview
-	sessAgentCursor    int                // cursor within agents list
+	sessPreviewMode      sessPreview
+	sessStatsCache       *session.SessionStats
+	sessStatsCacheKey    string
+	sessMemoryCache      string // rendered memory content
+	sessMemoryCacheKey   string
+	sessTasksCache       string
+	sessTasksCacheKey    string
+	sessShellsCache      string
+	sessShellsCacheKey   string
+	sessContextsCache    string
+	sessContextsCacheKey string
+	sessPreviewAgents    []session.Subagent // agents shown in Tasks/Plan preview
+	sessAgentCursor      int                // cursor within agents list
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -555,25 +565,27 @@ const (
 	sessPreviewTasksPlan
 	sessPreviewAgents
 	sessPreviewShells
+	sessPreviewContexts
 	sessPreviewLive     // tmux pane capture
 	sessPreviewRemote   // remote session status/stream
-	numSessPreviewModes = 8
+	numSessPreviewModes = 9
 )
 
 // Config holds application configuration from CLI flags.
 type Config struct {
-	ClaudeDir    string  // path to Claude data directory (empty = ~/.claude)
-	TmuxEnabled  bool    // enable tmux integration (I, J, live modal)
-	TmuxAutoLive bool    // auto-enter live session in same tmux window on startup
-	WorktreeDir  string  // subdirectory name for worktrees (default ".worktree")
-	SearchQuery  string  // initial search filter for session list
-	Keymap       *Keymap // nil = use defaults
-	GroupMode    string  // initial group mode (flat|proj|tree|chain|fork)
-	PreviewMode  string  // initial preview mode (conv|stats|mem|tasks)
-	ViewMode     string  // initial view (sessions|config|plugins|stats)
-	JumpSession  string  // session ID to open and navigate to on launch
-	JumpUUID     string  // entry UUID to navigate to within the session
-	PickMode     bool    // true = running under `ccx pick session`: show "Pick" action, skip prefs save
+	ClaudeDir    string           // path to Claude data directory (empty = ~/.claude)
+	TmuxEnabled  bool             // enable tmux integration (I, J, live modal)
+	TmuxAutoLive bool             // auto-enter live session in same tmux window on startup
+	WorktreeDir  string           // subdirectory name for worktrees (default ".worktree")
+	SearchQuery  string           // initial search filter for session list
+	Keymap       *Keymap          // nil = use defaults
+	GroupMode    string           // initial group mode (flat|proj|tree|chain|fork)
+	PreviewMode  string           // initial preview mode (conv|stats|mem|tasks|agents|shells|contexts|live)
+	ViewMode     string           // initial view (sessions|config|plugins|stats)
+	JumpSession  string           // session ID to open and navigate to on launch
+	JumpUUID     string           // entry UUID to navigate to within the session
+	PickMode     bool             // true = running under `ccx pick session`: show "Pick" action, skip prefs save
+	Claude       claudecmd.Config // command template for local Claude launches
 }
 
 func NewApp(sessions []session.Session, cfg Config) *App {
@@ -604,7 +616,10 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
-	_, prefs, sc, rc := LoadCCXConfig(configPath())
+	_, prefs, sc, rc, cc := LoadCCXConfig(configPath())
+	if a.config.Claude.CommandTemplate == "" {
+		a.config.Claude = cc
+	}
 	a.applyPreferences(prefs)
 	a.shortcuts = sc
 	a.remoteDefaults = rc
@@ -635,7 +650,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		}
 	}
 	if a.config.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "shells": sessPreviewShells, "live": sessPreviewLive}
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
@@ -1184,6 +1199,12 @@ func (a *App) View() string {
 		help = formatHelp("x:actions — pick an action")
 	}
 
+	if a.sessPageMenu && a.state == viewSessions {
+		hintBox := a.renderSessPageHintBox()
+		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		help = formatHelp("p:page — pick a preview")
+	}
+
 	// Tag menu floating modal
 	if a.tagMenu {
 		modal := a.renderTagMenu()
@@ -1668,6 +1689,13 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Focused preview: custom conversation nav or simple scroll
 	if sp.Focus && sp.Show {
+		if a.sessPageMenu {
+			return a.handleSessPageMenu(key)
+		}
+		if key == "p" {
+			a.sessPageMenu = true
+			return a, nil
+		}
 		if m, cmd, handled := a.handleFocusedPreviewKeys(sp, key); handled {
 			return m, cmd
 		}
@@ -2124,6 +2152,48 @@ func (a *App) handleStatsPageMenu(key string) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+func (a *App) handleSessPageMenu(key string) (tea.Model, tea.Cmd) {
+	a.sessPageMenu = false
+	switch key {
+	case "v":
+		a.setSessPreviewMode(sessPreviewConversation)
+	case "s":
+		a.setSessPreviewMode(sessPreviewStats)
+	case "m":
+		a.setSessPreviewMode(sessPreviewMemory)
+	case "t":
+		a.setSessPreviewMode(sessPreviewTasksPlan)
+	case "a":
+		a.setSessPreviewMode(sessPreviewAgents)
+	case "c":
+		a.setSessPreviewMode(sessPreviewContexts)
+	case "l":
+		if sess, ok := a.selectedSession(); ok {
+			if sess.IsRemote {
+				return a.openRemoteLivePreview(sess)
+			}
+			return a.openLivePreview(sess)
+		}
+	}
+	return a, nil
+}
+
+func (a *App) renderSessPageHintBox() string {
+	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	d := dimStyle
+	sp := "  "
+	line1 := hl.Render("v") + d.Render(":conv") + sp + hl.Render("s") + d.Render(":stats")
+	line2 := hl.Render("m") + d.Render(":mem") + sp + hl.Render("t") + d.Render(":tasks")
+	line3 := hl.Render("a") + d.Render(":agents") + sp + hl.Render("l") + d.Render(":live")
+	line4 := hl.Render("c") + d.Render(":contexts")
+	body := strings.Join([]string{line1, line2, line3, line4, d.Render("esc:cancel")}, "\n")
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1)
+	return boxStyle.Render(body)
+}
+
 func (a *App) renderStatsPageHintBox() string {
 	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	d := dimStyle
@@ -2151,6 +2221,8 @@ func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
 		return a.openConvChangesPage()
 	case "f":
 		return a.openConvFilesPage()
+	case "c":
+		return a.openConvContextsPage()
 	}
 	return a, nil
 }
@@ -2162,8 +2234,9 @@ func (a *App) renderConvPageHintBox() string {
 
 	line1 := hl.Render("u") + d.Render(":urls") + sp + hl.Render("i") + d.Render(":images")
 	line2 := hl.Render("g") + d.Render(":changes") + sp + hl.Render("f") + d.Render(":files")
+	line3 := hl.Render("c") + d.Render(":contexts")
 
-	body := strings.Join([]string{line1, line2, d.Render("esc:cancel")}, "\n")
+	body := strings.Join([]string{line1, line2, line3, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDim).
@@ -2278,6 +2351,91 @@ func (a *App) closePaneProxy() {
 	a.paneProxy = nil
 }
 
+func (a *App) claudeCmd(dir string, args ...string) (*exec.Cmd, error) {
+	return claudecmd.Command(a.config.Claude, dir, args...)
+}
+
+func (a *App) openConfigExplorerAtPath(path string) (tea.Model, tea.Cmd) {
+	m, cmd := a.openConfigExplorer()
+	if path == "" {
+		return m, cmd
+	}
+	clean := filepath.Clean(path)
+	for i, item := range a.cfgList.Items() {
+		ci, ok := item.(cfgItem)
+		if !ok || ci.isHeader {
+			continue
+		}
+		if filepath.Clean(ci.item.Path) == clean {
+			a.cfgList.Select(i)
+			a.updateConfigPreview()
+			return m, cmd
+		}
+	}
+	a.copiedMsg = "Related config item not found"
+	return m, cmd
+}
+
+func (a *App) openPluginExplorerAt(pluginID string) (tea.Model, tea.Cmd) {
+	m, cmd := a.openPluginExplorer()
+	if pluginID == "" {
+		return m, cmd
+	}
+	for i, item := range a.plgList.Items() {
+		pi, ok := item.(plgItem)
+		if !ok || pi.isHeader {
+			continue
+		}
+		if pi.plugin.ID == pluginID || filepath.Clean(pi.plugin.Install.InstallPath) == filepath.Clean(pluginID) {
+			a.plgList.Select(i)
+			a.updatePluginPreview()
+			return m, cmd
+		}
+	}
+	a.copiedMsg = "Related plugin not found"
+	return m, cmd
+}
+
+func (a *App) openPluginComponentAt(pluginID, componentPath, componentType string) (tea.Model, tea.Cmd) {
+	m, cmd := a.openPluginExplorerAt(pluginID)
+	if componentPath == "" {
+		return m, cmd
+	}
+	selected, ok := a.plgList.SelectedItem().(plgItem)
+	if !ok || selected.isHeader {
+		return m, cmd
+	}
+	m, cmd = a.openPluginDetail(selected.plugin)
+	clean := filepath.Clean(componentPath)
+	for i, item := range a.plgDetailList.Items() {
+		ci, ok := item.(plgCompItem)
+		if !ok || ci.isHeader {
+			continue
+		}
+		if filepath.Clean(ci.comp.Path) == clean && (componentType == "" || ci.comp.Type == componentType) {
+			a.plgDetailList.Select(i)
+			a.updatePluginDetailPreview()
+			return m, cmd
+		}
+	}
+	a.copiedMsg = "Related plugin component not found"
+	return m, cmd
+}
+
+func (a *App) openRelatedContextNode(node session.ContextNode) (tea.Model, tea.Cmd) {
+	switch node.RelatedView {
+	case "config":
+		return a.openConfigExplorerAtPath(node.RelatedPath)
+	case "plugin-component":
+		return a.openPluginComponentAt(node.RelatedPluginID, node.RelatedPluginComponentPath, node.RelatedPluginComponentType)
+	case "plugin":
+		return a.openPluginExplorerAt(node.RelatedPluginID)
+	default:
+		a.copiedMsg = "No related destination"
+		return a, nil
+	}
+}
+
 func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 	dir := sess.ProjectPath
 	if dir == "" {
@@ -2294,9 +2452,12 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		// Fallback: take over CSB
-		c := exec.Command("claude", "--resume", sess.ID)
-		c.Dir = dir
-		return a, tea.ExecProcess(c, func(err error) tea.Msg {
+		cmd, err := a.claudeCmd(dir, "--resume", sess.ID)
+		if err != nil {
+			a.copiedMsg = "Claude command failed: " + err.Error()
+			return a, nil
+		}
+		return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 			return tea.QuitMsg{}
 		})
 	}
@@ -2307,7 +2468,7 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 		if windowName == "" {
 			windowName = "claude"
 		}
-		if err := tmux.NewWindowClaude(windowName, dir, sess.ID); err != nil {
+		if err := tmux.NewWindowClaudeWithConfig(windowName, dir, sess.ID, a.config.Claude); err != nil {
 			a.copiedMsg = "Spawn failed"
 		} else {
 			a.copiedMsg = "Resumed in new window"
@@ -2316,9 +2477,12 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 	}
 
 	// Non-tmux: take over CSB
-	c := exec.Command("claude", "--resume", sess.ID)
-	c.Dir = dir
-	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+	cmd, err := a.claudeCmd(dir, "--resume", sess.ID)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return tea.QuitMsg{}
 	})
 }
@@ -2560,6 +2724,19 @@ func (a *App) sessionPreviewActionsActive() bool {
 func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	a.actionsMenu = false
 	a.copiedMsg = ""
+	if a.sessionPreviewActionsActive() {
+		switch key {
+		case "c":
+			a.setSessPreviewMode(sessPreviewContexts)
+			return a, nil
+		case "f":
+			visible := a.convVisibleEntries()
+			return a.openSessionPreviewFullText(visible), nil
+		case "y", a.keymap.Actions.Copy:
+			a.copySessionPreviewSelection()
+			return a, nil
+		}
+	}
 	if !a.sessionPreviewActionsActive() && a.hasMultiSelection() {
 		return a.handleBulkActionsMenu(key)
 	}
@@ -2698,7 +2875,7 @@ func (a *App) forkSession(sess session.Session) (tea.Model, tea.Cmd) {
 			windowName = "claude"
 		}
 		windowName += "-fork"
-		if err := tmux.NewWindowClaude(windowName, dir, sess.ID); err != nil {
+		if err := tmux.NewWindowClaudeWithConfig(windowName, dir, sess.ID, a.config.Claude); err != nil {
 			a.copiedMsg = "Fork failed: " + err.Error()
 		} else {
 			a.copiedMsg = "Forked → " + windowName
@@ -2707,9 +2884,12 @@ func (a *App) forkSession(sess session.Session) (tea.Model, tea.Cmd) {
 	}
 
 	// Non-tmux: take over terminal
-	c := exec.Command("claude", "--resume", sess.ID)
-	c.Dir = dir
-	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+	cmd, err := a.claudeCmd(dir, "--resume", sess.ID)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return editorDoneMsg{}
 	})
 }
@@ -2861,7 +3041,7 @@ func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 		if name == "" {
 			name = s.ShortID
 		}
-		if err := tmux.NewWindowClaude(name, dir, s.ID); err == nil {
+		if err := tmux.NewWindowClaudeWithConfig(name, dir, s.ID, a.config.Claude); err == nil {
 			count++
 		}
 	}
@@ -3220,16 +3400,19 @@ func (a *App) newSessionInDir(dir, name string) (tea.Model, tea.Cmd) {
 		name = filepath.Base(dir)
 	}
 	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNew(name, dir); err != nil {
+		if err := tmux.NewWindowClaudeNewWithConfig(name, dir, a.config.Claude); err != nil {
 			a.copiedMsg = "Spawn failed"
 			return a, nil
 		}
 		a.copiedMsg = "New session → " + name
 		return a, a.delayedRefreshCmd()
 	}
-	c := exec.Command("claude")
-	c.Dir = dir
-	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+	cmd, err := a.claudeCmd(dir)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return tea.QuitMsg{}
 	})
 }
@@ -3266,16 +3449,19 @@ func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (te
 	// Spawn new Claude session in the worktree
 	name := filepath.Base(repoRoot) + "/" + branch
 	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNew(name, wtPath); err != nil {
+		if err := tmux.NewWindowClaudeNewWithConfig(name, wtPath, a.config.Claude); err != nil {
 			a.copiedMsg = "Spawn failed"
 			return a, nil
 		}
 		a.copiedMsg = fmt.Sprintf("New session → %s/%s", a.config.WorktreeDir, branch)
 		return a, a.delayedRefreshCmd()
 	}
-	c := exec.Command("claude")
-	c.Dir = wtPath
-	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+	cmd, err := a.claudeCmd(wtPath)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return tea.QuitMsg{}
 	})
 }
@@ -3353,7 +3539,7 @@ func (a *App) newSession() (tea.Model, tea.Cmd) {
 	}
 
 	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNew(windowName, dir); err != nil {
+		if err := tmux.NewWindowClaudeNewWithConfig(windowName, dir, a.config.Claude); err != nil {
 			a.copiedMsg = "Spawn failed"
 		} else {
 			a.copiedMsg = "New session in new window"
@@ -3362,9 +3548,12 @@ func (a *App) newSession() (tea.Model, tea.Cmd) {
 	}
 
 	// Non-tmux: take over terminal
-	c := exec.Command("claude")
-	c.Dir = dir
-	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+	cmd, err := a.claudeCmd(dir)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return tea.QuitMsg{}
 	})
 }
@@ -3388,16 +3577,19 @@ func (a *App) executeCmdNewSession(input string) (tea.Model, tea.Cmd) {
 	}
 	windowName := filepath.Base(dir)
 	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNew(windowName, dir); err != nil {
+		if err := tmux.NewWindowClaudeNewWithConfig(windowName, dir, a.config.Claude); err != nil {
 			a.copiedMsg = "Spawn failed"
 		} else {
 			a.copiedMsg = "New session → " + windowName
 		}
 		return a, nil
 	}
-	c := exec.Command("claude")
-	c.Dir = dir
-	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+	cmd, err := a.claudeCmd(dir)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return tea.QuitMsg{}
 	})
 }
@@ -3439,7 +3631,7 @@ func (a *App) executeCmdWorktreeNew(input string) (tea.Model, tea.Cmd) {
 	// Open new Claude session in the worktree
 	windowName := branch
 	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNew(windowName, wtPath); err != nil {
+		if err := tmux.NewWindowClaudeNewWithConfig(windowName, wtPath, a.config.Claude); err != nil {
 			a.copiedMsg = "Worktree created but spawn failed"
 		} else {
 			a.copiedMsg = fmt.Sprintf("Worktree + session → %s/%s", a.config.WorktreeDir, branch)
@@ -3448,10 +3640,13 @@ func (a *App) executeCmdWorktreeNew(input string) (tea.Model, tea.Cmd) {
 	}
 
 	// Non-tmux: take over terminal
-	c := exec.Command("claude")
-	c.Dir = wtPath
+	cmd, err := a.claudeCmd(wtPath)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
 	a.copiedMsg = fmt.Sprintf("Worktree created → %s/%s", a.config.WorktreeDir, branch)
-	return a, tea.ExecProcess(c, func(err error) tea.Msg {
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return tea.QuitMsg{}
 	})
 }
@@ -3995,6 +4190,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		a.updateSessionAgentsPreview(sess)
 	case sessPreviewShells:
 		a.updateSessionShellsPreview(sess)
+	case sessPreviewContexts:
+		a.updateSessionContextsPreview(sess)
 	case sessPreviewLive:
 		if sess.IsLive {
 			a.sessSplit.Preview.SetContent(dimStyle.Render("(connecting…)"))
@@ -4511,6 +4708,106 @@ func (a *App) updateSessionShellsPreview(sess session.Session) {
 	a.sessSplit.Preview.SetContent(a.sessShellsCache)
 }
 
+func (a *App) updateSessionContextsPreview(sess session.Session) {
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	contentH := max(a.height-3, 1)
+	cacheKey := fmt.Sprintf("%s:%d:%d", sess.ID, sess.ModTime.UnixNano(), previewW)
+	if a.sessContextsCacheKey != cacheKey {
+		tree, err := session.BuildSessionContextTree(a.config.ClaudeDir, sess)
+		if err != nil {
+			a.sessContextsCache = dimStyle.Render("Failed to build context tree: " + err.Error())
+		} else {
+			a.sessContextsCache = renderSessionContextTree(tree, previewW)
+		}
+		a.sessContextsCacheKey = cacheKey
+	}
+	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	a.sessSplit.Preview.SetContent(a.sessContextsCache)
+}
+
+func renderSessionContextTree(tree *session.SessionContextTree, width int) string {
+	if tree == nil {
+		return dimStyle.Render("No context tree available.")
+	}
+	var sb strings.Builder
+	header := "── Session Context"
+	if tree.SessionID != "" {
+		header += ": " + tree.SessionID[:min(8, len(tree.SessionID))]
+	}
+	header += " ──"
+	sb.WriteString(dimStyle.Render(header) + "\n\n")
+	if tree.ProjectPath != "" {
+		home, _ := os.UserHomeDir()
+		sb.WriteString(dimStyle.Render("project: "+session.ShortenPath(tree.ProjectPath, home)) + "\n\n")
+	}
+	for i, node := range tree.Roots {
+		renderContextNode(&sb, node, "", i == len(tree.Roots)-1, width)
+	}
+	if len(tree.Warnings) > 0 {
+		sb.WriteString("\n" + dimStyle.Render("Warnings") + "\n")
+		for _, warning := range tree.Warnings {
+			sb.WriteString(dimStyle.Render("  - "+truncateContextText(warning, width-4)) + "\n")
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func renderContextNode(sb *strings.Builder, node session.ContextNode, prefix string, last bool, width int) {
+	connector := "├─ "
+	nextPrefix := prefix + "│  "
+	if last {
+		connector = "└─ "
+		nextPrefix = prefix + "   "
+	}
+	line := contextNodeLine(node)
+	if width > 0 {
+		line = truncateContextText(line, width-len(prefix)-3)
+	}
+	style := dimStyle
+	if node.Used {
+		style = lipgloss.NewStyle().Foreground(colorAccent)
+	} else if node.Status == "missing" {
+		style = lipgloss.NewStyle().Foreground(colorDim)
+	}
+	sb.WriteString(dimStyle.Render(prefix+connector) + style.Render(line) + "\n")
+	for i, child := range node.Children {
+		renderContextNode(sb, child, nextPrefix, i == len(node.Children)-1, width)
+	}
+}
+
+func contextNodeLine(node session.ContextNode) string {
+	line := node.Label
+	if node.Count > 0 {
+		line += fmt.Sprintf(" [%d]", node.Count)
+	}
+	if node.Status != "" {
+		line += " (" + node.Status + ")"
+	}
+	if node.Detail != "" {
+		line += " — " + oneLine(node.Detail)
+	}
+	if node.Path != "" {
+		home, _ := os.UserHomeDir()
+		line += "  " + session.ShortenPath(node.Path, home)
+	}
+	return line
+}
+
+func truncateContextText(s string, maxLen int) string {
+	if maxLen <= 3 || len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func oneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.Index(s, "\n"); idx >= 0 {
+		s = s[:idx]
+	}
+	return s
+}
+
 func (a *App) buildShellsPreviewContent(sess session.Session) string {
 	if !sess.HasShellJobs {
 		return dimStyle.Render("No background shells or monitors found for this session.")
@@ -5019,7 +5316,11 @@ func (a *App) renderActionsHintBox() string {
 		lines = append(lines, hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Changes))+d.Render(":changes")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
 	} else {
 		sess := a.actionsSess
-		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Copy))+d.Render(":copy")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
+		if a.sessionPreviewActionsActive() {
+			lines = append(lines, hl.Render("c")+d.Render(":contexts")+sp+hl.Render("f")+d.Render(":full")+sp+hl.Render("y")+d.Render(":copy"))
+		} else {
+			lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Copy))+d.Render(":copy")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
+		}
 		line2 := hl.Render(displayKey(akm.Worktree)) + d.Render(":worktree") + sp + hl.Render(displayKey(akm.URLs)) + d.Render(":urls") + sp + hl.Render(displayKey(akm.Files)) + d.Render(":files") + sp + hl.Render(displayKey(akm.Changes)) + d.Render(":changes") + sp + hl.Render(displayKey(akm.Tags)) + d.Render(":tags")
 		if sess.HasMemory {
 			line2 += sp + hl.Render(displayKey(akm.RemoveMem)) + d.Render(":rm-mem")

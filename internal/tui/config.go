@@ -550,7 +550,6 @@ func cfgScopeGroups(tree *session.ConfigTree) []cfgScopeGroup {
 	}
 }
 
-
 func buildConfigItems(tree *session.ConfigTree) []list.Item {
 	var items []list.Item
 
@@ -1064,7 +1063,11 @@ func (a *App) launchConfigTest() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	script := env.Script()
+	script, err := env.ScriptWithConfig(a.config.Claude)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
 
 	a.copiedMsg = fmt.Sprintf("Testing %d configs…", len(items))
 
@@ -1075,7 +1078,6 @@ func (a *App) launchConfigTest() (tea.Model, tea.Cmd) {
 }
 
 type configTestDoneMsg struct{ tmpDir string }
-
 
 // --- Category filter ---
 
@@ -1127,13 +1129,13 @@ func (a *App) rebuildCfgList() {
 
 // cfgSearchTags maps config categories to searchable "is:" tags.
 var cfgSearchTags = map[session.ConfigCategory][]string{
-	session.ConfigGlobal:  {"is:user", "is:memory"},
-	session.ConfigProject: {"is:project"},
-	session.ConfigLocal:   {"is:local"},
-	session.ConfigSkill:   {"is:user", "is:skill"},
-	session.ConfigAgent:   {"is:user", "is:agent"},
-	session.ConfigCommand: {"is:user", "is:command", "is:cmd"},
-	session.ConfigHook:    {"is:user", "is:hook"},
+	session.ConfigGlobal:     {"is:user", "is:memory"},
+	session.ConfigProject:    {"is:project"},
+	session.ConfigLocal:      {"is:local"},
+	session.ConfigSkill:      {"is:user", "is:skill"},
+	session.ConfigAgent:      {"is:user", "is:agent"},
+	session.ConfigCommand:    {"is:user", "is:command", "is:cmd"},
+	session.ConfigHook:       {"is:user", "is:hook"},
 	session.ConfigMCP:        {"is:user", "is:mcp"},
 	session.ConfigEnterprise: {"is:enterprise"},
 }

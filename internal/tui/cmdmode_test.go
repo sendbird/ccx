@@ -85,9 +85,9 @@ func TestSuggestionFiltering_PreviewPrefix(t *testing.T) {
 			matches = append(matches, entry)
 		}
 	}
-	// Should match all preview commands (p:conv, p:stats, p:mem, p:tasks, p:live)
-	if len(matches) < 5 {
-		t.Errorf("expected at least 5 preview matches for 'p:', got %d", len(matches))
+	// Should match all preview commands (p:conv, p:stats, p:mem, p:tasks, p:agents, p:contexts, p:live)
+	if len(matches) < 7 {
+		t.Errorf("expected at least 7 preview matches for 'p:', got %d", len(matches))
 	}
 }
 
@@ -135,7 +135,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		"group:chain": false, "group:fork": false,
 		"pane:flat": false, "pane:tree": false,
 		"preview:conv": false, "preview:stats": false, "preview:mem": false,
-		"preview:tasks": false, "preview:live": false,
+		"preview:tasks": false, "preview:agents": false, "preview:contexts": false, "preview:live": false,
 		"view:sessions": false, "view:stats": false, "view:config": false,
 		"view:config:hooks": false, "view:plugins": false,
 		"view:stats:tools": false, "view:stats:mcp": false,

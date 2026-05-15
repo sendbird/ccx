@@ -48,7 +48,7 @@ func RunPickSessionTUI(claudeDir, search string, multi bool) PickSessionExitCode
 	}
 
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
-	km, _, _, _ := tui.LoadCCXConfig(configPath)
+	km, _, _, _, cc := tui.LoadCCXConfig(configPath)
 
 	app := tui.NewApp(sessions, tui.Config{
 		ClaudeDir:   claudeDir,
@@ -57,6 +57,7 @@ func RunPickSessionTUI(claudeDir, search string, multi bool) PickSessionExitCode
 		SearchQuery: search,
 		Keymap:      km,
 		PickMode:    true,
+		Claude:      cc,
 	})
 
 	p := tea.NewProgram(app,

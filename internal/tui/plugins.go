@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
 )
@@ -548,14 +549,14 @@ func renderPluginDetail(p session.Plugin, width int) string {
 	}
 
 	typeLabels := map[string]string{
-		"agent":   "Agents",
-		"skill":   "Skills",
-		"command": "Commands",
-		"hook":    "Hooks",
-		"mcp":     "MCP Servers",
-		"lsp":     "LSP Servers",
-		"script":  "Scripts",
-		"setting": "Settings",
+		"agent":     "Agents",
+		"skill":     "Skills",
+		"command":   "Commands",
+		"hook":      "Hooks",
+		"mcp":       "MCP Servers",
+		"lsp":       "LSP Servers",
+		"script":    "Scripts",
+		"setting":   "Settings",
 		"memory":    "Memory",
 		"reference": "References",
 	}
@@ -801,14 +802,14 @@ func (a *App) openPluginDetail(p session.Plugin) (tea.Model, tea.Cmd) {
 
 func buildComponentItems(p session.Plugin) []list.Item {
 	typeLabels := map[string]string{
-		"agent":   "Agents",
-		"skill":   "Skills",
-		"command": "Commands",
-		"hook":    "Hooks",
-		"mcp":     "MCP Servers",
-		"lsp":     "LSP Servers",
-		"script":  "Scripts",
-		"setting": "Settings",
+		"agent":     "Agents",
+		"skill":     "Skills",
+		"command":   "Commands",
+		"hook":      "Hooks",
+		"mcp":       "MCP Servers",
+		"lsp":       "LSP Servers",
+		"script":    "Scripts",
+		"setting":   "Settings",
 		"memory":    "Memory",
 		"reference": "References",
 	}
@@ -1319,7 +1320,7 @@ func (a *App) plgSearchNext(dir int) {
 	}
 	start := a.plgList.Index() + dir
 	for i := 0; i < n; i++ {
-		idx := ((start + i*dir) % n + n) % n
+		idx := ((start+i*dir)%n + n) % n
 		pi, ok := items[idx].(plgItem)
 		if !ok || pi.isHeader {
 			continue
@@ -1558,7 +1559,11 @@ func (a *App) runPluginCmd(action string) (tea.Model, tea.Cmd) {
 	return a, func() tea.Msg {
 		var lastErr error
 		for _, id := range ids {
-			cmd := exec.Command("claude", "plugin", action, id)
+			cmd, err := claudecmd.Command(a.config.Claude, "", "plugin", action, id)
+			if err != nil {
+				lastErr = fmt.Errorf("%s %s: %w", action, id, err)
+				continue
+			}
 			if err := cmd.Run(); err != nil {
 				lastErr = fmt.Errorf("%s %s: %w", action, id, err)
 			}
@@ -1590,7 +1595,11 @@ func (a *App) runPluginInstall() (tea.Model, tea.Cmd) {
 	return a, func() tea.Msg {
 		var lastErr error
 		for _, id := range ids {
-			cmd := exec.Command("claude", "plugin", "install", id)
+			cmd, err := claudecmd.Command(a.config.Claude, "", "plugin", "install", id)
+			if err != nil {
+				lastErr = fmt.Errorf("install %s: %w", id, err)
+				continue
+			}
 			if err := cmd.Run(); err != nil {
 				lastErr = fmt.Errorf("install %s: %w", id, err)
 			}
@@ -1645,7 +1654,11 @@ func (a *App) launchPluginTest() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	script := env.Script()
+	script, err := env.ScriptWithConfig(a.config.Claude)
+	if err != nil {
+		a.copiedMsg = "Claude command failed: " + err.Error()
+		return a, nil
+	}
 	a.copiedMsg = fmt.Sprintf("Testing %d plugins…", len(plugins))
 
 	return a, func() tea.Msg {

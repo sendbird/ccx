@@ -194,7 +194,7 @@ func TestHandleSessionPreviewActionsMenuCopyCopiesPreviewMessage(t *testing.T) {
 	app.sessConvEntries = filterConversation(mergeConversationTurns(entries))
 	app.sessConvCursor = 0
 	app.keymap.Session.Actions = "x"
-	app.keymap.Actions.Copy = "c"
+	app.keymap.Actions.Copy = "z"
 
 	m, _, _ := app.handleConvPreviewKeys(&app.sessSplit, "x")
 	app = m.(*App)
@@ -202,7 +202,7 @@ func TestHandleSessionPreviewActionsMenuCopyCopiesPreviewMessage(t *testing.T) {
 		t.Fatal("expected session preview actions menu to open")
 	}
 
-	m, _ = app.handleActionsMenu("c")
+	m, _ = app.handleActionsMenu("z")
 	app = m.(*App)
 	if app.actionsMenu {
 		t.Fatal("expected actions menu to close after copy")
@@ -233,8 +233,8 @@ func TestHandleSessionPreviewActionsMenuIgnoresExistingMultiSelection(t *testing
 	if strings.Contains(hint, "selected") {
 		t.Fatalf("expected preview actions menu, got bulk hint %q", hint)
 	}
-	if !strings.Contains(hint, "copy-path") {
-		t.Fatalf("expected single-session action hint, got %q", hint)
+	if !strings.Contains(hint, "contexts") {
+		t.Fatalf("expected contexts action hint, got %q", hint)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/sendbird/ccx/internal/claudecmd"
 )
 
 // Pane represents a tmux pane with its metadata.
@@ -263,19 +265,37 @@ func CapturePane(p Pane) (string, error) {
 }
 
 // NewWindowClaude creates a new tmux window with the given name,
-// cd's to dir, and runs "claude --resume <sessionID>".
+// cd's to dir, and resumes the session with the default Claude command.
 func NewWindowClaude(windowName, dir, sessionID string) error {
-	cmd := "cd " + ShellQuote(dir) + " && claude --resume " + sessionID
+	return NewWindowClaudeWithConfig(windowName, dir, sessionID, claudecmd.Config{})
+}
+
+func NewWindowClaudeWithConfig(windowName, dir, sessionID string, cfg claudecmd.Config) error {
+	cmd, err := ClaudeWindowShellCommand(dir, cfg, "--resume", sessionID)
+	if err != nil {
+		return err
+	}
 	return exec.Command("tmux", "new-window", "-d",
 		"-n", windowName, cmd).Run()
 }
 
 // NewWindowClaudeNew creates a new tmux window with the given name,
-// cd's to dir, and runs "claude" (without --resume, starting a fresh session).
+// cd's to dir, and starts a fresh session with the default Claude command.
 func NewWindowClaudeNew(windowName, dir string) error {
-	cmd := "cd " + ShellQuote(dir) + " && claude"
+	return NewWindowClaudeNewWithConfig(windowName, dir, claudecmd.Config{})
+}
+
+func NewWindowClaudeNewWithConfig(windowName, dir string, cfg claudecmd.Config) error {
+	cmd, err := ClaudeWindowShellCommand(dir, cfg)
+	if err != nil {
+		return err
+	}
 	return exec.Command("tmux", "new-window", "-d",
 		"-n", windowName, cmd).Run()
+}
+
+func ClaudeWindowShellCommand(dir string, cfg claudecmd.Config, args ...string) (string, error) {
+	return claudecmd.ShellCommand(cfg, dir, args...)
 }
 
 // SpawnHiddenWindow creates a hidden tmux window running the given command
@@ -418,5 +438,5 @@ func PromptAndSend(p Pane, promptText string) error {
 
 // ShellQuote wraps a string in single quotes for safe shell embedding.
 func ShellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+	return claudecmd.ShellQuote(s)
 }

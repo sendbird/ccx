@@ -24,9 +24,9 @@ const (
 	ConfigCommand
 	ConfigMCP
 	ConfigHook
-	ConfigEnterprise // managed enterprise settings
-	ConfigKeymap     // keybindings from config.yaml
-	ConfigShortcut   // number key shortcuts
+	ConfigEnterprise    // managed enterprise settings
+	ConfigKeymap        // keybindings from config.yaml
+	ConfigShortcut      // number key shortcuts
 	configCategoryCount // must be last
 )
 
@@ -101,6 +101,7 @@ func ScanConfig(claudeDir, projectPath string) (*ConfigTree, error) {
 	claudeMdPath := filepath.Join(claudeDir, "CLAUDE.md")
 	addFileIfExists(tree, ConfigGlobal, claudeDir, "CLAUDE.md")
 	visited := map[string]bool{claudeMdPath: true}
+	addAgentsRefs(tree, ConfigGlobal, claudeDir, claudeMdPath, visited, 1)
 	walkReferences(tree, ConfigGlobal, claudeDir, claudeMdPath, visited, 1)
 
 	// --- PROJECT ---
@@ -111,6 +112,7 @@ func ScanConfig(claudeDir, projectPath string) (*ConfigTree, error) {
 		addFileIfExists(tree, ConfigProject, projDir, "CLAUDE.md")
 		// Walk @references from project CLAUDE.md
 		projVisited := map[string]bool{projClaude: true}
+		addAgentsRefs(tree, ConfigProject, projDir, projClaude, projVisited, 1)
 		// Also merge global visited to avoid duplicating global refs
 		for k := range visited {
 			projVisited[k] = true
@@ -149,6 +151,7 @@ func ScanConfig(claudeDir, projectPath string) (*ConfigTree, error) {
 						Size:        info.Size(),
 					})
 					localVisited[claudePath] = true
+					addAgentsRefs(tree, ConfigLocal, dir, claudePath, localVisited, 1)
 					walkReferences(tree, ConfigLocal, claudeDir, claudePath, localVisited, 1)
 				}
 			}
@@ -242,6 +245,74 @@ func addFileIfExists(tree *ConfigTree, cat ConfigCategory, dir, name string) {
 		ModTime:     info.ModTime(),
 		Size:        info.Size(),
 	})
+}
+
+// reAgentsMarkdownLink matches Markdown links that point to AGENTS.md.
+var reAgentsMarkdownLink = regexp.MustCompile(`\[[^\]]*AGENTS\.md[^\]]*\]\(([^)]*AGENTS\.md)\)`)
+
+func addAgentsRefs(tree *ConfigTree, cat ConfigCategory, baseDir, claudePath string, visited map[string]bool, depth int) {
+	if _, err := os.Stat(claudePath); err != nil {
+		return
+	}
+	addAgentsRef(tree, cat, filepath.Join(baseDir, "AGENTS.md"), claudePath, visited, depth)
+	for _, ref := range extractAgentsRefs(claudePath) {
+		addAgentsRef(tree, cat, ref, claudePath, visited, depth)
+	}
+}
+
+func addAgentsRef(tree *ConfigTree, cat ConfigCategory, path, refBy string, visited map[string]bool, depth int) {
+	path = filepath.Clean(path)
+	if visited[path] {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return
+	}
+	visited[path] = true
+	name := filepath.Base(path)
+	tree.Items = append(tree.Items, ConfigItem{
+		Category:    cat,
+		Name:        name,
+		Path:        path,
+		Description: extractDescription(path),
+		ModTime:     info.ModTime(),
+		Size:        info.Size(),
+		RefBy:       refBy,
+		RefDepth:    depth,
+		Group:       "AGENTS.md",
+	})
+}
+
+func extractAgentsRefs(claudePath string) []string {
+	data, err := os.ReadFile(claudePath)
+	if err != nil {
+		return nil
+	}
+	baseDir := filepath.Dir(claudePath)
+	seen := map[string]bool{}
+	var refs []string
+	for _, match := range reAgentsMarkdownLink.FindAllStringSubmatch(string(data), -1) {
+		if len(match) < 2 {
+			continue
+		}
+		target := strings.TrimSpace(match[1])
+		if target == "" || strings.Contains(target, "://") {
+			continue
+		}
+		if idx := strings.IndexAny(target, "#?"); idx >= 0 {
+			target = target[:idx]
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(baseDir, target)
+		}
+		target = filepath.Clean(target)
+		if !seen[target] {
+			seen[target] = true
+			refs = append(refs, target)
+		}
+	}
+	return refs
 }
 
 func scanDirFiles(tree *ConfigTree, cat ConfigCategory, dir, ext string) {

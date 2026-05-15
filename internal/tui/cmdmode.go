@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/session"
 	"gopkg.in/yaml.v3"
 )
@@ -87,6 +88,8 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewTasksPlan); return a, nil }},
 		{name: "preview:agents", aliases: []string{"p:agents"}, desc: "agents preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewAgents); return a, nil }},
+		{name: "preview:contexts", aliases: []string{"p:contexts", "p:ctx", "contexts", "page:contexts"}, desc: "context tree preview", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewContexts); return a, nil }},
 		{name: "preview:live", aliases: []string{"p:live"}, desc: "live preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				sess, ok := a.selectedSession()
@@ -784,13 +787,16 @@ func (a *App) bootstrapAndEditConfig() (tea.Model, tea.Cmd) {
 				Navigation: km.Navigation,
 			},
 			Preferences: a.capturePreferences(),
+			Claude: claudecmd.Config{
+				CommandTemplate: claudecmd.DefaultTemplate,
+			},
 		}
 		data, err := yaml.Marshal(cfg)
 		if err != nil {
 			a.copiedMsg = "marshal failed: " + err.Error()
 			return a, nil
 		}
-		header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Restart ccx after editing keybindings.\n\n"
+		header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Restart ccx after editing keybindings.\n\n"
 		if err := os.WriteFile(path, []byte(header+string(data)), 0644); err != nil {
 			a.copiedMsg = "write failed: " + err.Error()
 			return a, nil

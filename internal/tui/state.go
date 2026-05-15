@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/remote"
 	"gopkg.in/yaml.v3"
 )
@@ -13,7 +14,7 @@ import (
 // Preferences holds persisted view preferences that survive restarts.
 type Preferences struct {
 	GroupMode       string   `yaml:"group_mode,omitempty"`        // flat|proj|tree|chain|fork
-	PreviewMode     string   `yaml:"preview_mode,omitempty"`      // conv|stats|mem|tasks|live
+	PreviewMode     string   `yaml:"preview_mode,omitempty"`      // conv|stats|mem|tasks|agents|shells|contexts|live
 	ViewMode        string   `yaml:"view_mode,omitempty"`         // sessions|config|plugins|stats
 	ConvDetailLevel int      `yaml:"conv_detail_level,omitempty"` // 0=compact,1=standard,2=verbose
 	SplitRatio      int      `yaml:"split_ratio,omitempty"`       // 15-85
@@ -34,10 +35,11 @@ type KeymapsConfig struct {
 // CCXConfig is the unified config file containing keybindings + preferences.
 // Stored at ~/.config/ccx/config.yaml.
 type CCXConfig struct {
-	Keymaps     KeymapsConfig `yaml:"keymaps,omitempty"`
-	Preferences Preferences   `yaml:"preferences,omitempty"`
-	Shortcuts   Shortcuts     `yaml:"shortcuts,omitempty"`
-	Remote      remote.Config `yaml:"remote,omitempty"`
+	Keymaps     KeymapsConfig    `yaml:"keymaps,omitempty"`
+	Preferences Preferences      `yaml:"preferences,omitempty"`
+	Shortcuts   Shortcuts        `yaml:"shortcuts,omitempty"`
+	Remote      remote.Config    `yaml:"remote,omitempty"`
+	Claude      claudecmd.Config `yaml:"claude,omitempty"`
 }
 
 // configPath returns the path to the unified config file.
@@ -47,21 +49,22 @@ func configPath() string {
 }
 
 // LoadCCXConfig reads the unified config file.
-// Returns keymap, preferences, and shortcuts separately.
-func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config) {
+// Returns keymap, preferences, shortcuts, remote config, and Claude command config.
+func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config, claudecmd.Config) {
 	km := DefaultKeymap()
 	var prefs Preferences
 	sc := DefaultShortcuts()
 	var rc remote.Config
+	var cc claudecmd.Config
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return &km, prefs, sc, rc
+		return &km, prefs, sc, rc, cc
 	}
 
 	var cfg CCXConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return &km, prefs, sc, rc
+		return &km, prefs, sc, rc, cc
 	}
 
 	// Merge keymap overrides from keymaps section
@@ -77,7 +80,7 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config)
 	mergeShortcuts(sc, cfg.Shortcuts)
 	cfg.Shortcuts = sc
 
-	return &km, cfg.Preferences, sc, cfg.Remote
+	return &km, cfg.Preferences, sc, cfg.Remote, cfg.Claude
 }
 
 // SavePreferences updates the preferences section in the config file,
@@ -103,7 +106,7 @@ func SavePreferences(prefs Preferences) {
 		return
 	}
 
-	header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n\n"
+	header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n\n"
 	os.WriteFile(path, []byte(header+string(data)), 0644)
 }
 
@@ -265,6 +268,10 @@ func sessPreviewString(mode sessPreview) string {
 		return "tasks"
 	case sessPreviewAgents:
 		return "agents"
+	case sessPreviewShells:
+		return "shells"
+	case sessPreviewContexts:
+		return "contexts"
 	case sessPreviewLive:
 		return "live"
 	}

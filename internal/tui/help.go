@@ -41,6 +41,9 @@ func (a *App) sessHelpLine() string {
 	if a.tagMenu {
 		return "" // Tag menu has its own help
 	}
+	if a.sessPageMenu {
+		return formatHelp("p:page — pick a preview")
+	}
 	if a.moveMode {
 		return "  " + a.moveInput.View() + helpStyle.Render("  enter:move esc:cancel")
 	}

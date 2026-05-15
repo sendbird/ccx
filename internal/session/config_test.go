@@ -50,6 +50,30 @@ func TestExtractFrontmatterMissing(t *testing.T) {
 	}
 }
 
+func TestScanConfigWithAgentsMarkdownLink(t *testing.T) {
+	dir := t.TempDir()
+	projectPath := filepath.Join(dir, "repo")
+	os.MkdirAll(projectPath, 0755)
+	os.WriteFile(filepath.Join(projectPath, "CLAUDE.md"), []byte("# Project\n\nRead [AGENTS.md](AGENTS.md).\n"), 0644)
+	os.WriteFile(filepath.Join(projectPath, "AGENTS.md"), []byte("# Agent Rules"), 0644)
+
+	tree, err := ScanConfig(dir, projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, item := range tree.Items {
+		if item.Category == ConfigLocal && item.Name == "AGENTS.md" && item.RefBy == filepath.Join(projectPath, "CLAUDE.md") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected local AGENTS.md referenced by CLAUDE.md, got %#v", tree.Items)
+	}
+}
+
 func TestScanConfig(t *testing.T) {
 	dir := t.TempDir()
 

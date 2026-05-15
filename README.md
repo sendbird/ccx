@@ -399,7 +399,7 @@ Short aliases: `g:flat`, `v:stats`, `p:hooks`, `cfg:edit`. Multi-command: `view:
 
 Config file: `~/.config/ccx/config.yaml` (bootstrap with `:config:edit`)
 
-The config file contains three sections:
+The config file contains these sections:
 
 ### Keybindings
 
@@ -428,6 +428,33 @@ preferences:
   hidden_badges: [C, S, X]  # hide specific badges
   filter_term: "is:live"    # last applied session filter
   editor_input: true        # prefer $EDITOR for live input (ctrl+e to toggle)
+```
+
+### Claude command template
+
+Configure the local Claude command used by session resume/new-session, tmux windows,
+plugin commands, and config/plugin test popups:
+
+```yaml
+claude:
+  command_template: "claude {{args}}"
+```
+
+`{{args}}` expands to the arguments supplied by ccx, such as `--resume <session-id>`
+or `plugin install <id>`. If `{{args}}` is omitted, ccx appends its arguments at
+the end. The template is parsed into argv and is not shell-evaluated for normal
+process launches; tmux/script launches shell-quote the rendered argv.
+
+Examples:
+
+```yaml
+claude:
+  command_template: "ccproxy -- claude {{args}}"
+```
+
+```yaml
+claude:
+  command_template: "claude --model opus {{args}}"
 ```
 
 ### Number Key Shortcuts

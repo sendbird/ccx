@@ -6,7 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+
+	"github.com/sendbird/ccx/internal/claudecmd"
 )
 
 // --- Isolated test environment ---
@@ -59,11 +60,16 @@ func (e *IsolatedEnv) WriteSettings(data []byte) error {
 // Script builds a shell script that runs claude in this isolated env.
 // Extra args are appended to the claude command.
 func (e *IsolatedEnv) Script(extraArgs ...string) string {
-	args := strings.Join(extraArgs, " ")
-	mcpArgs := fmt.Sprintf("--mcp-config %s --strict-mcp-config", ShellQuote(e.MCPConfigPath()))
-	claudeCmd := "claude " + mcpArgs
-	if args != "" {
-		claudeCmd += " " + args
+	script, _ := e.ScriptWithConfig(claudecmd.Config{}, extraArgs...)
+	return script
+}
+
+func (e *IsolatedEnv) ScriptWithConfig(cfg claudecmd.Config, extraArgs ...string) (string, error) {
+	args := []string{"--mcp-config", e.MCPConfigPath(), "--strict-mcp-config"}
+	args = append(args, extraArgs...)
+	claudeCmd, err := claudecmd.ShellCommand(cfg, "", args...)
+	if err != nil {
+		return "", err
 	}
 	// Create an editor wrapper that restores real HOME so vim/nvim
 	// can find its config, then reverts HOME for Claude.
@@ -88,7 +94,7 @@ func (e *IsolatedEnv) Script(extraArgs ...string) string {
 		`unset CLAUDECODE; %sexport REAL_HOME=%s; export EDITOR=%s; export HOME=%s; cd %s; %s; `+
 			`rc=$?; if [ $rc -ne 0 ]; then echo ""; echo "[claude exited: $rc] press any key"; read -n1; fi`,
 		OAuthTokenEnv(), ShellQuote(realHome), ShellQuote(wrapperPath), ShellQuote(resolvedHome), ShellQuote(resolvedHome), claudeCmd,
-	)
+	), nil
 }
 
 // RunPopup launches the script in a tmux display-popup with a nested tmux

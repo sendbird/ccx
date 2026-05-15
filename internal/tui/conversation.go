@@ -145,6 +145,16 @@ func (a *App) convPageOpenSelected() (tea.Model, tea.Cmd) {
 	if item == nil {
 		return a, nil
 	}
+	if a.convPage == convPageContexts {
+		node := session.ContextNode{
+			RelatedView:                item.relatedView,
+			RelatedPath:                item.relatedPath,
+			RelatedPluginID:            item.relatedPluginID,
+			RelatedPluginComponentPath: item.relatedPluginComponentPath,
+			RelatedPluginComponentType: item.relatedPluginComponentType,
+		}
+		return a.openRelatedContextNode(node)
+	}
 	switch a.convPage {
 	case convPageImages:
 		if item.imagePasteID > 0 {
@@ -185,6 +195,9 @@ func (a *App) convPageCopySelected() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	target := item.URL
+	if a.convPage == convPageContexts && item.relatedPath != "" {
+		target = item.relatedPath
+	}
 	if a.convPage == convPageFiles || a.convPage == convPageChanges || a.convPage == convPageImages {
 		target = a.convPageItemResolvedTarget(*item)
 	}
@@ -909,11 +922,11 @@ func entryContentHash(blocks []session.ContentBlock) uint64 {
 // uniformly so there's no per-kind special casing downstream.
 //
 //   - Header   : optional descriptor (task subject, agent id, bg command).
-//                Prepended as a single text block in every mode so the user
-//                always sees the context.
+//     Prepended as a single text block in every mode so the user
+//     always sees the context.
 //   - Sources  : per-turn raw entries; compact and standard summarise each.
 //   - Fallback : pre-flattened entry used for verbose mode (and as the
-//                cache-key carrier even when Sources is empty).
+//     cache-key carrier even when Sources is empty).
 type previewBuild struct {
 	Header   string
 	Sources  []session.Entry
@@ -1074,12 +1087,20 @@ func renderPreviewHeader(entry session.Entry, textW int) string {
 }
 
 func makeConvPageItem(item extract.Item, ts time.Time, turnPreview, userPrompt string, imagePasteID int) convPageItem {
+	return makeConvPageItemWithTarget(item, ts, turnPreview, userPrompt, imagePasteID, "", "", "", "")
+}
+
+func makeConvPageItemWithTarget(item extract.Item, ts time.Time, turnPreview, userPrompt string, imagePasteID int, relatedView, relatedPath, relatedPluginID, relatedPluginComponentPath string) convPageItem {
 	return convPageItem{
-		Item:         item,
-		timestamp:    ts,
-		turnPreview:  turnPreview,
-		userPrompt:   userPrompt,
-		imagePasteID: imagePasteID,
+		Item:                       item,
+		timestamp:                  ts,
+		turnPreview:                turnPreview,
+		userPrompt:                 userPrompt,
+		imagePasteID:               imagePasteID,
+		relatedView:                relatedView,
+		relatedPath:                relatedPath,
+		relatedPluginID:            relatedPluginID,
+		relatedPluginComponentPath: relatedPluginComponentPath,
 	}
 }
 
@@ -1109,6 +1130,9 @@ func convPageItemContext(item convPageItem, width int) string {
 	}
 	if item.userPrompt != "" {
 		sections = append(sections, dimStyle.Render("Related user prompt")+"\n"+wrapText(item.userPrompt, width))
+	}
+	if item.relatedView != "" {
+		sections = append(sections, dimStyle.Render("Related view")+"\n"+wrapText(item.relatedView, width))
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -1192,6 +1216,8 @@ func convPageTitle(kind convPageKind) string {
 		return "Changes"
 	case convPageFiles:
 		return "Files"
+	case convPageContexts:
+		return "Contexts"
 	default:
 		return "Conversation"
 	}
@@ -1286,6 +1312,8 @@ func (a *App) renderConvPageBrowser() string {
 					}
 				}
 			}
+			detail = wrapText(item.URL, pw)
+		case convPageContexts:
 			detail = wrapText(item.URL, pw)
 		case convPageImages:
 			id := strings.TrimPrefix(item.URL, "paste:")
@@ -1426,6 +1454,46 @@ func (a *App) openConvFilesPage() (tea.Model, tea.Cmd) {
 		}
 	}
 	sortConvPageItemsByTime(a.convPageItems)
+	a.convPageCursor = 0
+	return a, nil
+}
+
+func flattenContextNodes(nodes []session.ContextNode, prefix string, items *[]convPageItem) {
+	for _, node := range nodes {
+		label := prefix + node.Label
+		if node.Count > 0 {
+			label += fmt.Sprintf(" [%d]", node.Count)
+		}
+		meta := []string{}
+		if node.Status != "" {
+			meta = append(meta, node.Status)
+		}
+		if node.Detail != "" {
+			meta = append(meta, node.Detail)
+		}
+		url := node.Path
+		if url == "" {
+			url = strings.Join(meta, "\n")
+		}
+		item := extract.Item{URL: url, Label: label, Category: "context"}
+		pageItem := makeConvPageItemWithTarget(item, time.Time{}, strings.Join(meta, "\n"), "", 0, node.RelatedView, node.RelatedPath, node.RelatedPluginID, node.RelatedPluginComponentPath)
+		pageItem.relatedPluginComponentType = node.RelatedPluginComponentType
+		*items = append(*items, pageItem)
+		if len(node.Children) > 0 {
+			flattenContextNodes(node.Children, prefix+"  ", items)
+		}
+	}
+}
+
+func (a *App) openConvContextsPage() (tea.Model, tea.Cmd) {
+	a.convPageActive = true
+	a.convPageFocus = false
+	a.convPageLastCursor = -1
+	a.convPage = convPageContexts
+	a.convPageItems = nil
+	if tree, err := session.BuildSessionContextTree(a.config.ClaudeDir, a.currentSess); err == nil {
+		flattenContextNodes(tree.Roots, "", &a.convPageItems)
+	}
 	a.convPageCursor = 0
 	return a, nil
 }
