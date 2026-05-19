@@ -109,7 +109,7 @@ The Claude data directory is resolved in order: `--dir` flag → `CLAUDE_CONFIG_
 
 Browse all Claude Code sessions across projects, sorted by recency.
 
-- **Live/Busy badges** — see which sessions are actively running
+- **Status badges** — at-a-glance session state (see [Session Badges](#session-badges))
 - **Search** (`/`) — filter by project, branch, prompt, window name, or tags
 - **Group modes** (`G` or `:group:*`):
   - **Flat** — simple list sorted by time
@@ -145,6 +145,29 @@ Browse all Claude Code sessions across projects, sorted by recency.
 | `is:current` | Session's project path matches invoker cwd or tmux-window Claude process |
 
 Plain text terms match against project path, name, branch, session ID, first prompt, and teammate name. Multiple terms are AND-matched.
+
+#### Session Badges
+
+Each session row carries two kinds of badges. Independent badges can co-occur; lifecycle badges are mutually exclusive (highest-priority one wins).
+
+**Independent:**
+
+- `[HERE]` — session belongs to the current tmux window
+- `[LIVE]` — a Claude process is attached to the session
+- `[R·exp]` — remote session (experimental)
+- Custom tags — user-applied via `x` → `t` (see [docs/CUSTOM_BADGES.md](docs/CUSTOM_BADGES.md))
+
+**Lifecycle** (priority high → low; at most one shown):
+
+| Badge | When |
+|-------|------|
+| `[BUSY]` | Claude is actively responding (JSONL written within ~10s) |
+| `[BG]` | Live session has a shell/Monitor job, or any cron is `active` |
+| `[STUCK]` | Live, JSONL stale for >30min, and unfinished todos/tasks exist |
+| `[WAIT]` | Live, idle, with unfinished todos/tasks |
+| `[DONE]` | Session had todos/tasks and all are completed |
+
+Example: `[HERE][LIVE][WAIT] my-feature` — current window, live process, idle with pending work.
 
 ### Cross-Session Search
 
@@ -377,7 +400,7 @@ Available from any view. Suggestions are context-aware — only relevant command
 | `search` | All | Cross-session content search |
 | `config:edit` | All | Edit config file |
 | `detail:text\|tool\|hook` | Conversation | Set detail level |
-| `badge:toggle <KEY>` | Sessions | Toggle badge visibility (M,W,T,K,P,A,C,S,X,F,LIVE) |
+| `badge:toggle <KEY>` | Sessions | Toggle badge visibility (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK) |
 
 Short aliases: `g:flat`, `v:stats`, `p:hooks`, `cfg:edit`. Multi-command: `view:config page:hooks`.
 
@@ -425,7 +448,7 @@ preferences:
   conv_detail_level: 1      # 0=text, 1=tool, 2=hook
   split_ratio: 35           # 15-85
   worktree_dir: .worktree   # git worktree subdirectory name
-  hidden_badges: [C, S, X]  # hide specific badges
+  hidden_badges: [DONE, STUCK]  # hide specific badges
   filter_term: "is:live"    # last applied session filter
   editor_input: true        # prefer $EDITOR for live input (ctrl+e to toggle)
 ```

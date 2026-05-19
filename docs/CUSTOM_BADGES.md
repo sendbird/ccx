@@ -1,6 +1,6 @@
 # Custom Badges
 
-User-created badge labels for organizing and filtering Claude Code sessions.
+User-created badge labels for organizing and filtering Claude Code sessions. Built-in system badges (`[HERE]`, `[LIVE]`, `[BUSY]`, `[BG]`, `[WAIT]`, `[DONE]`, `[STUCK]`, `[R·exp]`) are documented in the [README](../README.md#session-badges).
 
 ## Overview
 
@@ -62,8 +62,8 @@ Shows confirmation: "Removed 'urgent' from 5 session(s)"
 Custom badges appear after built-in badges in lime green italic:
 
 ```
-[LIVE] [M] [T] [urgent] [bug-fix]
-       ↑      ↑  ↑ custom badges (italic)
+[LIVE] [WAIT] [urgent] [bug-fix]
+       ↑      ↑ custom badges (italic)
        built-in
 ```
 
@@ -130,7 +130,7 @@ User presses x → t
 ```
 Session list render
   → For each session
-  → Render built-in badges [LIVE] [M] [T]
+  → Render built-in badges [LIVE] [WAIT]
   → Loop through Session.CustomBadges
   → Render with customBadgeStyle (lime green italic)
 ```
