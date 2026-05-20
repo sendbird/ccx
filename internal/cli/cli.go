@@ -23,7 +23,9 @@ var Commands = []struct {
 	{"changes", "List file changes made by the session (interactive on TTY)"},
 	{"images", "List image paths from the session (interactive on TTY)"},
 	{"conversation", "List conversation turns from the Claude session (interactive on TTY)"},
+	{"info", "Show the matched Claude session metadata"},
 	{"sessions", "List session IDs with metadata (use --pick for TUI JSON picker)"},
+	{"config", "View/edit ccx config and get/set dot-path values"},
 	{"help", "Show available commands and usage"},
 }
 
@@ -44,6 +46,9 @@ func Run(command, claudeDir string, plain bool) (*RunResult, error) {
 	// "sessions" is handled directly in main.go with its own flags
 	if command == "sessions" {
 		return nil, RunSessions(claudeDir, false)
+	}
+	if command == "info" {
+		return nil, RunInfo(claudeDir)
 	}
 
 	filePath, sessID, err := findSessionFile(claudeDir)
@@ -125,7 +130,8 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "ccx — Claude Code Explorer\n\n")
 	fmt.Fprintf(os.Stderr, "Usage:\n")
 	fmt.Fprintf(os.Stderr, "  ccx              Launch the TUI\n")
-	fmt.Fprintf(os.Stderr, "  ccx <command>    Run a subcommand\n\n")
+	fmt.Fprintf(os.Stderr, "  ccx <command>    Run a subcommand\n")
+	fmt.Fprintf(os.Stderr, "  ccx config <view|edit|path|get|set> ...\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	for _, c := range Commands {
 		fmt.Fprintf(os.Stderr, "  %-10s %s\n", c.Name, c.Desc)
@@ -140,7 +146,11 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "  ccx files             Interactive file picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx changes           Interactive changed-files picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx images            Interactive image picker\n")
-	fmt.Fprintf(os.Stderr, "  ccx conversation      Interactive conversation picker\n\n")
+	fmt.Fprintf(os.Stderr, "  ccx conversation      Interactive conversation picker\n")
+	fmt.Fprintf(os.Stderr, "  ccx info              Show current matched session metadata\n")
+	fmt.Fprintf(os.Stderr, "  ccx config view       Print ~/.config/ccx/config.yaml\n")
+	fmt.Fprintf(os.Stderr, "  ccx config edit       Open config in $EDITOR\n")
+	fmt.Fprintf(os.Stderr, "  ccx config set remote.pod_name ccx-worker\n\n")
 	fmt.Fprintf(os.Stderr, "Picker keys:\n")
 	fmt.Fprintf(os.Stderr, "  ↵ enter    Jump to message in full ccx TUI\n")
 	fmt.Fprintf(os.Stderr, "  o          Open URL in browser\n")
@@ -307,6 +317,32 @@ func RunSessions(claudeDir string, all bool) error {
 		prompt = strings.ReplaceAll(prompt, "\t", " ")
 		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%d\t%s\t%s\n",
 			s.ID, s.ShortID, s.ModTime.Format("2006-01-02 15:04"), s.MsgCount, s.ProjectName, prompt)
+	}
+	return nil
+}
+
+func RunInfo(claudeDir string) error {
+	_, sessID, err := findSessionFile(claudeDir)
+	if err != nil {
+		return err
+	}
+	sess, ok := session.FindSessionByID(claudeDir, sessID)
+	if !ok {
+		return fmt.Errorf("session %s not found", sessID)
+	}
+	fmt.Fprintf(os.Stdout, "id\t%s\n", sess.ID)
+	fmt.Fprintf(os.Stdout, "short_id\t%s\n", sess.ShortID)
+	fmt.Fprintf(os.Stdout, "project\t%s\n", sess.ProjectName)
+	fmt.Fprintf(os.Stdout, "project_path\t%s\n", sess.ProjectPath)
+	fmt.Fprintf(os.Stdout, "transcript\t%s\n", sess.FilePath)
+	fmt.Fprintf(os.Stdout, "modified\t%s\n", sess.ModTime.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(os.Stdout, "messages\t%d\n", sess.MsgCount)
+	if sess.GitBranch != "" {
+		fmt.Fprintf(os.Stdout, "git_branch\t%s\n", sess.GitBranch)
+	}
+	if sess.FirstPrompt != "" {
+		prompt := strings.ReplaceAll(sess.FirstPrompt, "\n", " ")
+		fmt.Fprintf(os.Stdout, "first_prompt\t%s\n", prompt)
 	}
 	return nil
 }

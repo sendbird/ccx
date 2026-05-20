@@ -386,6 +386,7 @@ type App struct {
 	remoteDefaults      remote.Config           // defaults from config.yaml
 	remoteJSONLFile     *os.File                // temp file accumulating streamed JSONL
 	remoteStreaming     bool                    // true once Claude output is streaming
+	remoteLastPoll      time.Time               // last time saved-pod phases were polled
 	// Generic confirm modal
 	confirmMsg string // message to show (empty = no modal)
 
@@ -764,6 +765,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case remoteExecDoneMsg:
 		return a.handleRemoteExecDone(msg)
+
+	case remotePhaseMsg:
+		return a.handleRemotePhase(msg)
+
+	case remoteExecOutputMsg:
+		return a.handleRemoteExecOutput(msg)
+
+	case remoteSnapshotMsg:
+		return a.handleRemoteSnapshot(msg)
+
+	case remotePullMsg:
+		return a.handleRemotePull(msg)
+
+	case remoteForkReadyMsg:
+		return a.handleRemoteForkReady(msg)
 
 	case delayedRefreshMsg:
 		// Auto-refresh after spawning a new session; retry if session not found yet
@@ -3841,8 +3857,18 @@ func (a *App) handleTick() tea.Cmd {
 		a.refreshRespondingState()
 	}
 
+	// Poll remote pod phases at most every 30s. Off the main goroutine.
+	var pollCmd tea.Cmd
+	if time.Since(a.remoteLastPoll) >= 30*time.Second {
+		a.remoteLastPoll = time.Now()
+		pollCmd = pollRemotePhasesCmd()
+	}
+
 	if !a.liveUpdate {
-		return nil
+		return pollCmd
+	}
+	if pollCmd != nil {
+		return tea.Batch(a.doRefresh(), pollCmd)
 	}
 	return a.doRefresh()
 }

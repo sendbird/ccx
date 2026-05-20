@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -13,9 +14,149 @@ import (
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
 	"github.com/sendbird/ccx/internal/tui"
+	"gopkg.in/yaml.v3"
 )
 
 var version = "dev"
+
+func defaultConfigHeader() string {
+	return "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n\n"
+}
+
+func runConfigCommand(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: ccx config <view|edit|path|get|set> [path] [value]")
+	}
+	path := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
+	switch args[0] {
+	case "path":
+		fmt.Println(path)
+		return nil
+	case "view", "list", "ls":
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fmt.Print(string(data))
+		return nil
+	case "edit":
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if err := os.WriteFile(path, []byte(defaultConfigHeader()), 0644); err != nil {
+				return err
+			}
+		}
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "vi"
+		}
+		cmd := exec.Command(editor, path)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	case "get":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: ccx config get <dot.path>")
+		}
+		cfg, err := readConfigMap(path)
+		if err != nil {
+			return err
+		}
+		val, ok := getConfigPath(cfg, args[1])
+		if !ok {
+			return fmt.Errorf("config path not found: %s", args[1])
+		}
+		data, err := yaml.Marshal(val)
+		if err != nil {
+			return err
+		}
+		fmt.Print(string(data))
+		return nil
+	case "set":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: ccx config set <dot.path> <value>")
+		}
+		cfg, err := readConfigMap(path)
+		if err != nil {
+			return err
+		}
+		setConfigPath(cfg, args[1], parseConfigValue(args[2]))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		data, err := yaml.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(defaultConfigHeader()+string(data)), 0644); err != nil {
+			return err
+		}
+		fmt.Printf("%s = %v\n", args[1], parseConfigValue(args[2]))
+		return nil
+	default:
+		return fmt.Errorf("unknown config command %q", args[0])
+	}
+}
+
+func readConfigMap(path string) (map[string]interface{}, error) {
+	cfg := map[string]interface{}{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return nil, err
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func getConfigPath(cfg map[string]interface{}, dotPath string) (interface{}, bool) {
+	cur := interface{}(cfg)
+	for _, part := range strings.Split(dotPath, ".") {
+		m, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+func setConfigPath(cfg map[string]interface{}, dotPath string, value interface{}) {
+	parts := strings.Split(dotPath, ".")
+	cur := cfg
+	for _, part := range parts[:len(parts)-1] {
+		next, _ := cur[part].(map[string]interface{})
+		if next == nil {
+			next = map[string]interface{}{}
+			cur[part] = next
+		}
+		cur = next
+	}
+	cur[parts[len(parts)-1]] = value
+}
+
+func parseConfigValue(value string) interface{} {
+	switch value {
+	case "true":
+		return true
+	case "false":
+		return false
+	case "null", "nil", "~":
+		return nil
+	default:
+		return value
+	}
+}
 
 func main() {
 	var (
@@ -53,7 +194,13 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
-		case "urls", "files", "changes", "images", "conversation", "help":
+		case "config":
+			if err := runConfigCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "urls", "files", "changes", "images", "conversation", "info", "help":
 			subcmd := os.Args[1]
 			fs := flag.NewFlagSet(subcmd, flag.ExitOnError)
 			plain := fs.Bool("plain", false, "force plain text output (no interactive picker)")
@@ -92,7 +239,8 @@ func main() {
 		flag.Usage = func() {
 			fmt.Fprintf(os.Stderr, "ccx — Claude Code Explorer\n\n")
 			fmt.Fprintf(os.Stderr, "Usage: ccx [flags]\n")
-			fmt.Fprintf(os.Stderr, "       ccx <command> [--plain]\n\n")
+			fmt.Fprintf(os.Stderr, "       ccx <command> [--plain]\n")
+			fmt.Fprintf(os.Stderr, "       ccx config <view|edit|path|get|set> ...\n\n")
 			fmt.Fprintf(os.Stderr, "Commands:\n")
 			for _, c := range cli.Commands {
 				fmt.Fprintf(os.Stderr, "  %-10s %s\n", c.Name, c.Desc)

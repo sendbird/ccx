@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -18,24 +19,34 @@ func CurrentContext() (string, error) {
 
 // Config holds settings for a remote Claude execution.
 type Config struct {
-	Context     string            `yaml:"context"`       // kubectl --context (required)
-	Namespace   string            `yaml:"namespace"`     // target namespace
-	Image       string            `yaml:"image"`         // container image
-	LocalDir    string            `yaml:"local_dir"`     // local workdir to sync
-	GitRepo     string            `yaml:"git_repo"`      // repo URL to clone (fallback if no local_dir)
-	GitBranch   string            `yaml:"git_branch"`    // branch to checkout
-	WorkDir     string            `yaml:"work_dir"`      // remote working directory
-	Prompt      string            `yaml:"-"`             // initial prompt (not persisted)
-	CPULimit    string            `yaml:"cpu_limit"`     // e.g. "2"
-	MemoryLimit string            `yaml:"memory_limit"`  // e.g. "4Gi"
-	Arch        string            `yaml:"arch"`          // "amd64" or "arm64"
-	EnvVars     map[string]string `yaml:"env_vars"`      // extra env vars to inject into pod
-	MirrorEnv   []string          `yaml:"mirror_env"`    // local env var names to mirror to pod
-	Labels      map[string]string `yaml:"labels"`        // extra pod labels
-	Tolerations []string          `yaml:"tolerations"`   // toleration keys
-	ClaudeArgs  []string          `yaml:"claude_args"`   // extra args for claude CLI (e.g. --model, --allowedTools)
-	SessionID   string            `yaml:"-"`             // session ID to resume
-	SessionFile string            `yaml:"-"`             // local path to session JSONL
+	Context           string            `yaml:"context"`             // kubectl --context (required)
+	Namespace         string            `yaml:"namespace"`           // target namespace
+	PodName           string            `yaml:"pod_name"`            // fixed pod name to reuse (optional)
+	Container         string            `yaml:"container"`           // target container name (optional)
+	RemoteUser        string            `yaml:"remote_user"`         // user to run Claude as
+	RemoteHome        string            `yaml:"remote_home"`         // remote user's home directory
+	Image             string            `yaml:"image"`               // container image
+	LocalDir          string            `yaml:"local_dir"`           // local workdir to sync
+	RemoteProjectPath string            `yaml:"remote_project_path"` // project path key to use for Claude session JSONL
+	GitRepo           string            `yaml:"git_repo"`            // repo URL to clone (fallback if no local_dir)
+	GitBranch         string            `yaml:"git_branch"`          // branch to checkout
+	WorkDir           string            `yaml:"work_dir"`            // remote working directory
+	WorkDirTemplate   string            `yaml:"work_dir_template"`   // optional template for per-session workdirs
+	Prompt            string            `yaml:"-"`                   // initial prompt (not persisted)
+	CPULimit          string            `yaml:"cpu_limit"`           // e.g. "2"
+	MemoryLimit       string            `yaml:"memory_limit"`        // e.g. "4Gi"
+	Arch              string            `yaml:"arch"`                // "amd64" or "arm64"
+	EnvVars           map[string]string `yaml:"env_vars"`            // extra env vars to inject into pod
+	MirrorEnv         []string          `yaml:"mirror_env"`          // local env var names to mirror to pod
+	Labels            map[string]string `yaml:"labels"`              // extra pod labels
+	Tolerations       []string          `yaml:"tolerations"`         // toleration keys
+	ClaudeArgs        []string          `yaml:"claude_args"`         // extra args for claude CLI (e.g. --model, --allowedTools)
+	SessionID         string            `yaml:"-"`                   // session ID to resume
+	SessionFile       string            `yaml:"-"`                   // local path to session JSONL
+	// WorkdirTarball, when non-nil, is uploaded verbatim into WorkDir on the pod
+	// instead of re-tarring LocalDir. Used by snapshot restore / fork to avoid
+	// host-side changes leaking into the resumed pod.
+	WorkdirTarball []byte `yaml:"-"`
 }
 
 // Defaults returns a Config with sensible defaults filled in.
@@ -49,6 +60,15 @@ func (c Config) Defaults() Config {
 	if c.Image == "" {
 		c.Image = "ubuntu:24.04"
 	}
+	if c.Container == "" {
+		c.Container = "main"
+	}
+	if c.RemoteUser == "" {
+		c.RemoteUser = "claude"
+	}
+	if c.RemoteHome == "" {
+		c.RemoteHome = "/home/" + c.RemoteUser
+	}
 	if c.GitBranch == "" {
 		c.GitBranch = "main"
 	}
@@ -60,9 +80,6 @@ func (c Config) Defaults() Config {
 	}
 	if c.MemoryLimit == "" {
 		c.MemoryLimit = "4Gi"
-	}
-	if c.Arch == "" {
-		c.Arch = "amd64"
 	}
 	return c
 }
@@ -80,4 +97,19 @@ func GeneratePodName() string {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return fmt.Sprintf("ccx-remote-%x", b)
+}
+
+// HostArch returns the local machine's GOARCH normalized to the k8s
+// kubernetes.io/arch convention (amd64, arm64).
+func HostArch() string {
+	return runtime.GOARCH
+}
+
+// ArchMismatch reports whether cfg.Arch is set and differs from the host arch.
+// Comparison is case-insensitive; "" never mismatches.
+func (c Config) ArchMismatch() bool {
+	if c.Arch == "" {
+		return false
+	}
+	return !strings.EqualFold(c.Arch, HostArch())
 }

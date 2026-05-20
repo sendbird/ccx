@@ -70,6 +70,9 @@ func podSpec(cfg Config, podName, oauthToken string) ([]byte, error) {
 			},
 		},
 	}
+	if cfg.Arch != "" {
+		podSpecMap["nodeSelector"] = map[string]string{"kubernetes.io/arch": cfg.Arch}
+	}
 	if len(tolerations) > 0 {
 		podSpecMap["tolerations"] = tolerations
 	}
@@ -127,8 +130,12 @@ func ExecInPod(ctx context.Context, cfg Config, podName string, cmd ...string) (
 	args := []string{
 		"--context", cfg.Context,
 		"-n", cfg.Namespace,
-		"exec", podName, "--",
+		"exec", podName,
 	}
+	if cfg.Container != "" {
+		args = append(args, "-c", cfg.Container)
+	}
+	args = append(args, "--")
 	args = append(args, cmd...)
 	c := exec.CommandContext(ctx, "kubectl", args...)
 	return c.CombinedOutput()
@@ -154,8 +161,12 @@ func ExecInteractive(cfg Config, podName string, cmd ...string) *exec.Cmd {
 	args := []string{
 		"--context", cfg.Context,
 		"-n", cfg.Namespace,
-		"exec", "-it", podName, "--",
+		"exec", "-it", podName,
 	}
+	if cfg.Container != "" {
+		args = append(args, "-c", cfg.Container)
+	}
+	args = append(args, "--")
 	args = append(args, cmd...)
 	return exec.Command("kubectl", args...)
 }

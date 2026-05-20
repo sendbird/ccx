@@ -332,10 +332,51 @@ func buildCmdRegistry() []cmdEntry {
 		// Remote execution
 		{name: "remote:start", aliases: []string{"r:start"}, desc: "resume session remotely",
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteStart("remote:start") }},
-		{name: "remote:stop", aliases: []string{"r:stop"}, desc: "stop remote + delete pod",
+		{name: "remote:stop", aliases: []string{"r:stop", "remote:rm"}, desc: "stop remote + delete pod",
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.stopRemoteSession() }},
+		{name: "remote:stop-pull", aliases: []string{"r:stop-pull"}, desc: "pull workdir then stop pod",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.stopRemoteSessionWithPull() }},
 		{name: "remote:attach", aliases: []string{"r:attach"}, desc: "reattach to remote Claude",
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.reconnectRemoteSession() }},
+		{name: "remote:ls", aliases: []string{"r:ls"}, desc: "jump to first remote session",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteLs() }},
+		{name: "remote:phase", aliases: []string{"r:phase"}, desc: "show pod phase for selected remote",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemotePhase() }},
+		{name: "remote:exec", aliases: []string{"r:exec"}, desc: "kubectl exec in selected remote pod",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.copiedMsg = "Usage: remote:exec <command...>"
+				return a, nil
+			}},
+		{name: "remote:snapshot", aliases: []string{"r:snap"}, desc: "save remote workdir + session",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteSnapshot("remote:snapshot") }},
+		{name: "remote:snapshots", aliases: []string{"r:snaps"}, desc: "list saved snapshots",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteSnapshots() }},
+		{name: "remote:restore", aliases: []string{"r:restore"}, desc: "boot new pod from snapshot",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.copiedMsg = "Usage: remote:restore <snapshot-name> [context] [namespace]"
+				return a, nil
+			}},
+		{name: "remote:fork", aliases: []string{"r:fork"}, desc: "clone selected pod into a fresh one",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteFork("") }},
+		{name: "remote:pull", aliases: []string{"r:pull", "remote:sync-down", "r:sync-down"}, desc: "fetch pod workdir back to host",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemotePull("remote:pull") }},
+		{name: "remote:sync-up", aliases: []string{"r:sync-up"}, desc: "sync local session/workdir to remote pod",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteStart("remote:sync-up") }},
+		{name: "remote:rm-snap", aliases: []string{"r:rm-snap"}, desc: "delete a saved snapshot",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.copiedMsg = "Usage: remote:rm-snap <snapshot-name>"
+				return a, nil
+			}},
+		{name: "remote:export-snap", aliases: []string{"r:export-snap"}, desc: "export snapshot as tar.gz",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.copiedMsg = "Usage: remote:export-snap <snapshot-name> <output.tgz>"
+				return a, nil
+			}},
+		{name: "remote:import-snap", aliases: []string{"r:import-snap"}, desc: "import snapshot tar.gz",
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.copiedMsg = "Usage: remote:import-snap <bundle.tgz> [snapshot-name]"
+				return a, nil
+			}},
 	}
 }
 
@@ -584,9 +625,46 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 		return a.executeCmdWorktreeNew(input)
 	}
 
-	// Check remote:start <context> <repo> [branch] [prompt]
-	if strings.HasPrefix(lower, "remote:start") || strings.HasPrefix(lower, "r:start") {
+	// Check remote:start / remote:sync-up [key=value...] [prompt...]
+	if strings.HasPrefix(lower, "remote:start") || strings.HasPrefix(lower, "r:start") ||
+		strings.HasPrefix(lower, "remote:sync-up") || strings.HasPrefix(lower, "r:sync-up") {
 		return a.executeCmdRemoteStart(input)
+	}
+
+	// Check remote:exec <command...>
+	if strings.HasPrefix(lower, "remote:exec") || strings.HasPrefix(lower, "r:exec") {
+		return a.executeCmdRemoteExec(input)
+	}
+
+	// Check remote:snapshot [name]
+	if strings.HasPrefix(lower, "remote:snapshot") || strings.HasPrefix(lower, "r:snap") {
+		return a.executeCmdRemoteSnapshot(input)
+	}
+
+	// Check remote:restore <name>
+	if strings.HasPrefix(lower, "remote:restore") || strings.HasPrefix(lower, "r:restore") {
+		return a.executeCmdRemoteRestore(input)
+	}
+
+	// Check remote:pull / remote:sync-down [target-dir]
+	if strings.HasPrefix(lower, "remote:pull") || strings.HasPrefix(lower, "r:pull") ||
+		strings.HasPrefix(lower, "remote:sync-down") || strings.HasPrefix(lower, "r:sync-down") {
+		return a.executeCmdRemotePull(input)
+	}
+
+	// Check remote:rm-snap <name>
+	if strings.HasPrefix(lower, "remote:rm-snap") || strings.HasPrefix(lower, "r:rm-snap") {
+		return a.executeCmdRemoteRmSnap(input)
+	}
+
+	// Check remote:export-snap <name> <path>
+	if strings.HasPrefix(lower, "remote:export-snap") || strings.HasPrefix(lower, "r:export-snap") {
+		return a.executeCmdRemoteExportSnap(input)
+	}
+
+	// Check remote:import-snap <path> [name]
+	if strings.HasPrefix(lower, "remote:import-snap") || strings.HasPrefix(lower, "r:import-snap") {
+		return a.executeCmdRemoteImportSnap(input)
 	}
 
 	// Split into parts for multi-command support

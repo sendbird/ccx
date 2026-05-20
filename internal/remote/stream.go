@@ -18,8 +18,12 @@ func StreamExec(ctx context.Context, cfg Config, podName string, cmd ...string) 
 	args := []string{
 		"--context", cfg.Context,
 		"-n", cfg.Namespace,
-		"exec", podName, "--",
+		"exec", podName,
 	}
+	if cfg.Container != "" {
+		args = append(args, "-c", cfg.Container)
+	}
+	args = append(args, "--")
 	args = append(args, cmd...)
 	c := exec.CommandContext(ctx, "kubectl", args...)
 
