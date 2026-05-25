@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/claudecmd"
+	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/remote"
@@ -3800,9 +3801,17 @@ func shellescape(s string) string {
 
 // --- Live refresh ---
 
-// refreshRespondingState re-checks IsResponding for live sessions by stat-ing
-// their JSONL files. Updates the list if any badge changed.
+// refreshRespondingState re-checks IsResponding for live sessions from
+// the Claude registry (status=="busy"). Updates the list if any badge
+// changed.
 func (a *App) refreshRespondingState() {
+	live, _ := clauderegistry.Read()
+	busy := make(map[string]bool, len(live))
+	for _, l := range live {
+		if l.Status == "busy" {
+			busy[l.SessionID] = true
+		}
+	}
 	changed := false
 	for i := range a.sessions {
 		if !a.sessions[i].IsLive {
@@ -3812,12 +3821,8 @@ func (a *App) refreshRespondingState() {
 			}
 			continue
 		}
-		info, err := os.Stat(a.sessions[i].FilePath)
-		if err != nil {
-			continue
-		}
 		wasResponding := a.sessions[i].IsResponding
-		a.sessions[i].IsResponding = time.Since(info.ModTime()) < 10*time.Second
+		a.sessions[i].IsResponding = busy[a.sessions[i].ID]
 		if a.sessions[i].IsResponding != wasResponding {
 			changed = true
 		}

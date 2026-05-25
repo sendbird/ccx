@@ -1,11 +1,11 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/session"
@@ -40,46 +40,58 @@ func writeTestSessionFile(t *testing.T, claudeDir, projectPath, sessionID string
 	return filePath
 }
 
-func writeLiveDetectionStubs(t *testing.T, binDir string, livePaths ...string) {
+// writeRegistryEntry creates a Claude registry file for the given session.
+// CLAUDE_CONFIG_DIR must already be pointed at configDir by the caller.
+// Uses the current process PID so the entry passes the kill(pid,0) liveness
+// check in clauderegistry.Read().
+func writeRegistryEntry(t *testing.T, configDir, sessionID, cwd, status string) {
 	t.Helper()
-
-	pgrepScript := "#!/bin/sh\nexit 1\n"
-	lsofScript := "#!/bin/sh\nexit 1\n"
-	if len(livePaths) > 0 {
-		pgrepScript = "#!/bin/sh\necho 123\n"
-		lsofScript = "#!/bin/sh\ncat <<'EOF'\n"
-		for _, path := range livePaths {
-			lsofScript += "n" + path + "\n"
-		}
-		lsofScript += "EOF\n"
+	dir := filepath.Join(configDir, "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
 	}
+	pid := os.Getpid()
+	entry := map[string]any{
+		"pid":       pid,
+		"sessionId": sessionID,
+		"cwd":       cwd,
+		"status":    status,
+		"kind":      "interactive",
+	}
+	body, _ := json.Marshal(entry)
+	path := filepath.Join(dir, fmt.Sprintf("%d-%s.json", pid, sessionID))
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+}
 
-	for name, content := range map[string]string{
-		"pgrep": pgrepScript,
-		"lsof":  lsofScript,
-	} {
-		path := filepath.Join(binDir, name)
-		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
-			t.Fatalf("write %s stub: %v", name, err)
-		}
+// clearRegistry removes every file in $CLAUDE_CONFIG_DIR/sessions.
+func clearRegistry(t *testing.T, configDir string) {
+	t.Helper()
+	dir := filepath.Join(configDir, "sessions")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(dir, e.Name()))
 	}
 }
 
 func TestDoRefreshRebuildsFilteredSessionItemsWhenLiveStateChanges(t *testing.T) {
 	home := t.TempDir()
 	claudeDir := filepath.Join(home, ".claude")
-	binDir := filepath.Join(home, "bin")
+	configDir := filepath.Join(home, "config")
 	projectPath := filepath.Join(home, "proj-b")
 
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		t.Fatalf("mkdir claude dir: %v", err)
 	}
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir bin dir: %v", err)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
 	}
 
-	writeLiveDetectionStubs(t, binDir)
-	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	t.Setenv("TMUX", "")
 
 	writeTestSessionFile(t, claudeDir, projectPath, "sess-b")
@@ -102,7 +114,7 @@ func TestDoRefreshRebuildsFilteredSessionItemsWhenLiveStateChanges(t *testing.T)
 		t.Fatal("expected initial selected session to be non-live")
 	}
 
-	writeLiveDetectionStubs(t, binDir, projectPath)
+	writeRegistryEntry(t, configDir, "sess-b", projectPath, "idle")
 	app.doRefresh()
 
 	selected, ok = app.selectedSession()
@@ -117,25 +129,23 @@ func TestDoRefreshRebuildsFilteredSessionItemsWhenLiveStateChanges(t *testing.T)
 func TestRefreshRespondingStateRebuildsFilteredSessionItems(t *testing.T) {
 	home := t.TempDir()
 	claudeDir := filepath.Join(home, ".claude")
-	binDir := filepath.Join(home, "bin")
+	configDir := filepath.Join(home, "config")
 	projectPath := filepath.Join(home, "proj-b")
 
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		t.Fatalf("mkdir claude dir: %v", err)
 	}
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir bin dir: %v", err)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
 	}
 
-	writeLiveDetectionStubs(t, binDir)
-	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	t.Setenv("TMUX", "")
 
 	filePath := writeTestSessionFile(t, claudeDir, projectPath, "sess-b")
-	stale := time.Now().Add(-time.Minute)
-	if err := os.Chtimes(filePath, stale, stale); err != nil {
-		t.Fatalf("set stale modtime: %v", err)
-	}
+
+	// Initial state: live but idle.
+	writeRegistryEntry(t, configDir, "sess-b", projectPath, "idle")
 
 	app := newConfiguredTestApp([]session.Session{{
 		ID:           "sess-b",
@@ -143,7 +153,6 @@ func TestRefreshRespondingStateRebuildsFilteredSessionItems(t *testing.T) {
 		FilePath:     filePath,
 		ProjectPath:  projectPath,
 		ProjectName:  "proj-b",
-		ModTime:      stale,
 		MsgCount:     1,
 		IsLive:       true,
 		IsResponding: false,
@@ -158,10 +167,9 @@ func TestRefreshRespondingStateRebuildsFilteredSessionItems(t *testing.T) {
 		t.Fatal("expected initial selected session to be idle")
 	}
 
-	now := time.Now()
-	if err := os.Chtimes(filePath, now, now); err != nil {
-		t.Fatalf("touch session file: %v", err)
-	}
+	// Flip registry status to busy.
+	clearRegistry(t, configDir)
+	writeRegistryEntry(t, configDir, "sess-b", projectPath, "busy")
 
 	app.refreshRespondingState()
 
