@@ -94,7 +94,7 @@ func MarkLiveSessions(sessions []session.Session) {
 			continue
 		}
 		sessions[i].IsLive = true
-		sessions[i].IsResponding = l.Status == "busy"
+		sessions[i].IsResponding = l.IsResponding()
 		if p, has := paneByLivePID[l.PID]; has {
 			if p.WindowName != "" {
 				sessions[i].TmuxWindowName = p.WindowName

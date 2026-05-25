@@ -1,16 +1,13 @@
 // Package clauderegistry reads Claude Code's on-disk live-session registry
-// at $CLAUDE_CONFIG_DIR/sessions/*.json. Each file is written by a running
-// claude process and contains (pid, sessionId, cwd, status, ...). The
-// directory is the source of truth for which sessions are live right now.
+// at $CLAUDE_CONFIG_DIR/sessions/<pid>.json — one file per top-level
+// claude process, written at startup and mutated in place as state
+// changes. CCX uses it to detect which sessions are alive and which are
+// actively producing a turn.
 //
-// Why files and not `claude agents --json`:
-//   - reads are cheap (no process fork per refresh)
-//   - watchable via fsnotify
-//   - same data shape; --json is just the aggregated view
-//
-// `claude agents --json` remains a valid escape hatch if Claude Code ever
-// changes the on-disk layout in a way we can't follow — revisit if Read()
-// starts returning empty while pgrep -x claude has live PIDs.
+// Only the fields ccx actually consumes are decoded below. The full
+// schema, lifecycle, and quirks (status values, name vs custom-title,
+// PID reuse, WSL leak) are documented in
+// docs/claude-code/live-session-registry.md.
 package clauderegistry
 
 import (
@@ -24,17 +21,33 @@ import (
 	"time"
 )
 
-// LiveSession is one entry from the registry. Fields we don't need are
-// dropped during unmarshal.
+// Field values we actually branch on.
+const (
+	statusBusy       = "busy"        // actively processing a turn
+	kindInteractive  = "interactive" // normal user session
+)
+
+// LiveSession is the subset of a registry entry that ccx consumes. The
+// on-disk file has many more fields — see the docs.
+//
+// Status, in particular, may be absent on a file captured between
+// registration and the first REPL state update. Empty Status is treated
+// as "not responding".
 type LiveSession struct {
-	PID        int    `json:"pid"`
-	SessionID  string `json:"sessionId"`
-	CWD        string `json:"cwd"`
-	Status     string `json:"status"` // "busy" | "idle" | ...
-	Kind       string `json:"kind"`   // "interactive" for normal sessions
-	Entrypoint string `json:"entrypoint"`
-	Name       string `json:"name"`
-	UpdatedAt  int64  `json:"updatedAt"`
+	PID       int    `json:"pid"`
+	SessionID string `json:"sessionId"`
+	CWD       string `json:"cwd"`
+	Status    string `json:"status,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+}
+
+// IsResponding reports whether the model is actively generating right
+// now. Only "busy" counts: "shell" (REPL idle, background Bash still
+// running) and "waiting" (blocked on user input) deliberately don't, or
+// a session that leaves a long-running tool in the background would
+// show a permanent responding badge.
+func (s LiveSession) IsResponding() bool {
+	return s.Status == statusBusy
 }
 
 // Dir returns the registry directory honoring $CLAUDE_CONFIG_DIR, falling
@@ -51,10 +64,9 @@ func Dir() string {
 }
 
 // Read returns every live interactive session known to Claude Code.
-// Ghost entries (process gone) are filtered out. A missing or unreadable
-// directory returns (nil, nil) — older Claude Code versions don't write
-// this directory and we treat that as "registry unavailable", letting
-// callers fall back to whatever path they used before.
+// Ghost entries (process gone) are filtered out. A missing directory
+// returns (nil, nil) — older Claude Code versions don't write this
+// directory and we treat that as "registry unavailable".
 func Read() ([]LiveSession, error) {
 	dir := Dir()
 	if dir == "" {
@@ -76,7 +88,9 @@ func Read() ([]LiveSession, error) {
 		if !ok {
 			continue
 		}
-		if s.Kind != "" && s.Kind != "interactive" {
+		// Kind defaults to "interactive" when unset. Skip bg/daemon
+		// variants — those aren't user sessions.
+		if s.Kind != "" && s.Kind != kindInteractive {
 			continue
 		}
 		if !processAlive(s.PID) {
@@ -110,8 +124,7 @@ func readOne(path string) (LiveSession, bool) {
 }
 
 // processAlive returns true iff a process with this PID exists. kill(pid, 0)
-// is the canonical liveness probe: it sends no signal but performs the
-// existence + permission check.
+// sends no signal but performs the existence + permission check.
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false

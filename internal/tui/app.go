@@ -3802,13 +3802,12 @@ func shellescape(s string) string {
 // --- Live refresh ---
 
 // refreshRespondingState re-checks IsResponding for live sessions from
-// the Claude registry (status=="busy"). Updates the list if any badge
-// changed.
+// the Claude registry. Updates the list if any badge changed.
 func (a *App) refreshRespondingState() {
 	live, _ := clauderegistry.Read()
 	busy := make(map[string]bool, len(live))
 	for _, l := range live {
-		if l.Status == "busy" {
+		if l.IsResponding() {
 			busy[l.SessionID] = true
 		}
 	}
