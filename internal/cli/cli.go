@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
@@ -264,7 +265,7 @@ func RunSessions(claudeDir string, all bool) error {
 		// Default: only live sessions in the current tmux window
 		projPaths := tmux.CurrentWindowClaudes()
 		if len(projPaths) == 0 {
-			live := tmux.FindLiveProjectPaths()
+			live := clauderegistry.CwdSet()
 			for p := range live {
 				projPaths = append(projPaths, p)
 			}
@@ -316,7 +317,7 @@ func RunSessions(claudeDir string, all bool) error {
 func findSessionFile(claudeDir string) (string, string, error) {
 	projPaths := tmux.CurrentWindowClaudes()
 	if len(projPaths) == 0 {
-		live := tmux.FindLiveProjectPaths()
+		live := clauderegistry.CwdSet()
 		for p := range live {
 			projPaths = append(projPaths, p)
 		}

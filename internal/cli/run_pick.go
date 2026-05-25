@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
 	"github.com/sendbird/ccx/internal/tui"
@@ -34,7 +35,7 @@ type sessionResultEntry struct {
 func RunPickSessionTUI(claudeDir, search string, multi bool) PickSessionExitCode {
 	sessions := session.LoadCachedSessions(claudeDir)
 	if len(sessions) == 0 {
-		livePaths := tmux.DetectLiveProjectPaths()
+		livePaths := clauderegistry.Cwds()
 		sessions, _ = session.ScanSessionsForPaths(claudeDir, livePaths)
 	}
 	if len(sessions) == 0 {

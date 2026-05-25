@@ -128,50 +128,6 @@ func walkToPane(startPID int, panePIDs map[int]bool, ppidOf map[int]int) int {
 	return 0
 }
 
-// DetectLiveProjectPaths returns absolute project paths of currently
-// running claude processes. Used for fast phase-1 session scanning at
-// startup and by callers that don't need full session attribution.
-func DetectLiveProjectPaths() []string {
-	live, err := clauderegistry.Read()
-	if err != nil || len(live) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(live))
-	paths := make([]string, 0, len(live))
-	for _, l := range live {
-		abs, _ := filepath.Abs(l.CWD)
-		if abs == "" {
-			abs = l.CWD
-		}
-		if abs == "" || seen[abs] {
-			continue
-		}
-		seen[abs] = true
-		paths = append(paths, abs)
-	}
-	return paths
-}
-
-// FindLiveProjectPaths returns project paths with an active Claude
-// process as a set. Kept for callers that need set semantics.
-func FindLiveProjectPaths() map[string]bool {
-	live, err := clauderegistry.Read()
-	if err != nil || len(live) == 0 {
-		return map[string]bool{}
-	}
-	out := make(map[string]bool, len(live))
-	for _, l := range live {
-		abs, _ := filepath.Abs(l.CWD)
-		if abs == "" {
-			abs = l.CWD
-		}
-		if abs != "" {
-			out[abs] = true
-		}
-	}
-	return out
-}
-
 // batchPPIDMap returns a pid → ppid map for every process visible to ps.
 // Used by walkToPane to skip past wrappers (ccproxy / tee / sudo) when
 // resolving the pane that owns a live claude. Empty map on failure —

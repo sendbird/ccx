@@ -131,3 +131,38 @@ func processAlive(pid int) bool {
 	}
 	return syscall.Kill(pid, 0) == nil
 }
+
+// Cwds returns absolute project paths of every live registry entry,
+// deduplicated and preserving the registry's enumeration order. Used by
+// callers that only need "which project paths have a claude running"
+// and don't care about pane attribution.
+func Cwds() []string {
+	live, err := Read()
+	if err != nil || len(live) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(live))
+	paths := make([]string, 0, len(live))
+	for _, l := range live {
+		abs, _ := filepath.Abs(l.CWD)
+		if abs == "" {
+			abs = l.CWD
+		}
+		if abs == "" || seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		paths = append(paths, abs)
+	}
+	return paths
+}
+
+// CwdSet is the set form of Cwds.
+func CwdSet() map[string]bool {
+	paths := Cwds()
+	out := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		out[p] = true
+	}
+	return out
+}
