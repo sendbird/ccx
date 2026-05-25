@@ -3807,7 +3807,7 @@ func (a *App) refreshRespondingState() {
 	live, _ := clauderegistry.Read()
 	busy := make(map[string]bool, len(live))
 	for _, l := range live {
-		if l.IsResponding() {
+		if l.IsBusy() {
 			busy[l.SessionID] = true
 		}
 	}

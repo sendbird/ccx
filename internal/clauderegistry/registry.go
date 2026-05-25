@@ -41,12 +41,15 @@ type LiveSession struct {
 	Kind      string `json:"kind,omitempty"`
 }
 
-// IsResponding reports whether the model is actively generating right
-// now. Only "busy" counts: "shell" (REPL idle, background Bash still
-// running) and "waiting" (blocked on user input) deliberately don't, or
-// a session that leaves a long-running tool in the background would
-// show a permanent responding badge.
-func (s LiveSession) IsResponding() bool {
+// IsBusy reports whether the model is actively generating right now —
+// upstream Claude's StatusBusy. This is the "responding" signal CCX
+// surfaces via session.Session.IsResponding.
+//
+// StatusShell (REPL idle, background Bash still running) and
+// StatusWaiting (blocked on user input) deliberately don't count: a
+// session that left a long-running tool in the background would
+// otherwise show a permanent responding badge.
+func (s LiveSession) IsBusy() bool {
 	return s.Status == statusBusy
 }
 
