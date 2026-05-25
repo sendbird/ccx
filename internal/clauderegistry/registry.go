@@ -8,12 +8,20 @@
 // schema, lifecycle, and quirks (status values, name vs custom-title,
 // PID reuse, WSL leak) are documented in
 // docs/claude-code/live-session-registry.md.
+//
+// Diagnostic logging: set CCX_DEBUG=1 to surface registry errors to
+// /tmp/ccx-debug.log (falls back to stderr if that path isn't writable).
+// Without it, errors are swallowed silently so a transient registry
+// glitch never crashes ccx — the trade-off is that users have no way to
+// see why "live" suddenly went empty.
 package clauderegistry
 
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,9 +31,26 @@ import (
 
 // Field values we actually branch on.
 const (
-	statusBusy       = "busy"        // actively processing a turn
-	kindInteractive  = "interactive" // normal user session
+	statusBusy      = "busy"        // actively processing a turn
+	kindInteractive = "interactive" // normal user session
 )
+
+// debugLog is wired in init below. Silent (io.Discard) unless CCX_DEBUG
+// is set, matching the convention in internal/tui/conversation.go.
+var debugLog *log.Logger
+
+func init() {
+	if os.Getenv("CCX_DEBUG") == "" {
+		debugLog = log.New(io.Discard, "", 0)
+		return
+	}
+	f, err := os.OpenFile("/tmp/ccx-debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		debugLog = log.New(os.Stderr, "clauderegistry: ", log.Ltime|log.Lmicroseconds)
+		return
+	}
+	debugLog = log.New(f, "clauderegistry: ", log.Ltime|log.Lmicroseconds)
+}
 
 // LiveSession is the subset of a registry entry that ccx consumes. The
 // on-disk file has many more fields — see the docs.
@@ -80,6 +105,7 @@ func Read() ([]LiveSession, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
+		debugLog.Printf("ReadDir(%s): %v", dir, err)
 		return nil, err
 	}
 	out := make([]LiveSession, 0, len(entries))
@@ -107,21 +133,32 @@ func Read() ([]LiveSession, error) {
 // readOne parses a single registry file. Claude Code writes these files
 // without an atomic rename, so a concurrent read can land mid-write and
 // see truncated JSON. Retry a few times — the write window is microseconds.
+//
+// A file that fails every retry is skipped, not propagated as an error:
+// a single broken entry shouldn't blank out the whole live list. The
+// failure is logged when CCX_DEBUG is on.
 func readOne(path string) (LiveSession, bool) {
+	var lastErr error
 	for range 3 {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return LiveSession{}, false
 			}
+			lastErr = err
 			time.Sleep(5 * time.Millisecond)
 			continue
 		}
 		var s LiveSession
 		if err := json.Unmarshal(data, &s); err == nil && s.SessionID != "" {
 			return s, true
+		} else if err != nil {
+			lastErr = err
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if lastErr != nil {
+		debugLog.Printf("readOne(%s) gave up after 3 retries: %v", path, lastErr)
 	}
 	return LiveSession{}, false
 }
