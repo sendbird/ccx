@@ -44,7 +44,7 @@ func init() {
 		debugLog = log.New(io.Discard, "", 0)
 		return
 	}
-	f, err := os.OpenFile("/tmp/ccx-debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile("/tmp/ccx-debug.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		debugLog = log.New(os.Stderr, "clauderegistry: ", log.Ltime|log.Lmicroseconds)
 		return
