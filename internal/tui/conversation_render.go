@@ -60,7 +60,7 @@ func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lip
 	imgBadge := ""
 	for _, block := range e.Content {
 		if block.Type == "image" {
-			imgBadge = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#87CEEB")).Render("▣")
+			imgBadge = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#87CEEB")).Render(iconImage)
 			break
 		}
 	}
@@ -82,35 +82,35 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 			style = selectedStyle
 		}
 		if ci.groupTag != "" {
-			fold := "▾"
+			fold := iconFoldOpen
 			if ci.folded {
-				fold = "▸"
+				fold = iconFoldClosed
 			}
 			line := fmt.Sprintf("%s%s %s", indent, cursor, style.Render(fmt.Sprintf("%s %s [%d]", fold, ci.label, ci.count)))
 			fmt.Fprint(w, clamp.Render(line))
 			return
 		}
 
-		status := "○"
+		status := iconIdle
 		switch ci.kind {
 		case convAgent:
-			status = agentBadgeStyle.Render("⊕")
+			status = agentBadgeStyle.Render(iconAgent)
 			switch ci.agentStatus {
 			case "completed":
-				status = taskDoneStyle.Render("✓")
+				status = taskDoneStyle.Render(iconDone)
 			case "stopped":
-				status = dimStyle.Render("⏹")
+				status = dimStyle.Render(iconStopped)
 			case "running":
-				status = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render("◉")
+				status = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render(iconActive)
 			}
 		case convTask:
 			switch ci.task.Status {
 			case "completed":
-				status = taskDoneStyle.Render("✓")
+				status = taskDoneStyle.Render(iconDone)
 			case "in_progress":
-				status = taskInProgressStyle.Render("◉")
+				status = taskInProgressStyle.Render(iconActive)
 			case "stopped":
-				status = dimStyle.Render("⏹")
+				status = dimStyle.Render(iconStopped)
 			}
 		}
 
@@ -146,14 +146,14 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 			var label string
 			if ci.count > 0 {
 				// Expandable header (last task-touching message)
-				fold := "▸"
+				fold := iconFoldClosed
 				if !ci.folded {
-					fold = "▾"
+					fold = iconFoldOpen
 				}
 				if selected {
-					label = fmt.Sprintf("%s Tasks [%s]", fold, counter+" ✓")
+					label = fmt.Sprintf("%s Tasks [%s]", fold, counter+" "+iconDone)
 				} else {
-					label = fmt.Sprintf("%s Tasks [%s]", fold, counterStyle.Render(counter+" ✓"))
+					label = fmt.Sprintf("%s Tasks [%s]", fold, counterStyle.Render(counter+" "+iconDone))
 				}
 			} else {
 				// Marker header — show per-message operation summary
@@ -170,9 +170,9 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 					label = "· " + style.Render(opDesc)
 				} else {
 					if selected {
-						label = fmt.Sprintf("· Tasks [%s]", counter+" ✓")
+						label = fmt.Sprintf("· Tasks [%s]", counter+" "+iconDone)
 					} else {
-						label = fmt.Sprintf("· Tasks [%s]", counterStyle.Render(counter+" ✓"))
+						label = fmt.Sprintf("· Tasks [%s]", counterStyle.Render(counter+" "+iconDone))
 					}
 				}
 			}
@@ -181,12 +181,12 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 			return
 		}
 
-		status := "○"
+		status := iconIdle
 		switch ci.task.Status {
 		case "completed":
-			status = taskDoneStyle.Render("✓")
+			status = taskDoneStyle.Render(iconDone)
 		case "in_progress":
-			status = taskInProgressStyle.Render("◉")
+			status = taskInProgressStyle.Render(iconActive)
 		}
 		idLabel := ""
 		if ci.task.ID != "" {
@@ -210,9 +210,9 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 	case convAgent:
 		// Group header for unattached agents
 		if ci.groupTag != "" {
-			fold := "▸"
+			fold := iconFoldClosed
 			if !ci.folded {
-				fold = "▾"
+				fold = iconFoldOpen
 			}
 			label := fmt.Sprintf("%s Agents [%d]", fold, ci.count)
 			style := dimStyle
@@ -223,14 +223,14 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 			break
 		}
 		a := ci.agent
-		badge := agentBadgeStyle.Render("⊕")
+		badge := agentBadgeStyle.Render(iconAgent)
 		switch ci.agentStatus {
 		case "completed":
-			badge = taskDoneStyle.Render("✓")
+			badge = taskDoneStyle.Render(iconDone)
 		case "stopped":
-			badge = dimStyle.Render("⏹")
+			badge = dimStyle.Render(iconStopped)
 		case "running":
-			badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render("◉")
+			badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render(iconActive)
 		}
 		typeStr := ""
 		if a.AgentType == "aside_question" {
@@ -638,20 +638,20 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 					}
 					json.Unmarshal([]byte(b.ToolInput), &input)
 					if input.Subject != "" {
-						icon, verb, subject = "📋", "Create", input.Subject
+						icon, verb, subject = iconTask, "Create", input.Subject
 					}
 				case "TaskOutput":
 					var input struct {
 						TaskID string `json:"task_id"`
 					}
 					json.Unmarshal([]byte(b.ToolInput), &input)
-					taskID, icon, verb = input.TaskID, "⏳", "Waiting"
+					taskID, icon, verb = input.TaskID, iconWaiting, "Waiting"
 				case "TaskStop":
 					var input struct {
 						TaskID string `json:"task_id"`
 					}
 					json.Unmarshal([]byte(b.ToolInput), &input)
-					taskID, icon, verb = input.TaskID, "⏹", "Stop"
+					taskID, icon, verb = input.TaskID, iconStopped, "Stop"
 				}
 				if taskID == "" && subject == "" {
 					continue
@@ -733,9 +733,9 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 						continue
 					}
 					cron = session.CronItem{Cron: input.Cron, Prompt: input.Prompt, Recurring: input.Recurring, Status: "active"}
-					label = "◉ Create " + strings.TrimSpace(input.Cron)
-					if label == "◉ Create" {
-						label = "◉ Create cron"
+					label = iconActive + " Create " + strings.TrimSpace(input.Cron)
+					if label == iconActive+" Create" {
+						label = iconActive + " Create cron"
 					}
 				case "CronDelete":
 					var input struct {
@@ -749,16 +749,16 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 						cron.ID = input.ID
 						cron.Status = "deleted"
 					}
-					label = "⏹ Delete #" + input.ID
+					label = iconStopped + " Delete #" + input.ID
 					if cron.Cron != "" {
 						label += "  " + cron.Cron
 					}
 				case "CronGet":
-					label = "📋 Read cron"
+					label = iconTask + " Read cron"
 				case "CronList":
-					label = "📋 List crons"
+					label = iconTask + " List crons"
 				case "CronUpdate":
-					label = "◉ Update cron"
+					label = iconActive + " Update cron"
 				}
 				items = append(items, convItem{
 					kind:      convTask,
@@ -1178,12 +1178,12 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 			if input.Status == "" {
 				continue
 			}
-			icon := "○"
+			icon := iconIdle
 			switch input.Status {
 			case "completed":
-				icon = "✓"
+				icon = iconDone
 			case "in_progress":
-				icon = "◉"
+				icon = iconActive
 			}
 			compactLabel := icon + " #" + input.TaskID
 			detailLabel := icon + " #" + input.TaskID
@@ -1202,7 +1202,7 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 				TaskID string `json:"task_id"`
 			}
 			json.Unmarshal([]byte(b.ToolInput), &input)
-			label, detail := resolveTaskLabel("⏳", "Waiting", input.TaskID, agentsByID, bgTasks, 25)
+			label, detail := resolveTaskLabel(iconWaiting, "Waiting", input.TaskID, agentsByID, bgTasks, 25)
 			compactParts = append(compactParts, label)
 			detailLines = append(detailLines, detail)
 		case "TaskGet":
@@ -1210,7 +1210,7 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 				TaskID string `json:"taskId"`
 			}
 			json.Unmarshal([]byte(b.ToolInput), &input)
-			label, detail := resolveTaskLabel("📋", "Read", input.TaskID, agentsByID, bgTasks, 25)
+			label, detail := resolveTaskLabel(iconTask, "Read", input.TaskID, agentsByID, bgTasks, 25)
 			compactParts = append(compactParts, label)
 			detailLines = append(detailLines, detail)
 		case "TaskStop":
@@ -1218,12 +1218,12 @@ func taskOpSummaryResult(entry session.Entry, tasksByID map[string]session.TaskI
 				TaskID string `json:"task_id"`
 			}
 			json.Unmarshal([]byte(b.ToolInput), &input)
-			label, detail := resolveTaskLabel("⏹", "Stop", input.TaskID, agentsByID, bgTasks, 25)
+			label, detail := resolveTaskLabel(iconStopped, "Stop", input.TaskID, agentsByID, bgTasks, 25)
 			compactParts = append(compactParts, label)
 			detailLines = append(detailLines, detail)
 		case "TaskList":
 			compactParts = append(compactParts, "list")
-			detailLines = append(detailLines, "📋 Listed tasks")
+			detailLines = append(detailLines, iconTask+"  Listed tasks")
 		case "TodoWrite":
 			compactParts = append(compactParts, "todo updated")
 			detailLines = append(detailLines, "Todo list updated")

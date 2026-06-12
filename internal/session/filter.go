@@ -72,6 +72,9 @@ func FilterValueFor(s Session, cwdProjectPaths []string) string {
 	if s.HasMCP {
 		parts = append(parts, "has:mcp")
 	}
+	if s.HasMonitorJobs {
+		parts = append(parts, "has:monitor", "is:mon")
+	}
 	if s.TeamName != "" {
 		parts = append(parts, "is:team", "team:"+s.TeamName)
 	}

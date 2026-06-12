@@ -17,49 +17,65 @@ import (
 
 // Group mode constants
 const (
-	groupFlat        = 0
-	groupProject     = 1
-	groupTree        = 2
-	groupChain       = 3
-	groupFork        = 4
-	groupBaseProject = 5
-	numGroupModes    = 6
+	groupFlat           = 0
+	groupProject        = 1
+	groupTree           = 2
+	groupChain          = 3
+	groupFork           = 4
+	groupBaseProject    = 5
+	groupProjectCentric = 6 // project rows are first-class, sessions are children
+	numGroupModes       = 7
 )
 
 // buildGroupedItems returns list items for the given group mode.
-func buildGroupedItems(sessions []session.Session, groupMode int, worktreeDir ...string) []list.Item {
+//
+// folded contains group keys whose children should be hidden. Builders set
+// sessionItem.groupKey/groupChildren on parent rows so the renderer can show
+// a fold chevron and so handlers can find which key to toggle.
+func buildGroupedItems(sessions []session.Session, groupMode int, folded map[string]bool, worktreeDir ...string) []list.Item {
 	currentSessions, rest := splitCurrentWindow(sessions)
 
-	var restItems []list.Item
-	switch groupMode {
-	case groupProject:
-		restItems = buildProjectGroupItems(rest)
-	case groupTree:
-		restItems = buildTreeItems(rest)
-	case groupChain:
-		restItems = buildChainGroupItems(rest)
-	case groupFork:
-		restItems = buildForkGroupItems(rest)
-	case groupBaseProject:
-		restItems = buildBaseProjectGroupItems(rest, worktreeDir...)
-	default:
-		restItems = make([]list.Item, len(rest))
-		for i, s := range rest {
-			restItems[i] = sessionItem{sess: s}
+	buildForMode := func(ss []session.Session) []list.Item {
+		switch groupMode {
+		case groupProject:
+			return buildProjectGroupItems(ss, folded)
+		case groupTree:
+			return buildTreeItems(ss, folded)
+		case groupChain:
+			return buildChainGroupItems(ss, folded)
+		case groupFork:
+			return buildForkGroupItems(ss, folded)
+		case groupBaseProject:
+			return buildBaseProjectGroupItems(ss, folded, worktreeDir...)
+		case groupProjectCentric:
+			return buildProjectCentricItems(ss, folded, worktreeDir...)
+		default:
+			items := make([]list.Item, len(ss))
+			for i, s := range ss {
+				items[i] = sessionItem{sess: s}
+			}
+			return items
 		}
 	}
 
-	if len(currentSessions) == 0 {
+	currentItems := buildForMode(currentSessions)
+	restItems := buildForMode(rest)
+
+	if len(currentItems) == 0 {
 		return restItems
 	}
 
-	items := make([]list.Item, 0, len(currentSessions)+len(restItems)+2)
-	items = append(items, headerItem{label: "Current Window"})
-	for _, s := range currentSessions {
-		items = append(items, sessionItem{sess: s})
+	items := make([]list.Item, 0, len(currentItems)+len(restItems)+2)
+	currentLabel := "Current Window"
+	restLabel := "Sessions"
+	if groupMode == groupProjectCentric {
+		currentLabel = "Current Window Projects"
+		restLabel = "Projects"
 	}
+	items = append(items, headerItem{label: currentLabel})
+	items = append(items, currentItems...)
 	if len(restItems) > 0 {
-		items = append(items, headerItem{label: "Sessions"})
+		items = append(items, headerItem{label: restLabel})
 		items = append(items, restItems...)
 	}
 	return items
@@ -112,13 +128,51 @@ func substringFilter(term string, targets []string) []list.Rank {
 }
 
 type sessionItem struct {
-	sess      session.Session
-	treeDepth int  // 0=root, 1=teammate child
-	treeLast  bool // last child in group (└─ vs ├─)
+	sess          session.Session
+	treeDepth     int    // 0=root, 1=teammate child
+	treeLast      bool   // last child in group (└─ vs ├─)
+	groupKey      string // stable identity of the group this row heads (depth=0 only when group has children)
+	groupChildren int    // number of children in this group (0 when not a group head)
+	groupFolded   bool   // current fold state at build time, used by the renderer for chevron + count
 }
 
 func (s sessionItem) FilterValue() string {
 	return session.FilterValueFor(s.sess, nil)
+}
+
+// projectItem represents a project (or base repo) row in the
+// project-centric view. It is not a session — it is a folder-like row that
+// can be expanded to reveal its child sessions. Selecting it does not open
+// a conversation; pressing Enter/Open toggles its fold state instead.
+type projectItem struct {
+	basePath     string            // canonical key (resolved base repo path)
+	displayName  string            // shown name (project name or base repo basename)
+	branch       string            // main repo's git branch (if any)
+	sessions     []session.Session // all sessions under this project (main + worktrees), sorted recent-first
+	worktrees    int               // count of worktree-only sessions
+	totalMsgs    int               // sum of MsgCount across sessions
+	liveSessions int               // number of live sessions
+	bgSessions   int               // sessions whose lifecycle is BG
+	monSessions  int               // sessions with active monitor jobs
+	stuckCount   int               // STUCK lifecycle sessions
+	waitCount    int               // WAIT lifecycle sessions
+	doneCount    int               // DONE lifecycle sessions
+	busyCount    int               // BUSY lifecycle sessions
+	hereCount    int               // sessions in the current tmux window
+	bestTime     time.Time         // most-recent ModTime in this project
+	expanded     bool              // current fold state at build time
+	lifecycle    session.LifecycleState
+}
+
+func (p projectItem) FilterValue() string {
+	// Concatenate every child session's filter value so the project row
+	// becomes visible whenever any session beneath it matches the filter.
+	parts := make([]string, 0, len(p.sessions)+3)
+	parts = append(parts, p.displayName, p.basePath, p.branch, "is:project")
+	for _, s := range p.sessions {
+		parts = append(parts, session.FilterValueFor(s, nil))
+	}
+	return strings.Join(parts, " ")
 }
 
 // headerSentinel is returned by headerItem.FilterValue so headers never match a
@@ -140,15 +194,174 @@ func isSeparator(item list.Item) bool {
 }
 
 type sessionDelegate struct {
-	timeW        int             // max width of time-ago column
-	msgW         int             // max width of message count column
-	selectedSet  map[string]bool // shared reference to App.selectedSet
-	hiddenBadges map[string]bool // shared reference to App.hiddenBadges
+	timeW        int              // max width of time-ago column
+	msgW         int              // max width of message count column
+	selectedSet  map[string]bool  // shared reference to App.selectedSet
+	hiddenBadges map[string]bool  // shared reference to App.hiddenBadges
+	rowCache     *sessionRowCache // shared render cache for visible project/session rows
 }
 
 func (d sessionDelegate) Height() int                             { return 2 }
 func (d sessionDelegate) Spacing() int                            { return 0 }
 func (d sessionDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+func (d sessionDelegate) hiddenBadgeKey() string {
+	if len(d.hiddenBadges) == 0 {
+		return ""
+	}
+	keys := []string{"HERE", "LIVE", "BUSY", "BG", "MON", "WAIT", "DONE", "STUCK"}
+	var b strings.Builder
+	for _, k := range keys {
+		if d.hiddenBadges[k] {
+			b.WriteString(k)
+			b.WriteByte(',')
+		}
+	}
+	return b.String()
+}
+
+func (d sessionDelegate) sessionCacheKey(m list.Model, index int, si sessionItem, selected bool) string {
+	filterTerm := listFilterTerm(m)
+	multi := d.selectedSet != nil && d.selectedSet[si.sess.ID]
+	return fmt.Sprintf("s|%d|%d|%t|%t|%s|%s|%s|%d|%t|%d|%d|%d|%s",
+		m.Width(), index, selected, multi, filterTerm, d.hiddenBadgeKey(), si.sess.ID,
+		si.groupChildren, si.groupFolded, int(si.sess.Lifecycle()), si.sess.MsgCount,
+		si.sess.ModTime.Unix(), si.sess.FirstPrompt)
+}
+
+func (d sessionDelegate) projectCacheKey(m list.Model, index int, pi projectItem, selected bool) string {
+	return fmt.Sprintf("p|%d|%d|%t|%s|%s|%t|%d|%d|%d|%d|%d|%d|%d|%d|%s",
+		m.Width(), index, selected, listFilterTerm(m), d.hiddenBadgeKey(), pi.expanded,
+		len(pi.sessions), pi.totalMsgs, pi.liveSessions, pi.bgSessions, pi.monSessions,
+		pi.stuckCount, pi.waitCount, pi.doneCount, pi.basePath)
+}
+
+// renderProject draws a folder-style row for a project: chevron + name +
+// branch + session count + lifecycle badges. Always 2 rows tall to match
+// sessionItem rendering. When selected, the row is highlighted full-width.
+func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi projectItem) {
+	selected := index == m.Index()
+	cacheKey := d.projectCacheKey(m, index, pi, selected)
+	if cached, ok := d.rowCache.Get(cacheKey); ok {
+		fmt.Fprint(w, cached)
+		return
+	}
+	width := m.Width()
+	clamp := lipgloss.NewStyle().MaxWidth(width)
+
+	cursor := "  "
+	if selected {
+		cursor = "> "
+	}
+	chevron := iconFoldOpen
+	if !pi.expanded {
+		chevron = iconFoldClosed
+	}
+
+	nameStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	branchStyle := dimStyle
+	countStyle := lipgloss.NewStyle().Foreground(colorAccent)
+	timeStyle := dimStyle
+	if selected {
+		nameStyle = nameStyle.Foreground(lipgloss.Color("#A78BFA"))
+		branchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+		countStyle = countStyle.Bold(true)
+		timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+	}
+
+	// Badges roll up project-wide lifecycle counts.
+	hide := d.hiddenBadges
+	badges := ""
+	badgesW := 0
+	if pi.hereCount > 0 && !hide["HERE"] {
+		badges += " " + hereBadge.Render(fmt.Sprintf("[HERE×%d]", pi.hereCount))
+		badgesW += len(fmt.Sprintf("[HERE×%d]", pi.hereCount)) + 1
+	}
+	if pi.liveSessions > 0 && !hide["LIVE"] {
+		badges += " " + liveBadge.Render(fmt.Sprintf("[LIVE×%d]", pi.liveSessions))
+		badgesW += len(fmt.Sprintf("[LIVE×%d]", pi.liveSessions)) + 1
+	}
+	if pi.busyCount > 0 && !hide["BUSY"] {
+		badges += " " + busyBadge.Render(fmt.Sprintf("[BUSY×%d]", pi.busyCount))
+		badgesW += len(fmt.Sprintf("[BUSY×%d]", pi.busyCount)) + 1
+	}
+	if pi.bgSessions > 0 && !hide["BG"] {
+		badges += " " + bgBadgeStyle.Render(fmt.Sprintf("[BG×%d]", pi.bgSessions))
+		badgesW += len(fmt.Sprintf("[BG×%d]", pi.bgSessions)) + 1
+	}
+	if pi.monSessions > 0 && !hide["MON"] {
+		badges += " " + monBadgeStyle.Render(fmt.Sprintf("[MON×%d]", pi.monSessions))
+		badgesW += len(fmt.Sprintf("[MON×%d]", pi.monSessions)) + 1
+	}
+	if pi.stuckCount > 0 && !hide["STUCK"] {
+		badges += " " + stuckBadgeStyle.Render(fmt.Sprintf("[STUCK×%d]", pi.stuckCount))
+		badgesW += len(fmt.Sprintf("[STUCK×%d]", pi.stuckCount)) + 1
+	}
+	if pi.waitCount > 0 && !hide["WAIT"] {
+		badges += " " + waitBadgeStyle.Render(fmt.Sprintf("[WAIT×%d]", pi.waitCount))
+		badgesW += len(fmt.Sprintf("[WAIT×%d]", pi.waitCount)) + 1
+	}
+	if pi.doneCount > 0 && !hide["DONE"] {
+		badges += " " + doneBadgeStyle.Render(fmt.Sprintf("[DONE×%d]", pi.doneCount))
+		badgesW += len(fmt.Sprintf("[DONE×%d]", pi.doneCount)) + 1
+	}
+
+	// Header text: line-art folder, name, branch, time, and badges.
+	branch := ""
+	if pi.branch != "" {
+		branch = " (" + pi.branch + ")"
+	}
+	icon := iconFolder
+	if pi.expanded {
+		icon = iconFolderOpen
+	}
+	chev := dimStyle.Render(chevron)
+	name := nameStyle.Render(pi.displayName)
+	br := branchStyle.Render(branch)
+	timeStr := timeStyle.Render(timeAgo(pi.bestTime))
+
+	summary := fmt.Sprintf(" %d session", len(pi.sessions))
+	if len(pi.sessions) != 1 {
+		summary += "s"
+	}
+	if pi.worktrees > 0 {
+		summary += fmt.Sprintf(", %d wt", pi.worktrees)
+	}
+	if pi.totalMsgs > 0 {
+		summary += fmt.Sprintf(", %dm", pi.totalMsgs)
+	}
+	summaryStyled := branchStyle.Render(summary)
+
+	filterTerm := listFilterTerm(m)
+	if filterTerm != "" {
+		highlighted := highlightSnippet(pi.displayName, filterTerm, max(width/2, 10), nameStyle)
+		name = highlighted
+	}
+
+	line1 := fmt.Sprintf("%s%s %s %s%s  %s%s", cursor, chev, icon, name, br, timeStr, badges)
+	// Pad/clamp.
+	if selected {
+		bare := lipgloss.Width(line1)
+		if bare < width {
+			line1 += strings.Repeat(" ", width-bare)
+		}
+		line1 = selectedRowStyle.Render(line1)
+	}
+
+	line2 := "      " + summaryStyled
+	if selected {
+		bare := lipgloss.Width(line2)
+		if bare < width {
+			line2 += strings.Repeat(" ", width-bare)
+		}
+		line2 = selectedRowStyle.Render(line2)
+	}
+
+	_ = badgesW // currently unused in layout math; columns are loose for project rows
+	rendered := fmt.Sprintf("%s\n%s", clamp.Render(line1), clamp.Render(line2))
+	d.rowCache.Set(cacheKey, rendered)
+	fmt.Fprint(w, rendered)
+}
 
 // renderHeader draws a section divider like "── Current Window ──".
 // It always occupies 2 rows (label + blank) so cursor math stays consistent
@@ -177,6 +390,10 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		d.renderHeader(w, m, h)
 		return
 	}
+	if pi, ok := item.(projectItem); ok {
+		d.renderProject(w, m, index, pi)
+		return
+	}
 	si, ok := item.(sessionItem)
 	if !ok {
 		return
@@ -184,6 +401,11 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 
 	s := si.sess
 	selected := index == m.Index()
+	cacheKey := d.sessionCacheKey(m, index, si, selected)
+	if cached, ok := d.rowCache.Get(cacheKey); ok {
+		fmt.Fprint(w, cached)
+		return
+	}
 	width := m.Width()
 
 	// Tree connector prefix for depth>0 teammates
@@ -198,12 +420,24 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		treePrefixW = 3 // "├─ " is 3 cells wide
 	}
 
+	// Fold chevron for group-head rows: open when expanded, closed when collapsed.
+	// Non-group rows get a single space so columns stay aligned across rows.
+	foldPrefix := " "
+	foldPrefixW := 1
+	if si.groupChildren > 0 && si.treeDepth == 0 {
+		if si.groupFolded {
+			foldPrefix = dimStyle.Render(iconFoldClosed)
+		} else {
+			foldPrefix = dimStyle.Render(iconFoldOpen)
+		}
+	}
+
 	isMultiSelected := d.selectedSet != nil && d.selectedSet[s.ID]
 	cursor := "  "
 	if selected && isMultiSelected {
-		cursor = selectMarkStyle.Render("✓") + " "
+		cursor = selectMarkStyle.Render(iconSelect) + " "
 	} else if isMultiSelected {
-		cursor = selectMarkStyle.Render("✓") + " "
+		cursor = selectMarkStyle.Render(iconSelect) + " "
 	} else if selected {
 		cursor = "> "
 	}
@@ -273,6 +507,16 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 			badgesW += 7
 		}
 	}
+	// Monitor badge: surfaces sessions that have at least one Monitor tool
+	// invocation while the Claude process is still live. The [BG] badge
+	// already signals "background work running", but doesn't distinguish a
+	// Monitor (long-running watcher) from a one-off background Bash, and
+	// users explicitly want to see which sessions are currently watching
+	// something.
+	if s.IsLive && s.HasMonitorJobs && !hide["MON"] {
+		badges += " " + monBadgeStyle.Render("[MON]")
+		badgesW += 6
+	}
 	// Custom user badges
 	for _, badge := range s.CustomBadges {
 		badgeText := "[" + badge + "]"
@@ -285,9 +529,18 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		badgesW += 8
 	}
 
+	// Child-count badge for group head rows. When folded we always show it
+	// (so the user knows what's hidden); when expanded we still surface it
+	// because the children may scroll out of view in long lists.
+	if si.groupChildren > 0 && si.treeDepth == 0 {
+		countText := fmt.Sprintf("[+%d]", si.groupChildren)
+		badges += " " + dimStyle.Bold(true).Render(countText)
+		badgesW += len(countText) + 1
+	}
+
 	// Calculate available width for project column
-	// cursor(2) + tree(treePrefixW) + id(8) + 2 + time + 2 + msg + 2 + project + badges
-	fixedW := 2 + treePrefixW + 8 + 2 + d.timeW + 2 + d.msgW + 2 + badgesW
+	// cursor(2) + fold(foldPrefixW) + tree(treePrefixW) + id(8) + 2 + time + 2 + msg + 2 + project + badges
+	fixedW := 2 + foldPrefixW + treePrefixW + 8 + 2 + d.timeW + 2 + d.msgW + 2 + badgesW
 	maxProjW := width - fixedW
 	if maxProjW < 4 {
 		maxProjW = 4
@@ -338,11 +591,11 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		}
 	}
 
-	line1 := fmt.Sprintf("%s%s%s  %s  %s  %s%s", cursor, treePrefix, idStr, timeStr, msgStr, project, badges)
+	line1 := fmt.Sprintf("%s%s%s%s  %s  %s  %s%s", cursor, foldPrefix, treePrefix, idStr, timeStr, msgStr, project, badges)
 
 	prompt := s.FirstPrompt
-	maxW := width - 6 - treePrefixW
-	promptIndent := "    " + strings.Repeat(" ", treePrefixW)
+	maxW := width - 6 - treePrefixW - foldPrefixW
+	promptIndent := "    " + strings.Repeat(" ", treePrefixW+foldPrefixW)
 	var line2 string
 	if filterTerm != "" && maxW > 0 {
 		line2 = promptIndent + highlightSnippet(prompt, filterTerm, maxW, promptStyle)
@@ -368,7 +621,9 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 
 	clamp := lipgloss.NewStyle().MaxWidth(width)
-	fmt.Fprintf(w, "%s\n%s", clamp.Render(line1), clamp.Render(line2))
+	rendered := fmt.Sprintf("%s\n%s", clamp.Render(line1), clamp.Render(line2))
+	d.rowCache.Set(cacheKey, rendered)
+	fmt.Fprint(w, rendered)
 }
 
 func computeSessionColWidths(sessions []session.Session) (timeW, msgW int) {
@@ -383,19 +638,19 @@ func computeSessionColWidths(sessions []session.Session) (timeW, msgW int) {
 	return
 }
 
-func newSessionList(sessions []session.Session, width, height int, groupMode int, selectedSet map[string]bool, hiddenBadges map[string]bool, worktreeDir ...string) list.Model {
-	items := buildGroupedItems(sessions, groupMode, worktreeDir...)
+func newSessionList(sessions []session.Session, width, height int, groupMode int, selectedSet map[string]bool, hiddenBadges map[string]bool, folded map[string]bool, rowCache *sessionRowCache, worktreeDir ...string) list.Model {
+	items := buildGroupedItems(sessions, groupMode, folded, worktreeDir...)
 
 	timeW, msgW := computeSessionColWidths(sessions)
 
-	l := list.New(items, sessionDelegate{timeW: timeW, msgW: msgW, selectedSet: selectedSet, hiddenBadges: hiddenBadges}, width, height)
+	l := list.New(items, sessionDelegate{timeW: timeW, msgW: msgW, selectedSet: selectedSet, hiddenBadges: hiddenBadges, rowCache: rowCache}, width, height)
 	initListBase(&l)
 	l.SetFilteringEnabled(true)
 
 	// Use chain-aware filter for grouped modes so children stay visible
 	// when their parent matches (and vice versa).
 	var base list.FilterFunc
-	if groupMode == groupChain || groupMode == groupFork || groupMode == groupTree || groupMode == groupBaseProject {
+	if groupMode == groupChain || groupMode == groupFork || groupMode == groupTree || groupMode == groupBaseProject || groupMode == groupProjectCentric {
 		base = buildChainAwareFilter(items)
 	} else {
 		base = substringFilter
@@ -485,15 +740,16 @@ func buildChainAwareFilter(items []list.Item) list.FilterFunc {
 	childrenOf := make(map[int][]int) // parent index → child indices
 	lastParent := -1
 	for i, item := range items {
-		si, ok := item.(sessionItem)
-		if !ok {
-			continue
-		}
-		if si.treeDepth == 0 {
+		switch v := item.(type) {
+		case projectItem:
 			lastParent = i
-		} else if lastParent >= 0 {
-			parentOf[i] = lastParent
-			childrenOf[lastParent] = append(childrenOf[lastParent], i)
+		case sessionItem:
+			if v.treeDepth == 0 {
+				lastParent = i
+			} else if lastParent >= 0 {
+				parentOf[i] = lastParent
+				childrenOf[lastParent] = append(childrenOf[lastParent], i)
+			}
 		}
 	}
 
@@ -542,7 +798,7 @@ func buildChainAwareFilter(items []list.Item) list.FilterFunc {
 
 // buildTreeItems groups sessions by team, placing leaders at depth=0 and
 // teammates at depth=1, interleaved with standalone sessions by recency.
-func buildTreeItems(sessions []session.Session) []list.Item {
+func buildTreeItems(sessions []session.Session, folded map[string]bool) []list.Item {
 	type teamGroup struct {
 		projectPath string
 		teamName    string
@@ -612,19 +868,32 @@ func buildTreeItems(sessions []session.Session) []list.Item {
 		if useGroup {
 			g := groupList[gi]
 			gi++
+			groupKey := "team:" + g.projectPath + "\x00" + g.teamName
 			// Leader (or first teammate as header if no leader)
+			var header session.Session
 			if g.leader != nil {
-				items = append(items, sessionItem{sess: *g.leader, treeDepth: 0})
+				header = *g.leader
 			} else if len(g.teammates) > 0 {
-				items = append(items, sessionItem{sess: g.teammates[0], treeDepth: 0})
+				header = g.teammates[0]
 				g.teammates = g.teammates[1:]
 			}
-			for ti, tm := range g.teammates {
-				items = append(items, sessionItem{
-					sess:      tm,
-					treeDepth: 1,
-					treeLast:  ti == len(g.teammates)-1,
-				})
+			children := g.teammates
+			isFolded := folded[groupKey] && len(children) > 0
+			items = append(items, sessionItem{
+				sess:          header,
+				treeDepth:     0,
+				groupKey:      groupKey,
+				groupChildren: len(children),
+				groupFolded:   isFolded,
+			})
+			if !isFolded {
+				for ti, tm := range children {
+					items = append(items, sessionItem{
+						sess:      tm,
+						treeDepth: 1,
+						treeLast:  ti == len(children)-1,
+					})
+				}
 			}
 		} else {
 			items = append(items, sessionItem{sess: standalone[si], treeDepth: 0})
@@ -638,7 +907,7 @@ func buildTreeItems(sessions []session.Session) []list.Item {
 // buildChainGroupItems groups sessions that share the same PlanSlug (continuation
 // chain). The earliest session in each chain becomes the depth=0 header; later
 // sessions are depth=1 children sorted by Created time.
-func buildChainGroupItems(sessions []session.Session) []list.Item {
+func buildChainGroupItems(sessions []session.Session, folded map[string]bool) []list.Item {
 	type chainGroup struct {
 		slug     string
 		sessions []session.Session
@@ -705,9 +974,20 @@ func buildChainGroupItems(sessions []session.Session) []list.Item {
 		if useChain {
 			g := chainList[ci]
 			ci++
-			// Earliest session is the header
-			items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
+			groupKey := "chain:" + g.slug
 			children := g.sessions[1:]
+			isFolded := folded[groupKey] && len(children) > 0
+			// Earliest session is the header
+			items = append(items, sessionItem{
+				sess:          g.sessions[0],
+				treeDepth:     0,
+				groupKey:      groupKey,
+				groupChildren: len(children),
+				groupFolded:   isFolded,
+			})
+			if isFolded {
+				continue
+			}
 			for idx, ch := range children {
 				items = append(items, sessionItem{
 					sess:      ch,
@@ -726,7 +1006,7 @@ func buildChainGroupItems(sessions []session.Session) []list.Item {
 // buildForkGroupItems groups forked sessions under their parent session.
 // Only ParentSessionID relationships are used — sessions without fork
 // relationships appear standalone (flat).
-func buildForkGroupItems(sessions []session.Session) []list.Item {
+func buildForkGroupItems(sessions []session.Session, folded map[string]bool) []list.Item {
 	type forkGroup struct {
 		sessions []session.Session
 		bestTime time.Time
@@ -825,8 +1105,23 @@ func buildForkGroupItems(sessions []session.Session) []list.Item {
 		if useFork {
 			g := forkList[fi]
 			fi++
-			items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
+			rootID := ""
+			if len(g.sessions) > 0 {
+				rootID = g.sessions[0].ID
+			}
+			groupKey := "fork:" + rootID
 			children := g.sessions[1:]
+			isFolded := folded[groupKey] && len(children) > 0
+			items = append(items, sessionItem{
+				sess:          g.sessions[0],
+				treeDepth:     0,
+				groupKey:      groupKey,
+				groupChildren: len(children),
+				groupFolded:   isFolded,
+			})
+			if isFolded {
+				continue
+			}
 			for idx, ch := range children {
 				items = append(items, sessionItem{
 					sess:      ch,
@@ -845,7 +1140,7 @@ func buildForkGroupItems(sessions []session.Session) []list.Item {
 // buildProjectGroupItems groups sessions by ProjectPath. The most recent
 // session in each project becomes the depth=0 header; the rest are depth=1
 // children showing branch name instead of project.
-func buildProjectGroupItems(sessions []session.Session) []list.Item {
+func buildProjectGroupItems(sessions []session.Session, folded map[string]bool) []list.Item {
 	type projGroup struct {
 		projectPath string
 		sessions    []session.Session
@@ -890,9 +1185,20 @@ func buildProjectGroupItems(sessions []session.Session) []list.Item {
 			items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
 			continue
 		}
-		// First (most recent) session is the header
-		items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
+		groupKey := "proj:" + g.projectPath
 		children := g.sessions[1:]
+		isFolded := folded[groupKey]
+		// First (most recent) session is the header
+		items = append(items, sessionItem{
+			sess:          g.sessions[0],
+			treeDepth:     0,
+			groupKey:      groupKey,
+			groupChildren: len(children),
+			groupFolded:   isFolded,
+		})
+		if isFolded {
+			continue
+		}
 		for ci, ch := range children {
 			items = append(items, sessionItem{
 				sess:      ch,
@@ -908,7 +1214,7 @@ func buildProjectGroupItems(sessions []session.Session) []list.Item {
 // buildBaseProjectGroupItems groups sessions by base repository, resolving
 // worktrees to their main repo using git info (.git file) or path patterns.
 // Sessions from the same base repo (main + worktrees) appear under one group.
-func buildBaseProjectGroupItems(sessions []session.Session, worktreeDirs ...string) []list.Item {
+func buildBaseProjectGroupItems(sessions []session.Session, folded map[string]bool, worktreeDirs ...string) []list.Item {
 	type baseGroup struct {
 		basePath string
 		sessions []session.Session
@@ -957,8 +1263,19 @@ func buildBaseProjectGroupItems(sessions []session.Session, worktreeDirs ...stri
 			items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
 			continue
 		}
-		items = append(items, sessionItem{sess: g.sessions[0], treeDepth: 0})
+		groupKey := "repo:" + g.basePath
 		children := g.sessions[1:]
+		isFolded := folded[groupKey]
+		items = append(items, sessionItem{
+			sess:          g.sessions[0],
+			treeDepth:     0,
+			groupKey:      groupKey,
+			groupChildren: len(children),
+			groupFolded:   isFolded,
+		})
+		if isFolded {
+			continue
+		}
 		for ci, ch := range children {
 			items = append(items, sessionItem{
 				sess:      ch,
@@ -969,6 +1286,161 @@ func buildBaseProjectGroupItems(sessions []session.Session, worktreeDirs ...stri
 	}
 
 	return items
+}
+
+// buildProjectCentricItems creates a project-centric view where each base
+// repository becomes a first-class row (`projectItem`). Its child sessions
+// (`sessionItem` with treeDepth=1) are shown beneath it only when the
+// project is expanded — controlled by the same `folded` map used by other
+// group modes, keyed by `repo:<basePath>`.
+func buildProjectCentricItems(sessions []session.Session, folded map[string]bool, worktreeDirs ...string) []list.Item {
+	type proj struct {
+		basePath string
+		name     string
+		branch   string
+		sessions []session.Session
+		bestTime time.Time
+	}
+
+	groups := make(map[string]*proj)
+	for i := range sessions {
+		s := &sessions[i]
+		basePath := session.ResolveBaseRepo(s.ProjectPath, worktreeDirs...)
+		g, ok := groups[basePath]
+		if !ok {
+			g = &proj{basePath: basePath}
+			groups[basePath] = g
+		}
+		g.sessions = append(g.sessions, *s)
+		if s.ModTime.After(g.bestTime) {
+			g.bestTime = s.ModTime
+		}
+		// First non-worktree session contributes the display name and branch.
+		if g.name == "" && !s.IsWorktree && s.ProjectPath == basePath {
+			g.name = s.ProjectName
+			g.branch = s.GitBranch
+		}
+	}
+	// Fallback display name: any session's ProjectName, else basename of basePath.
+	for _, g := range groups {
+		if g.name != "" {
+			continue
+		}
+		for _, s := range g.sessions {
+			if s.ProjectName != "" {
+				g.name = s.ProjectName
+				break
+			}
+		}
+		if g.name == "" {
+			g.name = filepathBase(g.basePath)
+		}
+	}
+
+	// Sort each project's sessions: main-repo first (by ModTime desc), then
+	// worktrees (by ModTime desc).
+	for _, g := range groups {
+		sort.Slice(g.sessions, func(i, j int) bool {
+			iIsWT := g.sessions[i].IsWorktree || g.sessions[i].ProjectPath != g.basePath
+			jIsWT := g.sessions[j].IsWorktree || g.sessions[j].ProjectPath != g.basePath
+			if iIsWT != jIsWT {
+				return !iIsWT
+			}
+			return g.sessions[i].ModTime.After(g.sessions[j].ModTime)
+		})
+	}
+
+	// Sort projects by recency.
+	projList := make([]*proj, 0, len(groups))
+	for _, g := range groups {
+		projList = append(projList, g)
+	}
+	sort.Slice(projList, func(i, j int) bool {
+		return projList[i].bestTime.After(projList[j].bestTime)
+	})
+
+	items := make([]list.Item, 0, len(projList)*2)
+	for _, g := range projList {
+		key := "repo:" + g.basePath
+		expanded := !folded[key]
+		pi := projectItem{
+			basePath:    g.basePath,
+			displayName: g.name,
+			branch:      g.branch,
+			sessions:    g.sessions,
+			bestTime:    g.bestTime,
+			expanded:    expanded,
+			totalMsgs:   0,
+		}
+		for _, s := range g.sessions {
+			pi.totalMsgs += s.MsgCount
+			if s.IsWorktree || s.ProjectPath != g.basePath {
+				pi.worktrees++
+			}
+			if s.IsLive {
+				pi.liveSessions++
+			}
+			if s.IsCurrentWindow {
+				pi.hereCount++
+			}
+			if s.HasMonitorJobs && s.IsLive {
+				pi.monSessions++
+			}
+			switch s.Lifecycle() {
+			case session.LifecycleBusy:
+				pi.busyCount++
+			case session.LifecycleBG:
+				pi.bgSessions++
+			case session.LifecycleStuck:
+				pi.stuckCount++
+			case session.LifecycleWait:
+				pi.waitCount++
+			case session.LifecycleDone:
+				pi.doneCount++
+			}
+		}
+		// Compute a representative lifecycle for the row's badge.
+		switch {
+		case pi.busyCount > 0:
+			pi.lifecycle = session.LifecycleBusy
+		case pi.bgSessions > 0:
+			pi.lifecycle = session.LifecycleBG
+		case pi.stuckCount > 0:
+			pi.lifecycle = session.LifecycleStuck
+		case pi.waitCount > 0:
+			pi.lifecycle = session.LifecycleWait
+		case pi.doneCount > 0:
+			pi.lifecycle = session.LifecycleDone
+		default:
+			pi.lifecycle = session.LifecycleNone
+		}
+		items = append(items, pi)
+		if !expanded {
+			continue
+		}
+		for ci, ch := range g.sessions {
+			items = append(items, sessionItem{
+				sess:      ch,
+				treeDepth: 1,
+				treeLast:  ci == len(g.sessions)-1,
+			})
+		}
+	}
+	return items
+}
+
+// filepathBase returns the trailing path element. We avoid importing
+// filepath here for this single use to keep the package's imports tidy.
+func filepathBase(p string) string {
+	if p == "" {
+		return ""
+	}
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' {
+			return p[i+1:]
+		}
+	}
+	return p
 }
 
 func timeAgo(t time.Time) string {
@@ -1011,6 +1483,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{liveBadge, "[LIVE]", "Running Claude"},
 		{busyBadge, "[BUSY]", "Responding now"},
 		{bgBadgeStyle, "[BG]", "Background shell/monitor/cron"},
+		{monBadgeStyle, "[MON]", "Monitor tool currently in flight"},
 		{waitBadgeStyle, "[WAIT]", "Idle, waiting for user"},
 		{doneBadgeStyle, "[DONE]", "All work completed"},
 		{stuckBadgeStyle, "[STUCK]", "Live but stale with unfinished work"},
@@ -1039,6 +1512,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{"is:bg", "Background work in flight"},
 		{"is:wait", "Idle, waiting for user"},
 		{"is:done", "All work completed"},
+		{"D", "Toggle completed-only"},
 		{"is:stuck", "Stale, unfinished"},
 		{"is:wt", "Worktree sessions"},
 		{"is:team", "Team sessions"},
@@ -1050,6 +1524,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{"has:compact", "With compaction"},
 		{"has:skill", "With skills"},
 		{"has:mcp", "With MCP tools"},
+		{"is:mon", "Monitor in flight"},
 		{"proj:<name>", "By project name"},
 		{"team:<name>", "By team name"},
 		{"is:fork", "Forked sessions"},
@@ -1076,12 +1551,14 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{displayKey(sk.Edit), "Edit session files"},
 		{displayKey(sk.Actions), "Actions (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Move) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.CopyPath) + "/" + displayKey(km.Actions.Worktree) + "/" + displayKey(km.Actions.Kill) + "/" + displayKey(km.Actions.Input) + "/" + displayKey(km.Actions.Jump) + ")"},
 		{displayKey(sk.Search), "Search / filter"},
-		{displayKey(sk.Group), "Group (flat→proj→tree→chain)"},
 		{displayKey(km.Views.Stats), "Global stats"},
 		{displayKey(sk.Refresh), "Refresh list"},
 		{displayKey(sk.Preview), "Cycle preview mode (conv→stats→mem→tasks/plan)"},
 		{displayKey(sk.Live), "Live preview (^Q:unfocus)"},
 		{displayKey(sk.Select), "Toggle multi-select"},
+		{"o", "Fold/expand project group"},
+		{"f / F", "Fold all / expand all groups"},
+		{"D", "Toggle completed-only filter"},
 		{displayKey(sk.Help), "This help"},
 		{displayKey(sk.Quit), "Quit"},
 	}

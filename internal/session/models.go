@@ -74,12 +74,13 @@ type Session struct {
 
 	ParentSessionID string // UUID of parent session (empty if not a fork)
 
-	HasAgents     bool
-	HasCompaction bool
-	HasSkills     bool
-	HasMCP        bool
-	HasShellJobs  bool       // background Bash or Monitor invocations present
-	ShellJobs     []ShellJob // populated lazily when HasShellJobs is true
+	HasAgents      bool
+	HasCompaction  bool
+	HasSkills      bool
+	HasMCP         bool
+	HasShellJobs   bool       // background Bash or Monitor invocations present
+	HasMonitorJobs bool       // Monitor tool invocations present (subset of HasShellJobs)
+	ShellJobs      []ShellJob // populated lazily when HasShellJobs is true
 
 	CustomBadges []string // user-created badge tags
 

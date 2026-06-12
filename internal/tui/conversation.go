@@ -665,7 +665,12 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		result = sp.HandleFocusedKeys(key)
 		switch result {
 		case splitKeySearchFromPreview:
-			if a.conv.rightPaneMode != previewText {
+			// Always run the in-pane block filter when the preview pane is
+			// focused — it filters the blocks of the current message, which
+			// is the user's actual mental model of "search inside the
+			// preview". Previously text mode dropped back into the convList
+			// filter, which felt like `/` was broken inside the preview.
+			if sp.Folds != nil {
 				a.startBlockFilter()
 				return a, nil
 			}
@@ -2103,9 +2108,9 @@ func (a *App) buildCronPreviewEntry(cron session.CronItem) session.Entry {
 
 func renderCronSummary(cron session.CronItem, width int) string {
 	var sb strings.Builder
-	status := "◉ active"
+	status := iconActive + " active"
 	if cron.Status == "deleted" {
-		status = "⏹ deleted"
+		status = iconStopped + " deleted"
 	}
 	name := cron.ID
 	if name == "" {
@@ -2515,14 +2520,14 @@ func (a *App) renderConvTaskBoard(width int) string {
 	var sb strings.Builder
 	sb.WriteString(dimStyle.Render(fmt.Sprintf("── Tasks [%d/%d] ──", completed, len(tasks))) + "\n\n")
 	for _, t := range tasks {
-		icon := "○"
+		icon := iconIdle
 		style := dimStyle
 		switch t.Status {
 		case "completed":
-			icon = "✓"
+			icon = iconDone
 			style = lipgloss.NewStyle().Foreground(colorAccent)
 		case "in_progress":
-			icon = "◉"
+			icon = iconActive
 			style = lipgloss.NewStyle().Foreground(colorAssistant)
 		}
 		idTag := ""
@@ -2574,7 +2579,7 @@ func (a *App) renderAgentsSummary(width int) string {
 		if isSystemAgent(ag) {
 			continue
 		}
-		icon := "●"
+		icon := iconFocused
 		status := statuses[ag.ID]
 		if status == "" {
 			status = statuses[ag.ShortID]
@@ -2582,13 +2587,13 @@ func (a *App) renderAgentsSummary(width int) string {
 		style := dimStyle
 		switch status {
 		case "completed":
-			icon = "✓"
+			icon = iconDone
 			style = lipgloss.NewStyle().Foreground(colorAccent)
 		case "running":
-			icon = "◉"
+			icon = iconActive
 			style = lipgloss.NewStyle().Foreground(colorAssistant)
 		case "stopped":
-			icon = "⏹"
+			icon = iconStopped
 		}
 		typeBadge := ""
 		if ag.AgentType != "" {
@@ -2632,14 +2637,14 @@ func (a *App) renderBgJobsSummary(width int) string {
 				}
 			}
 		}
-		icon := "⏳"
+		icon := iconWaiting
 		style := dimStyle
 		switch status {
 		case "completed":
-			icon = "✓"
+			icon = iconDone
 			style = lipgloss.NewStyle().Foreground(colorAccent)
 		case "stopped":
-			icon = "⏹"
+			icon = iconStopped
 		}
 		label := desc
 		if len(label) > width-10 {
@@ -2697,7 +2702,7 @@ func (a *App) scrollConvPreviewToTail() {
 		lastBlock := len(sp.Folds.Entry.Content) - 1
 		if sp.Folds.BlockCursor != lastBlock {
 			sp.Folds.BlockCursor = lastBlock
-			// Re-render so the ▸ cursor marker reflects the new position
+			// Re-render so the cursor marker reflects the new position
 			sp.RefreshFoldCursor(a.width, a.splitRatio)
 		}
 	}

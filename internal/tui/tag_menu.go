@@ -88,7 +88,7 @@ func (a *App) renderTagMenu() string {
 
 			check := "[ ]"
 			if item.hasTag {
-				check = "[✓]"
+				check = "[" + iconSelect + "]"
 			}
 
 			usageInfo := ""
@@ -122,13 +122,7 @@ func (a *App) renderTagMenu() string {
 		Width(width).
 		Height(height)
 
-	return lipgloss.Place(
-		a.width,
-		a.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		box.Render(content),
-	)
+	return box.Render(content)
 }
 
 func (a *App) handleTagMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

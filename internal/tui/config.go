@@ -58,11 +58,11 @@ func (d cfgDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 	isMultiSelected := !ci.isHeader && d.selectedSet != nil && d.selectedSet[ci.item.Path]
 	cursor := "  "
 	if selected && isMultiSelected {
-		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("✓ ")
+		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(iconSelect + " ")
 	} else if isMultiSelected {
-		cursor = lipgloss.NewStyle().Foreground(colorPrimary).Render("✓ ")
+		cursor = lipgloss.NewStyle().Foreground(colorPrimary).Render(iconSelect + " ")
 	} else if selected {
-		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("▸ ")
+		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(iconFoldClosed + " ")
 	}
 	cursorW := 2
 
@@ -2046,7 +2046,7 @@ func (a *App) renderProjectPickerOverlay(bg string) string {
 			display = "…" + display[len(display)-boxW+7:]
 		}
 		if i == a.cfgProjectCursor {
-			lines = append(lines, cursorStyle.Render("▸ ")+selStyle.Render(display))
+			lines = append(lines, cursorStyle.Render(iconFoldClosed+" ")+selStyle.Render(display))
 		} else {
 			lines = append(lines, "  "+nameStyle.Render(display))
 		}

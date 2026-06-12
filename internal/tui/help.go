@@ -73,7 +73,7 @@ func (a *App) sessHelpLine() string {
 		h = fmtKey(sk.Pick, "pick") + " " + h
 	}
 	if !a.sessSplit.Show {
-		h += " g/G:top/end →:preview tab/S-tab:group"
+		h += " g/G:top/end →:preview tab/S-tab:preview"
 	} else if a.sessSplit.Focus {
 		switch a.sessPreviewMode {
 		case sessPreviewConversation:
@@ -85,7 +85,7 @@ func (a *App) sessHelpLine() string {
 		}
 		h += " " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	} else {
-		h += " g/G:top/end tab/S-tab:group →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
+		h += " g/G:top/end tab/S-tab:preview →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	}
 	if a.config.TmuxEnabled && tmux.InTmux() {
 		h += " " + fmtKey(sk.Live, "live")
@@ -93,7 +93,7 @@ func (a *App) sessHelpLine() string {
 	if sc := a.shortcutHint(); sc != "" {
 		h += " " + dimStyle.Render(sc)
 	}
-	h += " " + fmtKey(sk.Search, "search") + " " + fmtKey(sk.Help, "help") + " " + fmtKey(sk.Quit, "quit")
+	h += " D:completed " + fmtKey(sk.Search, "search") + " " + fmtKey(sk.Help, "help") + " " + fmtKey(sk.Quit, "quit")
 	return formatHelp(h)
 }
 

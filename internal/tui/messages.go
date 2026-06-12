@@ -40,9 +40,69 @@ func renderPlainMessage(e session.Entry) string {
 	return sb.String()
 }
 
+const (
+	convPreviewWindowThreshold = 200
+	convPreviewWindowRadius    = 80
+)
+
+func convPreviewWindowBounds(total, cursor int) (start, end, localCursor int) {
+	if total <= 0 {
+		return 0, 0, 0
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= total {
+		cursor = total - 1
+	}
+	start = cursor - convPreviewWindowRadius
+	if start < 0 {
+		start = 0
+	}
+	end = cursor + convPreviewWindowRadius + 1
+	if end > total {
+		end = total
+	}
+	return start, end, cursor - start
+}
+
+func renderConversationPreviewWindowed(msgs []mergedMsg, width, cursor int, expanded map[int]bool, filterTerm string, rowCache *sessionRowCache, isLive ...bool) (string, []mergedMsg, int, map[int]bool, bool) {
+	if len(msgs) <= convPreviewWindowThreshold {
+		return renderConversationPreview(msgs, width, cursor, expanded, filterTerm, rowCache, isLive...), msgs, cursor, expanded, false
+	}
+	start, end, localCursor := convPreviewWindowBounds(len(msgs), cursor)
+	window := msgs[start:end]
+	localExpanded := make(map[int]bool, len(expanded))
+	for idx, v := range expanded {
+		if idx >= start && idx < end {
+			localExpanded[idx-start] = v
+		}
+	}
+	content := renderConversationPreview(window, width, localCursor, localExpanded, filterTerm, rowCache, isLive...)
+	var sb strings.Builder
+	if start > 0 {
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("⋯ %d earlier messages hidden ⋯", start)))
+		sb.WriteByte('\n')
+	}
+	sb.WriteString(content)
+	if end < len(msgs) {
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("⋯ %d later messages hidden ⋯", len(msgs)-end)))
+		sb.WriteByte('\n')
+	}
+	return sb.String(), window, localCursor, localExpanded, true
+}
+
+// conversationPreviewRowCacheKey returns a cache key for one rendered preview
+// row, including the selected/expanded state and text-affecting dimensions.
+func conversationPreviewRowCacheKey(m mergedMsg, width, idxW int, selected, expanded bool, filterTerm string) string {
+	return fmt.Sprintf("convprev|%d|%d|%t|%t|%s|%s|%d|%d|%d",
+		width, idxW, selected, expanded, filterTerm, m.entry.UUID,
+		m.startIdx, m.endIdx, len(m.entry.Content))
+}
+
 // renderConversationPreview renders merged messages in the same one-line style
 // as the message list delegate. When expanded, the full text is shown below.
-func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map[int]bool, filterTerm string, _ ...bool) string {
+func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map[int]bool, filterTerm string, rowCache *sessionRowCache, _ ...bool) string {
 	var sb strings.Builder
 	idxW := 2
 	for _, m := range msgs {
@@ -56,10 +116,23 @@ func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map
 			idxW = len(s)
 		}
 	}
+	// Most rows are one terminal line. Growing up-front avoids repeated
+	// buffer copies on warm-cache rerenders where we mostly concatenate
+	// already-rendered row strings.
+	if width > 0 && len(msgs) > 0 {
+		sb.Grow(len(msgs) * (width + 1))
+	}
 
 	for i, m := range msgs {
 		e := m.entry
 		selected := i == cursor
+		expandedRow := expanded != nil && expanded[i]
+		cacheKey := conversationPreviewRowCacheKey(m, width, idxW, selected, expandedRow, filterTerm)
+		if cached, ok := rowCache.Get(cacheKey); ok {
+			sb.WriteString(cached)
+			continue
+		}
+		var row strings.Builder
 
 		// Classify message (same logic as messageDelegate)
 		hasText := false
@@ -171,7 +244,7 @@ func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map
 			styledPreview = pStyle.Render(preview)
 		}
 
-		sb.WriteString(prefix + styledPreview + suffix + "\n")
+		row.WriteString(prefix + styledPreview + suffix + "\n")
 
 		// Expanded: show full text below
 		if expanded != nil && expanded[i] {
@@ -180,10 +253,13 @@ func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map
 			if text != "" {
 				wrapped := wrapText(text, textW)
 				for _, line := range strings.Split(wrapped, "\n") {
-					sb.WriteString("    " + line + "\n")
+					row.WriteString("    " + line + "\n")
 				}
 			}
 		}
+		rendered := row.String()
+		rowCache.Set(cacheKey, rendered)
+		sb.WriteString(rendered)
 	}
 
 	return sb.String()
@@ -489,21 +565,21 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 		if blockCursor >= 0 {
 			indicator := " "
 			if isMarked {
-				// Selected block: ✓ replaces the arrow/indicator
+				// Selected block: the check icon replaces the arrow/indicator
 				if isCursor {
-					indicator = blockCursorStyle.Render("✓")
+					indicator = blockCursorStyle.Render(iconSelect)
 				} else {
-					indicator = lipgloss.NewStyle().Foreground(colorAccent).Render("✓")
+					indicator = lipgloss.NewStyle().Foreground(colorAccent).Render(iconSelect)
 				}
 			} else if isCursor {
 				// Cursor block: bright indicator
 				if formatted {
-					indicator = blockCursorStyle.Render("✦")
+					indicator = blockCursorStyle.Render(iconBlockMarker)
 				} else if isFoldable {
 					if folded {
-						indicator = blockCursorStyle.Render("▸")
+						indicator = blockCursorStyle.Render(iconFoldClosed)
 					} else {
-						indicator = blockCursorStyle.Render("▾")
+						indicator = blockCursorStyle.Render(iconFoldOpen)
 					}
 				} else {
 					indicator = blockCursorStyle.Render("›")
@@ -511,12 +587,12 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 			} else {
 				// Non-cursor block: dim indicator
 				if formatted {
-					indicator = dimStyle.Render("✦")
+					indicator = dimStyle.Render(iconBlockMarker)
 				} else if isFoldable {
 					if folded {
-						indicator = dimStyle.Render("▸")
+						indicator = dimStyle.Render(iconFoldClosed)
 					} else {
-						indicator = dimStyle.Render("▾")
+						indicator = dimStyle.Render(iconFoldOpen)
 					}
 				}
 			}
@@ -699,7 +775,7 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 			}
 			label := block.Text
 			if block.ImagePasteID > 0 {
-				label = fmt.Sprintf("▣ %s  (paste #%d — Enter to open)", block.Text, block.ImagePasteID)
+				label = fmt.Sprintf(iconImage+" %s  (paste #%d — Enter to open)", block.Text, block.ImagePasteID)
 			}
 			buf.WriteString(dimStyle.Render(label) + "\n\n")
 		}
@@ -951,7 +1027,7 @@ func extractSkillFromInput(input string) string {
 }
 
 // renderHookBadges returns inline hook summary for tool_use blocks.
-// Shows short script names e.g. "⚡ go_vet.py, ts_lint.py"
+// Shows short script names with a compact hook marker.
 func renderHookBadges(hooks []session.HookInfo) string {
 	if len(hooks) == 0 {
 		return ""
@@ -960,7 +1036,7 @@ func renderHookBadges(hooks []session.HookInfo) string {
 	for _, h := range hooks {
 		names = append(names, hookScriptName(h.Command))
 	}
-	return "  " + hookBadgeStyle.Render("⚡"+strings.Join(names, ", "))
+	return "  " + hookBadgeStyle.Render(iconHook+"  "+strings.Join(names, ", "))
 }
 
 // renderHookDetails returns expanded hook info lines for unfolded tool_use blocks.
@@ -969,7 +1045,7 @@ func renderHookDetails(hooks []session.HookInfo) string {
 	for _, h := range hooks {
 		event := h.Event
 		script := hookScriptName(h.Command)
-		sb.WriteString(hookDetailStyle.Render(fmt.Sprintf("  ⚡ %s  %s", event, script)) + "\n")
+		sb.WriteString(hookDetailStyle.Render(fmt.Sprintf("  "+iconHook+" %s  %s", event, script)) + "\n")
 		// Show full command if different from script name
 		if h.Command != script {
 			sb.WriteString(hookDetailStyle.Render("    "+h.Command) + "\n")

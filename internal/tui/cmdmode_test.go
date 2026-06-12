@@ -136,7 +136,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		"pane:flat": false, "pane:tree": false,
 		"preview:conv": false, "preview:stats": false, "preview:mem": false,
 		"preview:tasks": false, "preview:agents": false, "preview:contexts": false, "preview:live": false,
-		"view:sessions": false, "view:stats": false, "view:config": false,
+		"view:projects": false, "view:stats": false, "view:config": false,
 		"view:config:hooks": false, "view:plugins": false,
 		"view:stats:tools": false, "view:stats:mcp": false,
 		"view:stats:agents": false, "view:stats:skills": false,

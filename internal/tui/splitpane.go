@@ -76,7 +76,7 @@ func ContentHeight(totalH int) int {
 
 // truncateExact truncates s to at most targetW display cells.
 // Uses the Wc (wide-char) variants which treat East Asian Ambiguous-width
-// characters (○, ●, ■, ✓, etc.) as 2 cells, matching CJK terminal rendering.
+// characters as 2 cells, matching CJK terminal rendering.
 func truncateExact(s string, targetW int) (string, int) {
 	if targetW <= 0 {
 		return "", 0

@@ -57,9 +57,9 @@ func (d plgDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 	isMarked := !pi.isHeader && d.selectedSet[pi.plugin.ID]
 	cursor := "  "
 	if isMarked {
-		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true).Render("✓ ")
+		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true).Render(iconSelect + " ")
 	} else if selected {
-		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("▸ ")
+		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(iconFoldClosed + " ")
 	}
 	cursorW := 2
 
@@ -706,9 +706,9 @@ func (d plgCompDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	isMarked := !ci.isHeader && ci.comp.Path != "" && d.selectedSet[ci.comp.Path]
 	cursor := "  "
 	if isMarked {
-		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true).Render("✓ ")
+		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true).Render(iconSelect + " ")
 	} else if selected {
-		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("▸ ")
+		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(iconFoldClosed + " ")
 	}
 	cursorW := 2
 

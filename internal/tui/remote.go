@@ -107,10 +107,10 @@ func (a *App) buildRemoteProgressView(sess *remote.Session, currentStep string) 
 	}
 	sb.WriteString("\n" + titleStyle.Render("Progress") + "\n\n")
 	for _, step := range a.remoteProgressSteps {
-		sb.WriteString("  " + lipgloss.NewStyle().Foreground(colorAccent).Render("✓") + " " + step + "\n")
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(colorAccent).Render(iconDone) + " " + step + "\n")
 	}
 	if currentStep != "" {
-		sb.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Render("◉") + " " + currentStep + "\n")
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Render(iconActive) + " " + currentStep + "\n")
 	}
 	return sb.String()
 }
@@ -379,7 +379,7 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 	a.remoteProgressSteps = append(a.remoteProgressSteps, msg.step.Message)
 	if a.remoteSession != nil {
 		a.remoteContent = a.buildRemoteProgressView(a.remoteSession, msg.step.Message)
-		// Remove last (it's the "current" one, shown with ◉)
+		// Remove last (it's the "current" one, shown with the active icon)
 		a.remoteProgressSteps = a.remoteProgressSteps[:len(a.remoteProgressSteps)-1]
 	}
 	a.updateRemotePreview(msg.podName)
