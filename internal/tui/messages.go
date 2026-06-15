@@ -171,9 +171,9 @@ func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map
 					cursorStr = convCursorStyle.Render("> ")
 				}
 			}
-			role = userLabelStyle.Render("USER")
+			role = userLabelStyle.Render(roleChip("user"))
 		} else {
-			role = assistantLabelStyle.Render("ASST")
+			role = assistantLabelStyle.Render(roleChip("assistant"))
 		}
 
 		// Time
@@ -384,9 +384,9 @@ func renderCompactMessage(e session.Entry, width, maxLines int) string {
 	var sb strings.Builder
 	w := max(width, 10)
 
-	role := userLabelStyle.Render("USER")
+	role := userLabelStyle.Render(roleChip("user"))
 	if e.Role == "assistant" {
-		role = assistantLabelStyle.Render("ASST")
+		role = assistantLabelStyle.Render(roleChip("assistant"))
 	}
 
 	ts := "     "
@@ -529,9 +529,9 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 	if isAutoCompacted(e) {
 		label = compactBadgeStyle.Render("COMPACTION SUMMARY")
 	} else if e.Role == "user" {
-		label = userLabelStyle.Render("USER")
+		label = userLabelStyle.Render(roleChip("user"))
 	} else {
-		label = assistantLabelStyle.Render("ASSISTANT")
+		label = assistantLabelStyle.Render(roleChip("assistant"))
 	}
 
 	ts := ""

@@ -22,7 +22,47 @@ const (
 	iconFoldClosed  = "▸"
 	iconFoldOpen    = "▾"
 	iconSelect      = iconDone
+
+	iconRoleUser      = ""
+	iconRoleAssistant = ""
+	iconRoleCompact   = ""
+	iconBadgeLive     = ""
+	iconBadgeBusy     = ""
+	iconBadgeBg       = ""
+	iconBadgeMon      = ""
+	iconBadgeHere     = ""
+	iconBadgeDone     = ""
+	iconBadgeWait     = ""
+	iconBadgeStuck    = ""
+	iconBadgeRemote   = ""
+	iconTrendUp       = "▴"
+	iconTrendDown     = "▾"
+	iconBarFull       = "█"
+	iconBarLight      = "▓"
+	iconBarMid        = "▒"
+	iconBarEmpty      = "░"
 )
+
+func roleChip(role string) string {
+	switch role {
+	case "user":
+		return iconRoleUser + " usr"
+	case "assistant":
+		return iconRoleAssistant + " ast"
+	case "compact":
+		return iconRoleCompact + " ctx"
+	default:
+		return role
+	}
+}
+
+func sectionTitle(icon, text string) string {
+	return icon + "  " + text
+}
+
+func badgeLabel(icon, text string) string {
+	return "[" + icon + " " + text + "]"
+}
 
 var (
 	colorPrimary       = lipgloss.Color("#7C3AED")

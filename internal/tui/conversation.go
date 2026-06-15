@@ -1620,7 +1620,7 @@ func captureConvPreviewAnchor(sp *SplitPane, baseKey string) convPreviewAnchor {
 
 // previewHeaderRE matches a role-header line like "USER" or "ASSISTANT  12:00:03"
 // produced by compactPreviewMessageText / previewMessageText.
-var previewHeaderRE = regexp.MustCompile(`^[A-Z][A-Z_]*(\s+\d{2}:\d{2}:\d{2})?$`)
+var previewHeaderRE = regexp.MustCompile(`^[^\s]+(\s+[^\s]+)?(\s+\d{2}:\d{2}:\d{2})?$`)
 
 // previewToolSummaryRE extracts tool names from a previewMessageText summary
 // such as "[TaskUpdate]", "[[TaskUpdate]]", or "[Read×3, Edit]".
@@ -1911,11 +1911,10 @@ func summarizeToolResult(b session.ContentBlock) session.ContentBlock {
 }
 
 func compactPreviewMessageText(e session.Entry) string {
-	role := strings.ToUpper(e.Role)
-	if role == "" {
-		role = "ENTRY"
+	header := roleChip(e.Role)
+	if header == "" {
+		header = "entry"
 	}
-	header := role
 	if !e.Timestamp.IsZero() {
 		header += "  " + e.Timestamp.Format("15:04:05")
 	}
@@ -1934,11 +1933,10 @@ func compactPreviewMessageText(e session.Entry) string {
 }
 
 func previewMessageText(e session.Entry) string {
-	role := strings.ToUpper(e.Role)
-	if role == "" {
-		role = "ENTRY"
+	header := roleChip(e.Role)
+	if header == "" {
+		header = "entry"
 	}
-	header := role
 	if !e.Timestamp.IsZero() {
 		header += "  " + e.Timestamp.Format("15:04:05")
 	}

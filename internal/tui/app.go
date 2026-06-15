@@ -1319,11 +1319,11 @@ func (a *App) View() string {
 		help = "  " + a.cmdInput.View() + helpStyle.Render("  tab:complete ↵:run esc:cancel")
 	}
 
-	// URL menu hint box
+	// URL menu centered modal
 	if a.urlMenu {
 		hintBox := a.renderURLMenu()
 		if hintBox != "" {
-			content = placeHintBox(content, hintBox, a.activeDividerCol())
+			content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 24), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		}
 		if a.urlSearching {
 			help = "  " + a.urlSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
@@ -1335,20 +1335,20 @@ func (a *App) View() string {
 	// Conversation/message-full actions menu hint box
 	if a.convActionsMenu && (a.state == viewConversation || a.state == viewMessageFull) {
 		hintBox := a.renderConvActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp(fmtKey(a.keymap.Conversation.Actions, "actions") + " — pick an action")
 	}
 
 	// Actions menu hint box floating above help line
 	if a.actionsMenu && a.state == viewSessions {
 		hintBox := a.renderActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	if a.sessPageMenu && a.state == viewSessions {
 		hintBox := a.renderSessPageHintBox()
-		content = overlayCenter(content, hintBox, a.width, ContentHeight(a.height))
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a preview")
 	}
 
@@ -1356,56 +1356,56 @@ func (a *App) View() string {
 	if a.tagMenu {
 		modal := a.renderTagMenu()
 		if modal != "" {
-			content = overlayCenter(content, modal, a.width, ContentHeight(a.height))
+			content = overlayCenteredModal(content, modal, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 24), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		}
 	}
 
 	// Config actions menu hint box
 	if a.cfgActionsMenu && a.state == viewConfig {
 		hintBox := a.renderCfgActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Plugin actions menu hint box
 	if a.plgActionsMenu && a.state == viewPlugins {
 		hintBox := a.renderPlgActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Plugin detail actions menu hint box
 	if a.plgCompActionsMenu && a.state == viewPlugins && a.plgDetailActive {
 		hintBox := a.renderPlgCompActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Views menu centered modal
 	if a.viewsMenu {
 		hintBox := a.renderViewsHintBox()
-		content = overlayCenter(content, hintBox, a.width, ContentHeight(a.height))
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("v:views — pick a view")
 	}
 
 	// Edit menu centered modal
 	if a.editMenu {
 		hintBox := a.renderEditHintBox()
-		content = overlayCenter(content, hintBox, a.width, ContentHeight(a.height))
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("e:edit — pick a file")
 	}
 
 	// Stats page jump centered modal
 	if a.statsPageMenu && a.state == viewGlobalStats {
 		hintBox := a.renderStatsPageHintBox()
-		content = overlayCenter(content, hintBox, a.width, ContentHeight(a.height))
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a page")
 	}
 
 	// Config page jump centered modal
 	if a.cfgPageMenu && a.state == viewConfig {
 		hintBox := a.renderCfgPageHintBox()
-		content = overlayCenter(content, hintBox, a.width, ContentHeight(a.height))
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a section")
 	}
 
@@ -1416,7 +1416,7 @@ func (a *App) View() string {
 			content = a.renderConvPageBrowser()
 		}
 		hintBox := a.renderConvPageHintBox()
-		content = overlayCenter(content, hintBox, a.width, ContentHeight(a.height))
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a page")
 	}
 
@@ -1424,7 +1424,7 @@ func (a *App) View() string {
 	if a.convPageActionsMenu && a.state == viewConversation && a.convPageActive {
 		content = a.renderConvPageBrowser()
 		hintBox := a.renderConvPageActionsHintBox()
-		content = overlayCenter(content, hintBox, a.width, ContentHeight(a.height))
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
@@ -1454,26 +1454,26 @@ func (a *App) View() string {
 		}
 	}
 
-	// Block filter hint box floating above help line (conversation preview and full-screen message)
+	// Filter/search hint boxes as constrained centered modals
 	if a.conv.blockFiltering && a.state == viewConversation {
 		hintBox := renderBlockFilterHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-10, 28), maxHeight: max(ContentHeight(a.height)-6, 8)})
 	}
 	if a.state == viewMessageFull {
 		if a.msgFull.blockFiltering {
 			hintBox := renderBlockFilterHintBox()
-			content = placeHintBox(content, hintBox, a.activeDividerCol())
+			content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-10, 28), maxHeight: max(ContentHeight(a.height)-6, 8)})
 		} else if a.msgFull.searching {
 			hintBox := a.renderMsgFullSearchHintBox()
-			content = placeHintBox(content, hintBox, a.activeDividerCol())
+			content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-10, 28), maxHeight: max(ContentHeight(a.height)-6, 8)})
 		}
 	}
 
-	// Command mode hint box floating above help line
+	// Command mode hint box as constrained centered modal
 	if a.cmdMode {
 		hintBox := a.renderCmdHintBox()
 		if hintBox != "" {
-			content = placeHintBox(content, hintBox, a.activeDividerCol())
+			content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-10, 40), maxHeight: max(ContentHeight(a.height)-6, 10)})
 		}
 	}
 
@@ -6717,7 +6717,7 @@ func scrollPreview(vp *viewport.Model, key string) {
 
 func roleLabel(e session.Entry) string {
 	if e.Role == "user" {
-		return "User"
+		return roleChip("user")
 	}
-	return "Assistant"
+	return roleChip("assistant")
 }

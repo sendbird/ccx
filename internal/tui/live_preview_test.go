@@ -22,6 +22,12 @@ func newTestApp(sessions []session.Session) *App {
 	// tests that assume the sessions view is active.
 	a.state = viewSessions
 	a.sessPreviewMode = sessPreviewConversation
+	a.sessionsLoading = false
+	// Tests should be hermetic: clear any persisted startup filter from the
+	// user's local config so visible-item assertions don't depend on the
+	// developer's current browser state.
+	a.config.SearchQuery = ""
+	a.sessionList.ResetFilter()
 	// Default to flat grouping for tests so existing index/visible-item
 	// assertions keep holding regardless of the production default.
 	a.sessGroupMode = groupFlat

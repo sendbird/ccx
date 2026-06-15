@@ -274,36 +274,28 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 	badges := ""
 	badgesW := 0
 	if pi.hereCount > 0 && !hide["HERE"] {
-		badges += " " + hereBadge.Render(fmt.Sprintf("[HERE×%d]", pi.hereCount))
-		badgesW += len(fmt.Sprintf("[HERE×%d]", pi.hereCount)) + 1
+		badges = appendBadge(badges, &badgesW, hereBadge, badgeLabel(iconBadgeHere, fmt.Sprintf("HERE×%d", pi.hereCount)))
 	}
 	if pi.liveSessions > 0 && !hide["LIVE"] {
-		badges += " " + liveBadge.Render(fmt.Sprintf("[LIVE×%d]", pi.liveSessions))
-		badgesW += len(fmt.Sprintf("[LIVE×%d]", pi.liveSessions)) + 1
+		badges = appendBadge(badges, &badgesW, liveBadge, badgeLabel(iconBadgeLive, fmt.Sprintf("LIVE×%d", pi.liveSessions)))
 	}
 	if pi.busyCount > 0 && !hide["BUSY"] {
-		badges += " " + busyBadge.Render(fmt.Sprintf("[BUSY×%d]", pi.busyCount))
-		badgesW += len(fmt.Sprintf("[BUSY×%d]", pi.busyCount)) + 1
+		badges = appendBadge(badges, &badgesW, busyBadge, badgeLabel(iconBadgeBusy, fmt.Sprintf("BUSY×%d", pi.busyCount)))
 	}
 	if pi.bgSessions > 0 && !hide["BG"] {
-		badges += " " + bgBadgeStyle.Render(fmt.Sprintf("[BG×%d]", pi.bgSessions))
-		badgesW += len(fmt.Sprintf("[BG×%d]", pi.bgSessions)) + 1
+		badges = appendBadge(badges, &badgesW, bgBadgeStyle, badgeLabel(iconBadgeBg, fmt.Sprintf("BG×%d", pi.bgSessions)))
 	}
 	if pi.monSessions > 0 && !hide["MON"] {
-		badges += " " + monBadgeStyle.Render(fmt.Sprintf("[MON×%d]", pi.monSessions))
-		badgesW += len(fmt.Sprintf("[MON×%d]", pi.monSessions)) + 1
+		badges = appendBadge(badges, &badgesW, monBadgeStyle, badgeLabel(iconBadgeMon, fmt.Sprintf("MON×%d", pi.monSessions)))
 	}
 	if pi.stuckCount > 0 && !hide["STUCK"] {
-		badges += " " + stuckBadgeStyle.Render(fmt.Sprintf("[STUCK×%d]", pi.stuckCount))
-		badgesW += len(fmt.Sprintf("[STUCK×%d]", pi.stuckCount)) + 1
+		badges = appendBadge(badges, &badgesW, stuckBadgeStyle, badgeLabel(iconBadgeStuck, fmt.Sprintf("STUCK×%d", pi.stuckCount)))
 	}
 	if pi.waitCount > 0 && !hide["WAIT"] {
-		badges += " " + waitBadgeStyle.Render(fmt.Sprintf("[WAIT×%d]", pi.waitCount))
-		badgesW += len(fmt.Sprintf("[WAIT×%d]", pi.waitCount)) + 1
+		badges = appendBadge(badges, &badgesW, waitBadgeStyle, badgeLabel(iconBadgeWait, fmt.Sprintf("WAIT×%d", pi.waitCount)))
 	}
 	if pi.doneCount > 0 && !hide["DONE"] {
-		badges += " " + doneBadgeStyle.Render(fmt.Sprintf("[DONE×%d]", pi.doneCount))
-		badgesW += len(fmt.Sprintf("[DONE×%d]", pi.doneCount)) + 1
+		badges = appendBadge(badges, &badgesW, doneBadgeStyle, badgeLabel(iconBadgeDone, fmt.Sprintf("DONE×%d", pi.doneCount)))
 	}
 
 	// Header text: line-art folder, name, branch, time, and badges.
@@ -338,7 +330,7 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 		name = highlighted
 	}
 
-	line1 := fmt.Sprintf("%s%s %s %s%s  %s%s", cursor, chev, icon, name, br, timeStr, badges)
+	line1 := fmt.Sprintf("%s%s %s  %s%s  %s%s", cursor, chev, icon, name, br, timeStr, badges)
 	// Pad/clamp.
 	if selected {
 		bare := lipgloss.Width(line1)
@@ -473,38 +465,31 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	badgesW := 0
 	hide := d.hiddenBadges
 	if s.IsCurrentWindow && !hide["HERE"] {
-		badges += " " + hereBadge.Render("[HERE]")
-		badgesW += 7
+		badges = appendBadge(badges, &badgesW, hereBadge, badgeLabel(iconBadgeHere, "HERE"))
 	}
 	if s.IsLive && !hide["LIVE"] {
-		badges += " " + liveBadge.Render("[LIVE]")
-		badgesW += 7
+		badges = appendBadge(badges, &badgesW, liveBadge, badgeLabel(iconBadgeLive, "LIVE"))
 	}
 	switch s.Lifecycle() {
 	case session.LifecycleBusy:
 		if !hide["BUSY"] {
-			badges += " " + busyBadge.Render("[BUSY]")
-			badgesW += 7
+			badges = appendBadge(badges, &badgesW, busyBadge, badgeLabel(iconBadgeBusy, "BUSY"))
 		}
 	case session.LifecycleBG:
 		if !hide["BG"] {
-			badges += " " + bgBadgeStyle.Render("[BG]")
-			badgesW += 5
+			badges = appendBadge(badges, &badgesW, bgBadgeStyle, badgeLabel(iconBadgeBg, "BG"))
 		}
 	case session.LifecycleStuck:
 		if !hide["STUCK"] {
-			badges += " " + stuckBadgeStyle.Render("[STUCK]")
-			badgesW += 8
+			badges = appendBadge(badges, &badgesW, stuckBadgeStyle, badgeLabel(iconBadgeStuck, "STUCK"))
 		}
 	case session.LifecycleWait:
 		if !hide["WAIT"] {
-			badges += " " + waitBadgeStyle.Render("[WAIT]")
-			badgesW += 7
+			badges = appendBadge(badges, &badgesW, waitBadgeStyle, badgeLabel(iconBadgeWait, "WAIT"))
 		}
 	case session.LifecycleDone:
 		if !hide["DONE"] {
-			badges += " " + doneBadgeStyle.Render("[DONE]")
-			badgesW += 7
+			badges = appendBadge(badges, &badgesW, doneBadgeStyle, badgeLabel(iconBadgeDone, "DONE"))
 		}
 	}
 	// Monitor badge: surfaces sessions that have at least one Monitor tool
@@ -514,8 +499,7 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	// users explicitly want to see which sessions are currently watching
 	// something.
 	if s.IsLive && s.HasMonitorJobs && !hide["MON"] {
-		badges += " " + monBadgeStyle.Render("[MON]")
-		badgesW += 6
+		badges = appendBadge(badges, &badgesW, monBadgeStyle, badgeLabel(iconBadgeMon, "MON"))
 	}
 	// Custom user badges
 	for _, badge := range s.CustomBadges {
@@ -525,8 +509,7 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 	if s.IsRemote {
 		remoteBadge := lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true)
-		badges += " " + remoteBadge.Render("[R·exp]")
-		badgesW += 8
+		badges = appendBadge(badges, &badgesW, remoteBadge, badgeLabel(iconBadgeRemote, "REMOTE"))
 	}
 
 	// Child-count badge for group head rows. When folded we always show it
@@ -1443,6 +1426,12 @@ func filepathBase(p string) string {
 	return p
 }
 
+func appendBadge(badges string, badgesW *int, style lipgloss.Style, text string) string {
+	badges += " " + style.Render(text)
+	*badgesW += lipgloss.Width(text) + 1
+	return badges
+}
+
 func timeAgo(t time.Time) string {
 	if t.IsZero() {
 		return "unknown"
@@ -1462,6 +1451,60 @@ func timeAgo(t time.Time) string {
 	}
 }
 
+type modalOptions struct {
+	maxWidth  int
+	maxHeight int
+	paddingX  int
+	paddingY  int
+}
+
+func overlayCenteredModal(bg, fg string, screenW, screenH int, opts modalOptions) string {
+	if fg == "" {
+		return bg
+	}
+	bgLines := strings.Split(bg, "\n")
+	fgLines := strings.Split(fg, "\n")
+
+	for len(bgLines) < screenH {
+		bgLines = append(bgLines, "")
+	}
+
+	fgH := len(fgLines)
+	fgW := 0
+	for _, l := range fgLines {
+		if w := lipgloss.Width(l); w > fgW {
+			fgW = w
+		}
+	}
+
+	padX := max(opts.paddingX, 0)
+	padY := max(opts.paddingY, 0)
+	outerW := fgW + padX*2
+	outerH := fgH + padY*2
+	if opts.maxWidth > 0 {
+		outerW = min(outerW, opts.maxWidth)
+	}
+	if opts.maxHeight > 0 {
+		outerH = min(outerH, opts.maxHeight)
+	}
+
+	startY := max((screenH-outerH)/2, 0) + padY
+	startX := max((screenW-outerW)/2, 0) + padX
+
+	for i, fgLine := range fgLines {
+		bgIdx := startY + i
+		if bgIdx >= len(bgLines) {
+			break
+		}
+		bgLines[bgIdx] = overlayLine(bgLines[bgIdx], fgLine, startX, screenW)
+	}
+
+	if len(bgLines) > screenH {
+		bgLines = bgLines[:screenH]
+	}
+	return strings.Join(bgLines, "\n")
+}
+
 // renderHelpModal renders a centered bordered modal with help content overlaid on bg.
 func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint string) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
@@ -1479,15 +1522,15 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		desc  string
 	}
 	allBadges := []badge{
-		{hereBadge, "[HERE]", "In current tmux window"},
-		{liveBadge, "[LIVE]", "Running Claude"},
-		{busyBadge, "[BUSY]", "Responding now"},
-		{bgBadgeStyle, "[BG]", "Background shell/monitor/cron"},
-		{monBadgeStyle, "[MON]", "Monitor tool currently in flight"},
-		{waitBadgeStyle, "[WAIT]", "Idle, waiting for user"},
-		{doneBadgeStyle, "[DONE]", "All work completed"},
-		{stuckBadgeStyle, "[STUCK]", "Live but stale with unfinished work"},
-		{lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true), "[R·exp]", "Remote (experimental)"},
+		{hereBadge, badgeLabel(iconBadgeHere, "HERE"), "In current tmux window"},
+		{liveBadge, badgeLabel(iconBadgeLive, "LIVE"), "Running Claude"},
+		{busyBadge, badgeLabel(iconBadgeBusy, "BUSY"), "Responding now"},
+		{bgBadgeStyle, badgeLabel(iconBadgeBg, "BG"), "Background shell/monitor/cron"},
+		{monBadgeStyle, badgeLabel(iconBadgeMon, "MON"), "Monitor tool currently in flight"},
+		{waitBadgeStyle, badgeLabel(iconBadgeWait, "WAIT"), "Idle, waiting for user"},
+		{doneBadgeStyle, badgeLabel(iconBadgeDone, "DONE"), "All work completed"},
+		{stuckBadgeStyle, badgeLabel(iconBadgeStuck, "STUCK"), "Live but stale with unfinished work"},
+		{lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true), badgeLabel(iconBadgeRemote, "REMOTE"), "Remote (experimental)"},
 	}
 	// Render badges in pairs (two per line)
 	for i := 0; i < len(allBadges); i += 2 {

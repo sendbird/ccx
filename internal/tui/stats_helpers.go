@@ -125,6 +125,9 @@ func renderToolBarWithErrors(sb *strings.Builder, counts map[string]int, errors 
 	if len(entries) > limit {
 		entries = entries[:limit]
 	}
+	if maxCount <= 0 {
+		return
+	}
 
 	// Allow label column up to 40% of width, minimum 14
 	maxLabelW := max(width*2/5, 14)
@@ -132,13 +135,14 @@ func renderToolBarWithErrors(sb *strings.Builder, counts map[string]int, errors 
 		maxNameW = maxLabelW
 	}
 	countW := len(fmt.Sprintf("%d", maxCount))
-	barMaxW := width - maxNameW - countW - 6 // "  name  ██  N"
-	if barMaxW < 3 {
-		barMaxW = 3
+	barMaxW := width - maxNameW - countW - 12 // icon + name + bar + count
+	if barMaxW < 6 {
+		barMaxW = 6
 	}
 
 	barStyle := statAccentStyle
 	errBarStyle := errorStyle
+	countStyle := statNumStyle
 
 	for _, e := range entries {
 		name := e.name
@@ -150,29 +154,36 @@ func renderToolBarWithErrors(sb *strings.Builder, counts map[string]int, errors 
 			barLen = 1
 		}
 
-		var bar string
+		okLen := barLen
+		errBarLen := 0
 		if e.errors > 0 && e.count > 0 {
-			errBarLen := e.errors * barLen / e.count
+			errBarLen = e.errors * barLen / e.count
 			if errBarLen < 1 {
 				errBarLen = 1
 			}
 			if errBarLen > barLen {
 				errBarLen = barLen
 			}
-			okLen := barLen - errBarLen
-			if okLen > 0 {
-				bar = barStyle.Render(strings.Repeat("█", okLen))
-			}
-			bar += errBarStyle.Render(strings.Repeat("█", errBarLen))
-		} else {
-			bar = barStyle.Render(strings.Repeat("█", barLen))
+			okLen = barLen - errBarLen
 		}
 
-		countLabel := fmt.Sprintf("%*d", countW, e.count)
-		if e.errors > 0 {
-			countLabel += errBarStyle.Render(fmt.Sprintf(" (%d err)", e.errors))
+		bar := ""
+		if okLen > 0 {
+			bar = barStyle.Render(strings.Repeat(iconBarFull, okLen))
 		}
-		sb.WriteString(fmt.Sprintf("  %-*s %s %s\n", maxNameW, name, bar, countLabel))
+		if errBarLen > 0 {
+			bar += errBarStyle.Render(strings.Repeat(iconBarLight, errBarLen))
+		}
+		if fill := barMaxW - barLen; fill > 0 {
+			bar += dimStyle.Render(strings.Repeat(iconBarEmpty, fill))
+		}
+
+		countLabel := countStyle.Render(fmt.Sprintf("%*d", countW, e.count))
+		meta := ""
+		if e.errors > 0 {
+			meta = errBarStyle.Render(fmt.Sprintf("  %d err", e.errors))
+		}
+		sb.WriteString(fmt.Sprintf("  %s  %-*s %s %s%s\n", iconTask, maxNameW, name, bar, countLabel, meta))
 	}
 }
 
@@ -301,11 +312,7 @@ func renderProjectStats(sb *strings.Builder, projects []session.ProjectStats, wi
 		sb.WriteString(fmt.Sprintf("  %s\n", path))
 
 		// Line 2: cost + bar + stats
-		barLen := int(float64(barW) * ps.CostUSD / maxCost)
-		if barLen < 1 && ps.CostUSD > 0 {
-			barLen = 1
-		}
-		bar := strings.Repeat("█", barLen)
+		bar := histogramBar(int(ps.CostUSD*10000), int(maxCost*10000), barW)
 
 		sb.WriteString(fmt.Sprintf("    %s %s  %s out  %s sess  %s msgs\n",
 			costStyle.Render(fmt.Sprintf("%7s", fmtCost(ps.CostUSD))),
@@ -366,11 +373,7 @@ func renderProjectDetail(stats session.GlobalStats, width int) string {
 		}
 		sb.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render(rank), path))
 
-		barLen := int(float64(barW) * ps.CostUSD / maxCost)
-		if barLen < 1 && ps.CostUSD > 0 {
-			barLen = 1
-		}
-		bar := strings.Repeat("█", barLen)
+		bar := histogramBar(int(ps.CostUSD*10000), int(maxCost*10000), barW)
 		ratio := ps.CostUSD * 100 / totalCost
 
 		sb.WriteString(fmt.Sprintf("      %s %s  %s\n",
@@ -388,7 +391,6 @@ func renderProjectDetail(stats session.GlobalStats, width int) string {
 
 	return sb.String()
 }
-
 
 func renderProjectPathDetail(stats session.GlobalStats, width int) string {
 	if len(stats.ProjectStats) == 0 {
@@ -436,11 +438,7 @@ func renderProjectPathDetail(stats session.GlobalStats, width int) string {
 		}
 		sb.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render(rank), path))
 
-		barLen := int(float64(barW) * ps.CostUSD / maxCost)
-		if barLen < 1 && ps.CostUSD > 0 {
-			barLen = 1
-		}
-		bar := strings.Repeat("█", barLen)
+		bar := histogramBar(int(ps.CostUSD*10000), int(maxCost*10000), barW)
 		ratio := ps.CostUSD * 100 / totalCost
 
 		sb.WriteString(fmt.Sprintf("      %s %s  %s\n",
@@ -458,4 +456,3 @@ func renderProjectPathDetail(stats session.GlobalStats, width int) string {
 
 	return sb.String()
 }
-

@@ -21,11 +21,11 @@ func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lip
 
 	isCompacted := isAutoCompacted(e)
 
-	role := userLabelStyle.Render("USER")
+	role := userLabelStyle.Render(roleChip("user"))
 	if isCompacted {
-		role = compactBadgeStyle.Render("CMPX")
+		role = compactBadgeStyle.Render(roleChip("compact"))
 	} else if e.Role == "assistant" {
-		role = assistantLabelStyle.Render("ASST")
+		role = assistantLabelStyle.Render(roleChip("assistant"))
 	}
 
 	ts := "     "
