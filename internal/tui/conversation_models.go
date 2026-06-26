@@ -38,6 +38,49 @@ type convItem struct {
 	label       string            // optional compact label for tree items
 }
 
+// convItemID returns a stable identity string for a convItem. Used to
+// re-select the same logical row after operations that shift list indices
+// (e.g. clearing a filter).
+func convItemID(c convItem) string {
+	switch c.kind {
+	case convMsg:
+		if c.merged.entry.UUID != "" {
+			return "msg:" + c.merged.entry.UUID
+		}
+	case convTask:
+		if c.task.ID != "" {
+			return "task:" + c.task.ID
+		}
+		if c.bgTaskID != "" {
+			return "bgtask:" + c.bgTaskID
+		}
+		if c.cron.ID != "" {
+			return "cron:" + c.cron.ID
+		}
+	case convAgent:
+		if c.agent.ID != "" {
+			return "agent:" + c.agent.ID
+		}
+		if c.agent.ShortID != "" {
+			return "agent:" + c.agent.ShortID
+		}
+	case convSessionMeta:
+		return "meta:" + c.sessionMeta
+	}
+	// Fallback: groupTag headers and unidentified items use label+groupTag.
+	return "lbl:" + c.groupTag + ":" + c.label
+}
+
+// selectedConvItemID returns convItemID for the currently selected item in
+// the list, or "" when nothing is selected.
+func selectedConvItemID(l *list.Model) string {
+	ci, ok := l.SelectedItem().(convItem)
+	if !ok {
+		return ""
+	}
+	return convItemID(ci)
+}
+
 func (c convItem) FilterValue() string {
 	var parts []string
 	if c.label != "" {

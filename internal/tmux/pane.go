@@ -240,6 +240,14 @@ func SendSingleKey(p Pane, key string) error {
 	return exec.Command("tmux", "send-keys", "-t", target, tmuxKey).Run()
 }
 
+// SendLiteralKeys sends raw text literally to a tmux pane without appending
+// Enter. Useful for bracketed paste / multi-rune input forwarded through a
+// proxied preview pane.
+func SendLiteralKeys(p Pane, text string) error {
+	target := p.Session + ":" + p.Window + "." + p.Pane
+	return exec.Command("tmux", "send-keys", "-l", "-t", target, text).Run()
+}
+
 // SendKeys sends text input to a tmux pane followed by Enter to submit.
 // Uses -l for the text (literal, no key-name interpretation) then a separate
 // send-keys for Enter so it's treated as a keypress.

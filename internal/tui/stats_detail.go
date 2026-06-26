@@ -128,7 +128,7 @@ func renderToolDetail(stats session.GlobalStats, width int, mcpOnly bool) string
 
 	label := "TOOLS"
 	if mcpOnly {
-		label = "MCP TOOLS"
+		label = "MCP"
 	}
 	return renderCategoryDetail(label, counts, errors, callTS, errTS, width)
 }
@@ -153,14 +153,13 @@ func renderCategoryDetail(label string, counts, errors map[string]int, callTS, e
 
 	var sb strings.Builder
 
-	// Build entries with capped error rates
 	var entries []detailEntry
 	totalCalls := 0
 	totalErrors := 0
 	for name, count := range counts {
 		e := detailEntry{name: name, count: count}
 		if errors != nil {
-			e.errors = min(errors[name], count) // cap errors to calls
+			e.errors = min(errors[name], count)
 		}
 		if count > 0 {
 			e.errRate = float64(e.errors) * 100 / float64(count)
@@ -176,20 +175,19 @@ func renderCategoryDetail(label string, counts, errors map[string]int, callTS, e
 		totalCalls += count
 		totalErrors += e.errors
 	}
+	if len(entries) == 0 {
+		return dimStyle.Render("(no data)")
+	}
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].count > entries[j].count })
 
-	// Header
-	header := fmt.Sprintf("%s DETAIL (%d total", label, totalCalls)
+	header := fmt.Sprintf("%s DETAIL  %s", label, labelStyle.Render(fmt.Sprintf("%d calls", totalCalls)))
 	if totalErrors > 0 {
-		rate := float64(totalErrors) * 100 / float64(max(totalCalls, 1))
-		header += errStyle.Render(fmt.Sprintf(", %d errors %.0f%%", totalErrors, rate))
+		header += "  " + errStyle.Render(fmt.Sprintf("%d err", totalErrors))
 	}
-	header += ")"
 	sb.WriteString(titleStyle.Render(header) + "\n")
 	sb.WriteString(ruler + "\n\n")
 
-	// Bar chart of all items
 	shortCounts := make(map[string]int, len(entries))
 	shortErrors := make(map[string]int, len(entries))
 	for _, e := range entries {
@@ -199,32 +197,31 @@ func renderCategoryDetail(label string, counts, errors map[string]int, callTS, e
 			shortErrors[name] += e.errors
 		}
 	}
-	renderToolBarWithErrors(&sb, shortCounts, shortErrors, width, 30)
+	renderToolBarWithErrors(&sb, shortCounts, shortErrors, width, 18)
 	sb.WriteString("\n")
 
-	// Top error rates (only if errors exist)
 	if totalErrors > 0 {
-		sb.WriteString(titleStyle.Render("HIGHEST ERROR RATES") + "\n")
+		sb.WriteString(titleStyle.Render(sectionTitle(iconBadgeStuck, "ERROR RATES")) + "\n")
 		sb.WriteString(ruler + "\n")
 		errSorted := make([]detailEntry, len(entries))
 		copy(errSorted, entries)
 		sort.Slice(errSorted, func(i, j int) bool { return errSorted[i].errRate > errSorted[j].errRate })
 		shown := 0
 		for _, e := range errSorted {
-			if e.errors == 0 || shown >= 5 {
+			if e.errors == 0 || shown >= 6 {
 				break
 			}
-			name := shortenToolName(e.name)
-			sb.WriteString(fmt.Sprintf("  %-30s %s  %s\n",
-				truncName(name, 30),
+			name := truncName(shortenToolName(e.name), 24)
+			sb.WriteString(fmt.Sprintf("  %s  %-24s %s  %s\n",
+				errStyle.Render(iconBadgeStuck),
+				name,
 				errStyle.Render(fmt.Sprintf("%.0f%%", e.errRate)),
-				labelStyle.Render(fmt.Sprintf("(%d err / %d calls)", e.errors, e.count))))
+				labelStyle.Render(fmt.Sprintf("%d/%d", e.errors, e.count))))
 			shown++
 		}
 		sb.WriteString("\n")
 	}
 
-	// Week-over-week trends
 	var trending []detailEntry
 	for _, e := range entries {
 		if len(e.callTS) >= 3 && math.Abs(e.weekDelta) > 0.1 {
@@ -232,33 +229,29 @@ func renderCategoryDetail(label string, counts, errors map[string]int, callTS, e
 		}
 	}
 	if len(trending) > 0 {
-		sort.Slice(trending, func(i, j int) bool {
-			return math.Abs(trending[i].weekDelta) > math.Abs(trending[j].weekDelta)
-		})
-		sb.WriteString(titleStyle.Render("WEEK-OVER-WEEK TRENDS") + "\n")
+		sort.Slice(trending, func(i, j int) bool { return math.Abs(trending[i].weekDelta) > math.Abs(trending[j].weekDelta) })
+		sb.WriteString(titleStyle.Render(sectionTitle(iconTrendUp, "TRENDS")) + "\n")
 		sb.WriteString(ruler + "\n")
-		shown := 0
-		for _, e := range trending {
-			if shown >= 8 {
+		for i, e := range trending {
+			if i >= 8 {
 				break
 			}
-			name := shortenToolName(e.name)
-			arrow := "↑"
-			deltaStyle := accentStyle
+			name := truncName(shortenToolName(e.name), 24)
+			icon := iconTrendUp
+			style := accentStyle
 			if e.weekDelta < 0 {
-				arrow = "↓"
-				deltaStyle = labelStyle
+				icon = iconTrendDown
+				style = labelStyle
 			}
-			sb.WriteString(fmt.Sprintf("  %-30s %s %s\n",
-				truncName(name, 30),
-				deltaStyle.Render(fmt.Sprintf("%s%.0f%%", arrow, math.Abs(e.weekDelta))),
-				labelStyle.Render(fmt.Sprintf("(%d calls)", e.count))))
-			shown++
+			sb.WriteString(fmt.Sprintf("  %s  %-24s %s  %s\n",
+				style.Render(icon),
+				name,
+				style.Render(fmt.Sprintf("%.0f%%", math.Abs(e.weekDelta))),
+				labelStyle.Render(fmt.Sprintf("%d calls", e.count))))
 		}
 		sb.WriteString("\n")
 	}
 
-	// Per-item timelines (only for items with timestamps)
 	hasTimelines := false
 	for _, e := range entries {
 		if len(e.callTS) >= 2 {
@@ -266,11 +259,9 @@ func renderCategoryDetail(label string, counts, errors map[string]int, callTS, e
 			break
 		}
 	}
-
 	if hasTimelines {
-		sb.WriteString(titleStyle.Render("TIMELINES") + "\n")
+		sb.WriteString(titleStyle.Render(sectionTitle(iconBadgeMon, "TIMELINES")) + "\n")
 		sb.WriteString(ruler + "\n")
-
 		maxNameW := 0
 		for _, e := range entries {
 			n := len(shortenToolName(e.name))
@@ -282,19 +273,15 @@ func renderCategoryDetail(label string, counts, errors map[string]int, callTS, e
 		if maxNameW > maxLabelW {
 			maxNameW = maxLabelW
 		}
-		sparkW := width - maxNameW - 20
-		if sparkW < 8 {
-			sparkW = 8
+		sparkW := width - maxNameW - 24
+		if sparkW < 10 {
+			sparkW = 10
 		}
-
 		var firstDay, lastDay string
 		shown := 0
 		for _, e := range entries {
-			if len(e.callTS) < 2 {
+			if len(e.callTS) < 2 || shown >= 12 {
 				continue
-			}
-			if shown >= 15 {
-				break
 			}
 			name := shortenToolName(e.name)
 			if len(name) > maxNameW {
@@ -307,24 +294,18 @@ func renderCategoryDetail(label string, counts, errors map[string]int, callTS, e
 			if firstDay == "" {
 				firstDay, lastDay = fd, ld
 			}
-			spark := sparkline(buckets, sparkW)
-			line := fmt.Sprintf("  %-*s %s %d", maxNameW, name, accentStyle.Render(spark), e.count)
-
+			line := fmt.Sprintf("  %-*s %s", maxNameW, name, accentStyle.Render(sparkline(buckets, sparkW)))
 			if len(e.errTS) > 0 {
 				errBuckets, _, _ := dailyBuckets(e.errTS, min(sparkW/3, 10))
 				if hasNonZero(errBuckets) {
-					errSpark := sparkline(errBuckets, min(sparkW/3, 10))
-					line += "  " + errStyle.Render(errSpark) + errStyle.Render(fmt.Sprintf(" %d err", len(e.errTS)))
+					line += "  " + errStyle.Render(sparkline(errBuckets, min(sparkW/3, 10)))
 				}
 			}
 			sb.WriteString(line + "\n")
 			shown++
 		}
 		if firstDay != "" {
-			sb.WriteString(fmt.Sprintf("  %-*s%s%s\n",
-				maxNameW+1, "",
-				labelStyle.Render(firstDay),
-				labelStyle.Render(fmt.Sprintf("%*s", max(sparkW-len(firstDay)-len(lastDay), 0), lastDay))))
+			sb.WriteString(fmt.Sprintf("  %-*s%s%s\n", maxNameW+1, "", labelStyle.Render(firstDay), labelStyle.Render(fmt.Sprintf("%*s", max(sparkW-len(firstDay)-len(lastDay), 0), lastDay))))
 		}
 		sb.WriteString("\n")
 	}
@@ -397,7 +378,7 @@ func renderErrorDetail(stats session.GlobalStats, width int) string {
 	}
 
 	if len(stats.AllErrorTimestamps) > 0 {
-		sb.WriteString(titleStyle.Render("ERROR TIMELINE") + "\n")
+		sb.WriteString(titleStyle.Render(sectionTitle(iconBadgeStuck, "ERROR TIMELINE")) + "\n")
 		sb.WriteString(ruler + "\n")
 		buckets, firstDay, lastDay := dailyBuckets(stats.AllErrorTimestamps, sparkW)
 		if len(buckets) >= 2 {
@@ -410,7 +391,7 @@ func renderErrorDetail(stats session.GlobalStats, width int) string {
 	}
 
 	// Error bar chart
-	sb.WriteString(titleStyle.Render("BY SOURCE") + "\n")
+	sb.WriteString(titleStyle.Render(sectionTitle(iconTask, "BY SOURCE")) + "\n")
 	sb.WriteString(ruler + "\n")
 
 	errCounts := make(map[string]int, len(items))
@@ -422,7 +403,7 @@ func renderErrorDetail(stats session.GlobalStats, width int) string {
 
 	// Overall error rate trend
 	if len(stats.AllErrorTimestamps) > 0 && len(stats.AllMsgTimestamps) > 7 {
-		sb.WriteString(titleStyle.Render("ERROR RATE TREND") + "\n")
+		sb.WriteString(titleStyle.Render(sectionTitle(iconTrendUp, "ERROR RATE TREND")) + "\n")
 		sb.WriteString(ruler + "\n")
 		rollingRates := rollingErrorRate(stats.AllMsgTimestamps, stats.AllErrorTimestamps, sparkW)
 		if hasNonZero(rollingRates) {

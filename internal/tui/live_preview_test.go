@@ -22,6 +22,16 @@ func newTestApp(sessions []session.Session) *App {
 	// tests that assume the sessions view is active.
 	a.state = viewSessions
 	a.sessPreviewMode = sessPreviewConversation
+	a.sessionsLoading = false
+	// Tests should be hermetic: clear any persisted startup filter from the
+	// user's local config so visible-item assertions don't depend on the
+	// developer's current browser state.
+	a.config.SearchQuery = ""
+	a.sessionList.ResetFilter()
+	// Default to flat grouping for tests so existing index/visible-item
+	// assertions keep holding regardless of the production default.
+	a.sessGroupMode = groupFlat
+	a.rebuildSessionList()
 	return a
 }
 
@@ -30,6 +40,25 @@ func fakeSessions() []session.Session {
 		{ID: "aaa", ShortID: "aaa", ProjectPath: "/tmp/proj-a", ProjectName: "proj-a", ModTime: time.Now(), MsgCount: 10, IsLive: true},
 		{ID: "bbb", ShortID: "bbb", ProjectPath: "/tmp/proj-b", ProjectName: "proj-b", ModTime: time.Now().Add(-time.Hour), MsgCount: 5},
 		{ID: "ccc", ShortID: "ccc", ProjectPath: "/tmp/proj-c", ProjectName: "proj-c", ModTime: time.Now().Add(-2 * time.Hour), MsgCount: 3, IsLive: true},
+	}
+}
+
+func TestPaneProxyLiteralInput_PasteAndMultiRune(t *testing.T) {
+	cases := []struct {
+		msg  tea.KeyMsg
+		want string
+		ok   bool
+	}{
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h', 'i'}, Paste: true}, "hi", true},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'한', '글'}}, "한글", true},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, "", false},
+		{tea.KeyMsg{Type: tea.KeyEnter}, "", false},
+	}
+	for _, tc := range cases {
+		got, ok := paneProxyLiteralInput(tc.msg)
+		if ok != tc.ok || got != tc.want {
+			t.Fatalf("paneProxyLiteralInput(%v) = (%q,%v), want (%q,%v)", tc.msg, got, ok, tc.want, tc.ok)
+		}
 	}
 }
 
@@ -257,19 +286,19 @@ func TestPaneProxyIndicator(t *testing.T) {
 		t.Errorf("expected empty indicator with no proxy, got %q", got)
 	}
 
-	// Live proxy, unfocused → contains LIVE and ○
+	// Live proxy, unfocused → contains LIVE and idle icon
 	app.paneProxy = &paneProxyState{sessID: "aaa"}
 	app.sessSplit.Focus = false
 	got := app.paneProxyIndicator()
-	if got == "" || !contains(got, "LIVE") || !contains(got, "○") {
-		t.Errorf("unfocused live indicator should contain LIVE and ○, got %q", got)
+	if got == "" || !contains(got, "LIVE") || !contains(got, iconIdle) {
+		t.Errorf("unfocused live indicator should contain LIVE and idle icon, got %q", got)
 	}
 
-	// Live proxy, focused → contains LIVE and ●
+	// Live proxy, focused → contains LIVE and focused icon
 	app.sessSplit.Focus = true
 	got = app.paneProxyIndicator()
-	if got == "" || !contains(got, "LIVE") || !contains(got, "●") {
-		t.Errorf("focused live indicator should contain LIVE and ●, got %q", got)
+	if got == "" || !contains(got, "LIVE") || !contains(got, iconFocused) {
+		t.Errorf("focused live indicator should contain LIVE and focused icon, got %q", got)
 	}
 
 	// Shell proxy → contains SHELL

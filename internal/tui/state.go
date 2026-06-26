@@ -22,6 +22,7 @@ type Preferences struct {
 	HiddenBadges    []string `yaml:"hidden_badges,omitempty"`     // badge keys to hide: M,W,T,K,P,A,C,S,X,F
 	FilterTerm      string   `yaml:"filter_term,omitempty"`       // last applied session filter
 	EditorInput     bool     `yaml:"editor_input,omitempty"`      // true = open $EDITOR for live input
+	FoldedGroups    []string `yaml:"folded_groups,omitempty"`     // session group keys collapsed in the list
 }
 
 // KeymapsConfig groups all keybinding sections under one key.
@@ -251,6 +252,8 @@ func groupModeString(mode int) string {
 		return "fork"
 	case groupBaseProject:
 		return "repo"
+	case groupProjectCentric:
+		return "projects"
 	}
 	return ""
 }
@@ -282,7 +285,7 @@ func sessPreviewString(mode sessPreview) string {
 func viewStateString(state viewState) string {
 	switch state {
 	case viewSessions:
-		return "sessions"
+		return "projects"
 	case viewGlobalStats:
 		return "stats"
 	case viewConfig:
@@ -315,8 +318,15 @@ func (a *App) capturePreferences() Preferences {
 		filterTerm = a.sessionList.FilterInput.Value()
 	}
 
+	var foldedGroups []string
+	for k, v := range a.sessFolded {
+		if v {
+			foldedGroups = append(foldedGroups, k)
+		}
+	}
+
 	return Preferences{
-		GroupMode:       groupModeString(a.sessGroupMode),
+		GroupMode:       "projects",
 		PreviewMode:     sessPreviewString(a.sessPreviewMode),
 		ViewMode:        viewStateString(a.state),
 		ConvDetailLevel: int(a.conv.rightPaneMode),
@@ -325,6 +335,7 @@ func (a *App) capturePreferences() Preferences {
 		HiddenBadges:    hidden,
 		FilterTerm:      filterTerm,
 		EditorInput:     a.editorInput,
+		FoldedGroups:    foldedGroups,
 	}
 }
 
@@ -354,6 +365,14 @@ func (a *App) applyPreferences(p Preferences) {
 		}
 		for _, b := range p.HiddenBadges {
 			a.hiddenBadges[b] = true
+		}
+	}
+	if len(p.FoldedGroups) > 0 {
+		if a.sessFolded == nil {
+			a.sessFolded = make(map[string]bool)
+		}
+		for _, k := range p.FoldedGroups {
+			a.sessFolded[k] = true
 		}
 	}
 	if p.FilterTerm != "" {

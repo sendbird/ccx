@@ -257,7 +257,7 @@ func TestRender_SeparatorWrappedTextCursorFirstLineOnly(t *testing.T) {
 	lines := strings.Split(stripANSIForGolden(rp.content), "\n")
 	markerLines := 0
 	for _, line := range lines {
-		if strings.HasPrefix(line, "› ") || strings.HasPrefix(line, "▾ ") || strings.HasPrefix(line, "▸ ") || strings.HasPrefix(line, "✦ ") {
+		if strings.HasPrefix(line, "› ") || strings.HasPrefix(line, iconFoldOpen+" ") || strings.HasPrefix(line, iconFoldClosed+" ") || strings.HasPrefix(line, iconBlockMarker+" ") {
 			markerLines++
 		}
 	}

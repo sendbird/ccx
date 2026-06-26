@@ -64,6 +64,12 @@ func buildCmdRegistry() []cmdEntry {
 				a.rebuildSessionList()
 				return a, nil
 			}},
+		{name: "group:projects", aliases: []string{"g:projects", "projects"}, desc: "project-centric view", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.sessGroupMode = groupProjectCentric
+				a.rebuildSessionList()
+				return a, nil
+			}},
 
 		// Conversation detail levels
 		{name: "detail:compact", aliases: []string{"d:compact"}, desc: "text only", views: cmdConv,
@@ -104,8 +110,8 @@ func buildCmdRegistry() []cmdEntry {
 
 		// Views
 		{
-			name: "view:sessions", aliases: []string{"v:sessions", "v:sess"},
-			desc: "session browser",
+			name: "view:projects", aliases: []string{"v:projects", "v:proj", "view:sessions", "v:sessions", "v:sess"},
+			desc: "project browser",
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				a.state = viewSessions
 				return a, nil
@@ -283,6 +289,10 @@ func buildCmdRegistry() []cmdEntry {
 			}},
 		{name: "refresh", aliases: []string{"R"}, desc: "refresh sessions", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { cmd := a.doRefresh(); a.copiedMsg = "Refreshed"; return a, cmd }},
+		{name: "filter:done", aliases: []string{"done", "completed"}, desc: "show completed-only projects", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessionListFilter("is:done"); return a, a.updateSessionPreview() }},
+		{name: "filter:all", aliases: []string{"all"}, desc: "clear project filter", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessionListFilter(""); return a, a.updateSessionPreview() }},
 
 		// Global
 		{name: "config:edit", aliases: []string{"cfg:edit", "keymap:edit", "km:edit"}, desc: "edit config",

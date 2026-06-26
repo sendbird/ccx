@@ -5,10 +5,41 @@ import (
 	"sort"
 	"strings"
 	"time"
-
 )
 
 var sparkChars = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+func histogramBar(value, maxVal, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if maxVal <= 0 || value <= 0 {
+		return strings.Repeat(iconBarEmpty, width)
+	}
+	filled := value * width / maxVal
+	if filled < 1 {
+		filled = 1
+	}
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat(iconBarFull, filled) + strings.Repeat(iconBarEmpty, width-filled)
+}
+
+func dualSparkline(a, b []int, maxWidth int) string {
+	left := sparkline(a, maxWidth)
+	right := sparkline(b, maxWidth)
+	if left == "" {
+		left = strings.Repeat(string(sparkChars[0]), min(len(b), maxWidth))
+	}
+	if right == "" {
+		right = strings.Repeat(string(sparkChars[0]), min(len(a), maxWidth))
+	}
+	if len(left) == 0 {
+		return ""
+	}
+	return left + " · " + right
+}
 
 func sparkline(values []int, maxWidth int) string {
 	if len(values) == 0 {
@@ -53,6 +84,7 @@ func hasNonZero(vals []int) bool {
 	}
 	return false
 }
+
 // timelineBuckets distributes timestamps into N buckets over a time range.
 func timelineBuckets(timestamps []time.Time, start, end time.Time, n int) []int {
 	dur := end.Sub(start)
@@ -73,6 +105,7 @@ func timelineBuckets(timestamps []time.Time, start, end time.Time, n int) []int 
 	}
 	return buckets
 }
+
 // dailyBuckets distributes timestamps into per-day counts, returning buckets and day labels.
 func dailyBuckets(timestamps []time.Time, n int) ([]int, string, string) {
 	if len(timestamps) == 0 {
@@ -269,4 +302,3 @@ func renderToolDailyTimelines(sb *strings.Builder, toolCallTS, toolErrTS map[str
 	}
 	sb.WriteString("\n")
 }
-

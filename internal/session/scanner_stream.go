@@ -137,8 +137,13 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 		if !sess.HasShellJobs {
 			if bytes.Contains(line, bMonitorTool) || bytes.Contains(line, bMonitorToolS) {
 				sess.HasShellJobs = true
+				sess.HasMonitorJobs = true
 			} else if bytes.Contains(line, bRunInBackground) || bytes.Contains(line, bRunInBackgroundS) {
 				sess.HasShellJobs = true
+			}
+		} else if !sess.HasMonitorJobs {
+			if bytes.Contains(line, bMonitorTool) || bytes.Contains(line, bMonitorToolS) {
+				sess.HasMonitorJobs = true
 			}
 		}
 
@@ -183,6 +188,7 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 	if len(sess.Todos) == 0 {
 		sess.Todos = loadFileTodos(sess.ID, home)
 	}
+	sess.HasTodos = false
 	for _, t := range sess.Todos {
 		if t.Status == "pending" || t.Status == "in_progress" {
 			sess.HasTodos = true
@@ -190,8 +196,17 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 		}
 	}
 
-	// Load tasks from ~/.claude/tasks/{sessionID}/
+	// Load tasks from ~/.claude/tasks/{sessionID}/. If there is no persisted task
+	// file but task activity was detected during the fast stream scan, fall back
+	// to reconstructing tasks from the JSONL itself so lifecycle/filter logic can
+	// still recognize completed sessions in the browser.
 	sess.Tasks = loadFileTasks(sess.ID, home)
+	if len(sess.Tasks) == 0 && sess.HasTasks {
+		if entries, err := LoadMessages(path); err == nil {
+			sess.Tasks = LoadTasksFromEntries(entries)
+		}
+	}
+	sess.HasTasks = false
 	for _, t := range sess.Tasks {
 		if t.Status == "pending" || t.Status == "in_progress" {
 			sess.HasTasks = true

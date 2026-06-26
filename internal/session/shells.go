@@ -24,6 +24,50 @@ type shellInputResult struct {
 	ToolUseID string `json:"tool_use_id"`
 }
 
+// ActiveShellJobs returns the subset of the session's recorded shell jobs
+// that look like they are still alive: a `Monitor` invocation that hasn't
+// been killed, or a background `Bash` whose latest poll did not return
+// completion. We can't observe child process state from a JSONL alone, so
+// this is a heuristic — but it matches what we render as `[BG]`.
+func (s Session) ActiveShellJobs() []ShellJob {
+	if !s.IsLive || !s.HasShellJobs {
+		return nil
+	}
+	var out []ShellJob
+	for _, j := range s.ShellJobs {
+		switch j.Status {
+		case "killed", "stopped":
+			continue
+		}
+		out = append(out, j)
+	}
+	return out
+}
+
+// ActiveMonitorCount returns how many `Monitor` tool invocations look
+// active for this session — useful for showing a count next to the [BG]
+// badge in the session list.
+func (s Session) ActiveMonitorCount() int {
+	n := 0
+	for _, j := range s.ActiveShellJobs() {
+		if j.ToolName == "Monitor" {
+			n++
+		}
+	}
+	return n
+}
+
+// ActiveBashJobCount returns how many backgrounded Bash calls look active.
+func (s Session) ActiveBashJobCount() int {
+	n := 0
+	for _, j := range s.ActiveShellJobs() {
+		if j.ToolName == "Bash" {
+			n++
+		}
+	}
+	return n
+}
+
 // LoadShellJobsFromEntries scans parsed entries for background Bash and Monitor
 // tool invocations. It correlates BashOutput/KillShell calls (which carry a
 // tool_use_id) back to the originating shell so we can show how many polls

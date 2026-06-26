@@ -139,6 +139,33 @@ func captureAfterKeyCmd(p tmux.Pane, key string) tea.Cmd {
 	}
 }
 
+// captureAfterLiteralCmd sends a block of literal text (for paste / multi-rune
+// input) to the tmux pane, then captures the pane content.
+func captureAfterLiteralCmd(p tmux.Pane, text string) tea.Cmd {
+	return func() tea.Msg {
+		tmux.SendLiteralKeys(p, text)
+		time.Sleep(30 * time.Millisecond)
+		content, err := tmux.CapturePane(p)
+		if err != nil || !tmux.HasClaude(p.PID) {
+			return liveCaptureMsg{failed: true}
+		}
+		return liveCaptureMsg{content: content}
+	}
+}
+
+// paneProxyLiteralInput extracts literal text that should be forwarded as raw
+// bytes to a proxied tmux pane instead of as a named key. This is primarily
+// for bracketed paste and IME/multi-rune commits.
+func paneProxyLiteralInput(msg tea.KeyMsg) (string, bool) {
+	if msg.Type != tea.KeyRunes || len(msg.Runes) == 0 {
+		return "", false
+	}
+	if msg.Paste || len(msg.Runes) > 1 {
+		return string(msg.Runes), true
+	}
+	return "", false
+}
+
 // capturePaneCmd returns a Cmd that captures tmux pane content asynchronously.
 func capturePaneCmd(p tmux.Pane) tea.Cmd {
 	return func() tea.Msg {
@@ -208,7 +235,9 @@ type App struct {
 	pickResult PickResult
 
 	// List models
-	sessionList list.Model
+	sessionList         list.Model
+	sessionRowCache     *sessionRowCache
+	convPreviewRowCache *sessionRowCache
 
 	// Split panes
 	sessSplit SplitPane
@@ -307,7 +336,12 @@ type App struct {
 	sessConvFilterTerm  string          // applied filter term
 
 	// Group mode: groupFlat=0, groupProject=1, groupTree=2
-	sessGroupMode   int
+	sessGroupMode int
+	// sessFolded tracks which session groups are collapsed.
+	// Keys are group identities produced by the builders (e.g. project path,
+	// team name, base repo path). When a key is present and true, the
+	// group's children are hidden in the list.
+	sessFolded      map[string]bool
 	sessionsLoading bool // true while initial async scan is in progress
 	liveUpdate      bool // auto-refresh disabled by default
 
@@ -528,12 +562,96 @@ type App struct {
 }
 
 // selectedSession returns the currently selected session from the session list.
+// In the project-centric view, the cursor can land on a `projectItem`
+// (a folder-style row that is not itself a session). To keep preview/
+// actions sensible we fall back to that project's most-recent session.
 func (a *App) selectedSession() (session.Session, bool) {
-	item, ok := a.sessionList.SelectedItem().(sessionItem)
-	if !ok {
-		return session.Session{}, false
+	sel := a.sessionList.SelectedItem()
+	if item, ok := sel.(sessionItem); ok {
+		return item.sess, true
 	}
-	return item.sess, true
+	if pi, ok := sel.(projectItem); ok && len(pi.sessions) > 0 {
+		return pi.sessions[0], true
+	}
+	return session.Session{}, false
+}
+
+// selectedProject returns the project row at the cursor, if any.
+func (a *App) selectedProject() (projectItem, bool) {
+	pi, ok := a.sessionList.SelectedItem().(projectItem)
+	return pi, ok
+}
+
+func (a *App) selectedSessionListItemKey() string {
+	if pi, ok := a.selectedProject(); ok {
+		return "project:" + pi.basePath
+	}
+	if sess, ok := a.selectedSession(); ok {
+		return "session:" + sess.ID
+	}
+	return ""
+}
+
+func (a *App) restoreSessionListSelection(key string) {
+	if key == "" {
+		a.bumpPastHeader(0, +1)
+		return
+	}
+	for i, item := range a.sessionList.VisibleItems() {
+		switch v := item.(type) {
+		case projectItem:
+			if key == "project:"+v.basePath {
+				a.sessionList.Select(i)
+				return
+			}
+		case sessionItem:
+			if key == "session:"+v.sess.ID {
+				a.sessionList.Select(i)
+				return
+			}
+		}
+	}
+	a.bumpPastHeader(0, +1)
+}
+
+func (a *App) setSessionListFilter(query string) {
+	selectionKey := a.selectedSessionListItemKey()
+	a.sessionList.ResetFilter()
+	a.config.SearchQuery = ""
+	if strings.TrimSpace(query) != "" {
+		applyListFilter(&a.sessionList, query)
+		a.config.SearchQuery = query
+	}
+	a.restoreSessionListSelection(selectionKey)
+}
+
+func (a *App) visibleProjectBrowserItems() int {
+	n := 0
+	for _, item := range a.sessionList.VisibleItems() {
+		switch item.(type) {
+		case projectItem, sessionItem:
+			n++
+		}
+	}
+	return n
+}
+
+func (a *App) toggleCompletedProjectsFilter() {
+	current := strings.TrimSpace(a.activeFilterValue())
+	if current == "is:done" {
+		a.setSessionListFilter("")
+		a.copiedMsg = "Completed filter cleared"
+		return
+	}
+	a.setSessionListFilter("is:done")
+	if a.visibleProjectBrowserItems() == 0 {
+		// Do not strand the user on a confusing blank browser; fall back to the
+		// normal projects view and explain what happened.
+		a.setSessionListFilter("")
+		a.copiedMsg = "No completed projects found"
+		return
+	}
+	a.copiedMsg = "Showing completed projects"
 }
 
 func (a *App) hasMultiSelection() bool {
@@ -606,15 +724,23 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	}
 
 	a := &App{
-		state:           viewSessions,
-		sessions:        sessions,
-		sessionsLoading: true, // always true — full scan happens async
-		config:          cfg,
-		keymap:          km,
-		splitRatio:      35,
-		selectedSet:     make(map[string]bool),
-		hiddenBadges:    make(map[string]bool),
-		termFocused:     true,
+		state:               viewSessions,
+		sessions:            sessions,
+		sessionsLoading:     true, // always true — full scan happens async
+		config:              cfg,
+		keymap:              km,
+		splitRatio:          35,
+		selectedSet:         make(map[string]bool),
+		hiddenBadges:        make(map[string]bool),
+		sessionRowCache:     newSessionRowCache(1024),
+		convPreviewRowCache: newSessionRowCache(4096),
+		termFocused:         true,
+		// Default to a true project-centric browser: ccx now opens with one
+		// row per project (folder-like), and sessions of the same repo (and
+		// its worktrees) appear as expandable children beneath the project
+		// header. CLI flags or persisted preferences below can still
+		// override this.
+		sessGroupMode: groupProjectCentric,
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
@@ -646,11 +772,16 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 
 	// Apply group/preview/view mode from CLI flags or restored preferences
 	if a.config.GroupMode != "" {
-		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork, "repo": groupBaseProject}
+		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork, "repo": groupBaseProject, "projects": groupProjectCentric}
 		if m, ok := modeMap[a.config.GroupMode]; ok {
 			a.sessGroupMode = m
 		}
 	}
+	// The main browser is canonically project-centric now. Preserve legacy
+	// group-mode parsing for explicit in-session commands/tests, but do not
+	// let persisted historical values (flat/repo/...) drag startup back out
+	// of the projects view.
+	a.sessGroupMode = groupProjectCentric
 	if a.config.PreviewMode != "" {
 		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
@@ -660,7 +791,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	}
 	if a.config.ViewMode != "" {
 		modeMap := map[string]viewState{
-			"sessions": viewSessions, "config": viewConfig,
+			"sessions": viewSessions, "projects": viewSessions, "config": viewConfig,
 			"plugins": viewPlugins, "stats": viewGlobalStats,
 		}
 		if m, ok := modeMap[a.config.ViewMode]; ok {
@@ -932,7 +1063,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.width > 0 && a.height > 0 {
 			contentH := a.height - 3
 			sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.config.WorktreeDir)
+			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 			a.sessSplit.CacheKey = ""
 			if a.config.SearchQuery != "" {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
@@ -1189,11 +1320,11 @@ func (a *App) View() string {
 		help = "  " + a.cmdInput.View() + helpStyle.Render("  tab:complete ↵:run esc:cancel")
 	}
 
-	// URL menu hint box
+	// URL menu centered modal
 	if a.urlMenu {
 		hintBox := a.renderURLMenu()
 		if hintBox != "" {
-			content = placeHintBox(content, hintBox, a.activeDividerCol())
+			content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 24), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		}
 		if a.urlSearching {
 			help = "  " + a.urlSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
@@ -1205,94 +1336,96 @@ func (a *App) View() string {
 	// Conversation/message-full actions menu hint box
 	if a.convActionsMenu && (a.state == viewConversation || a.state == viewMessageFull) {
 		hintBox := a.renderConvActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp(fmtKey(a.keymap.Conversation.Actions, "actions") + " — pick an action")
 	}
 
 	// Actions menu hint box floating above help line
 	if a.actionsMenu && a.state == viewSessions {
 		hintBox := a.renderActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	if a.sessPageMenu && a.state == viewSessions {
 		hintBox := a.renderSessPageHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a preview")
 	}
 
-	// Tag menu floating modal
+	// Tag menu centered modal
 	if a.tagMenu {
 		modal := a.renderTagMenu()
-		content = placeHintBox(content, modal, a.activeDividerCol())
+		if modal != "" {
+			content = overlayCenteredModal(content, modal, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 24), maxHeight: max(ContentHeight(a.height)-4, 8)})
+		}
 	}
 
 	// Config actions menu hint box
 	if a.cfgActionsMenu && a.state == viewConfig {
 		hintBox := a.renderCfgActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Plugin actions menu hint box
 	if a.plgActionsMenu && a.state == viewPlugins {
 		hintBox := a.renderPlgActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Plugin detail actions menu hint box
 	if a.plgCompActionsMenu && a.state == viewPlugins && a.plgDetailActive {
 		hintBox := a.renderPlgCompActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
-	// Views menu hint box floating above help line
+	// Views menu centered modal
 	if a.viewsMenu {
 		hintBox := a.renderViewsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("v:views — pick a view")
 	}
 
-	// Edit menu hint box floating above help line
+	// Edit menu centered modal
 	if a.editMenu {
 		hintBox := a.renderEditHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("e:edit — pick a file")
 	}
 
-	// Stats page jump hint box
+	// Stats page jump centered modal
 	if a.statsPageMenu && a.state == viewGlobalStats {
 		hintBox := a.renderStatsPageHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a page")
 	}
 
-	// Config page jump hint box
+	// Config page jump centered modal
 	if a.cfgPageMenu && a.state == viewConfig {
 		hintBox := a.renderCfgPageHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a section")
 	}
 
-	// Conversation page jump hint box
+	// Conversation page jump centered modal
 	if a.convPageMenu && a.state == viewConversation {
 		// Keep browser visible as background when menu opens from browser
 		if a.convPageActive {
 			content = a.renderConvPageBrowser()
 		}
 		hintBox := a.renderConvPageHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a page")
 	}
 
-	// Conversation artifact browser actions menu
+	// Conversation artifact browser actions centered modal
 	if a.convPageActionsMenu && a.state == viewConversation && a.convPageActive {
 		content = a.renderConvPageBrowser()
 		hintBox := a.renderConvPageActionsHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
@@ -1322,26 +1455,26 @@ func (a *App) View() string {
 		}
 	}
 
-	// Block filter hint box floating above help line (conversation preview and full-screen message)
+	// Filter/search hint boxes as constrained centered modals
 	if a.conv.blockFiltering && a.state == viewConversation {
 		hintBox := renderBlockFilterHintBox()
-		content = placeHintBox(content, hintBox, a.activeDividerCol())
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-10, 28), maxHeight: max(ContentHeight(a.height)-6, 8)})
 	}
 	if a.state == viewMessageFull {
 		if a.msgFull.blockFiltering {
 			hintBox := renderBlockFilterHintBox()
-			content = placeHintBox(content, hintBox, a.activeDividerCol())
+			content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-10, 28), maxHeight: max(ContentHeight(a.height)-6, 8)})
 		} else if a.msgFull.searching {
 			hintBox := a.renderMsgFullSearchHintBox()
-			content = placeHintBox(content, hintBox, a.activeDividerCol())
+			content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-10, 28), maxHeight: max(ContentHeight(a.height)-6, 8)})
 		}
 	}
 
-	// Command mode hint box floating above help line
+	// Command mode hint box as constrained centered modal
 	if a.cmdMode {
 		hintBox := a.renderCmdHintBox()
 		if hintBox != "" {
-			content = placeHintBox(content, hintBox, a.activeDividerCol())
+			content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-10, 40), maxHeight: max(ContentHeight(a.height)-6, 10)})
 		}
 	}
 
@@ -1489,6 +1622,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Pane proxy focused: keys forwarded to tmux pane
 	if a.isPaneProxyFocused() {
+		if literal, ok := paneProxyLiteralInput(msg); ok {
+			return a, captureAfterLiteralCmd(a.paneProxy.pane, literal)
+		}
 		switch key {
 		case "ctrl+q":
 			sp.Focus = false
@@ -1514,6 +1650,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var items []session.Session
 		if a.hasMultiSelection() {
 			items = a.selectedSessions()
+		} else if pi, ok := a.selectedProject(); ok {
+			items = append(items, pi.sessions...)
 		} else if sess, ok := a.selectedSession(); ok {
 			items = []session.Session{sess}
 		}
@@ -1550,6 +1688,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case km.Session.Open:
+		// Project rows: Enter toggles expansion instead of opening anything.
+		if pi, ok := a.sessionList.SelectedItem().(projectItem); ok {
+			a.toggleProjectFold(pi)
+			return a, nil
+		}
 		// Remote sessions: attach interactively
 		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
 			return a.attachToRemoteSession(sess)
@@ -1573,6 +1716,16 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Focus && sp.Show {
 			return a, nil
 		}
+		if pi, ok := a.selectedProject(); ok {
+			for _, s := range pi.sessions {
+				if a.selectedSet[s.ID] {
+					delete(a.selectedSet, s.ID)
+				} else {
+					a.selectedSet[s.ID] = true
+				}
+			}
+			return a, nil
+		}
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
@@ -1590,6 +1743,13 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case km.Session.Actions:
 		if a.hasMultiSelection() {
+			a.actionsMenu = true
+			return a, nil
+		}
+		if pi, ok := a.selectedProject(); ok {
+			for _, s := range pi.sessions {
+				a.selectedSet[s.ID] = true
+			}
 			a.actionsMenu = true
 			return a, nil
 		}
@@ -1632,24 +1792,46 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case km.Session.Help:
 		a.showHelp = true
 		return a, nil
-	// Tab/shift+tab: context-aware cycling
-	// List focused → cycle group mode; Preview focused → cycle preview mode
+	// Tab/shift+tab now only control preview behavior. The main browser is
+	// project-centric by default, so users should not need Tab to rotate
+	// through alternate grouping models just to get the right mental model.
 	case km.Session.Preview:
-		if sp.Focus && sp.Show {
-			a.cycleSessionPreviewMode()
-		} else {
-			a.sessGroupMode = (a.sessGroupMode + 1) % numGroupModes
-			a.rebuildSessionList()
+		if !sp.Show {
+			sp.Show = true
+			sp.Focus = false
+			return a, a.updateSessionPreview()
 		}
-		return a, nil
+		a.cycleSessionPreviewMode()
+		return a, a.updateSessionPreview()
 	case km.Session.PreviewBack:
-		if sp.Focus && sp.Show {
-			a.cycleSessionPreviewModeReverse()
-		} else {
-			a.sessGroupMode = (a.sessGroupMode - 1 + numGroupModes) % numGroupModes
-			a.rebuildSessionList()
+		if !sp.Show {
+			sp.Show = true
+			sp.Focus = false
+			return a, a.updateSessionPreview()
 		}
-		return a, nil
+		a.cycleSessionPreviewModeReverse()
+		return a, a.updateSessionPreview()
+	}
+
+	// Fold/unfold groups: only available when the list (not the preview)
+	// is focused, so the same keys can still be used as text input
+	// elsewhere. `o` toggles the group at the cursor; `f`/`F` fold/expand
+	// everything.
+	if !sp.Focus {
+		switch key {
+		case "o":
+			a.toggleSessGroupFoldAtCursor()
+			return a, nil
+		case "f":
+			a.setAllSessGroupsFolded(true)
+			return a, nil
+		case "F":
+			a.setAllSessGroupsFolded(false)
+			return a, nil
+		case "D":
+			a.toggleCompletedProjectsFilter()
+			return a, a.updateSessionPreview()
+		}
 	}
 
 	// Sessions list vim-style jumps: gg = top, G = end.
@@ -1761,13 +1943,18 @@ func (a *App) skipHeaderInDirection(oldIdx, newIdx int) {
 	if _, ok := visible[cur].(sessionItem); ok {
 		return
 	}
+	// projectItem rows are selectable (cursor can land on a project header).
+	if _, ok := visible[cur].(projectItem); ok {
+		return
+	}
 	dir := 1
 	if newIdx < oldIdx {
 		dir = -1
 	}
 	idx := cur + dir
 	for idx >= 0 && idx < len(visible) {
-		if _, ok := visible[idx].(sessionItem); ok {
+		switch visible[idx].(type) {
+		case sessionItem, projectItem:
 			a.sessionList.Select(idx)
 			return
 		}
@@ -1776,7 +1963,8 @@ func (a *App) skipHeaderInDirection(oldIdx, newIdx int) {
 	// Reverse direction if we hit a boundary on a header.
 	idx = cur - dir
 	for idx >= 0 && idx < len(visible) {
-		if _, ok := visible[idx].(sessionItem); ok {
+		switch visible[idx].(type) {
+		case sessionItem, projectItem:
 			a.sessionList.Select(idx)
 			return
 		}
@@ -2339,7 +2527,7 @@ func (a *App) isPaneProxyFocused() bool {
 	return a.paneProxy != nil && a.sessSplit.Focus && a.sessPreviewMode == sessPreviewLive
 }
 
-// paneProxyIndicator returns a styled [LIVE ●]/[SHELL ●] badge for the help line.
+// paneProxyIndicator returns a styled [LIVE <state>]/[SHELL <state>] badge for the help line.
 func (a *App) paneProxyIndicator() string {
 	if a.paneProxy == nil {
 		return ""
@@ -2348,10 +2536,10 @@ func (a *App) paneProxyIndicator() string {
 	if a.paneProxy.isShell {
 		label = "SHELL"
 	}
-	dot := "○"
+	dot := iconIdle
 	style := dimStyle
 	if a.sessSplit.Focus {
-		dot = "●"
+		dot = iconFocused
 		style = liveBadge
 	}
 	return style.Render("[" + label + " " + dot + "]")
@@ -2704,7 +2892,7 @@ func (a *App) renderViewsHintBox() string {
 		}
 		return h.Render(displayKey(k)) + d.Render(":"+label)
 	}
-	parts = append(parts, viewLabel("↵", "sessions", a.state == viewSessions))
+	parts = append(parts, viewLabel("↵", "projects", a.state == viewSessions))
 	parts = append(parts, viewLabel(km.Stats, "stats", a.state == viewGlobalStats))
 	parts = append(parts, viewLabel(km.Config, "config", a.state == viewConfig))
 	parts = append(parts, viewLabel(km.Plugins, "plugins", a.state == viewPlugins))
@@ -3021,7 +3209,7 @@ func (a *App) bulkDelete(selected []session.Session) (tea.Model, tea.Cmd) {
 		a.sessionList.ResetFilter()
 		a.config.SearchQuery = ""
 	}
-	items := buildGroupedItems(remaining, a.sessGroupMode)
+	items := buildGroupedItems(remaining, a.sessGroupMode, a.sessFolded)
 	a.sessionList.SetItems(items)
 	idx := a.sessionList.Index()
 	if idx >= len(items) {
@@ -3247,7 +3435,7 @@ func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
 		a.sessionList.ResetFilter()
 	}
 
-	items := buildGroupedItems(remaining, a.sessGroupMode)
+	items := buildGroupedItems(remaining, a.sessGroupMode, a.sessFolded)
 	a.sessionList.SetItems(items)
 	if idx >= len(items) {
 		idx = len(items) - 1
@@ -4182,6 +4370,16 @@ func (a *App) updateSessionPreview() tea.Cmd {
 	if !a.sessSplit.Show {
 		return nil
 	}
+	if pi, ok := a.selectedProject(); ok {
+		cacheKey := fmt.Sprintf("project:%d:%s", a.sessPreviewMode, pi.basePath)
+		if cacheKey == a.sessSplit.CacheKey {
+			return nil
+		}
+		a.sessSplit.CacheKey = cacheKey
+		a.sessPreviewPinned = false
+		a.updateProjectPreview(pi)
+		return nil
+	}
 	sess, ok := a.selectedSession()
 	if !ok {
 		return nil
@@ -4335,7 +4533,7 @@ func (a *App) updateSessionConvPreview(sess session.Session) {
 
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
-	rendered := renderConversationPreview(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, sess.IsLive)
+	rendered, _, _, _, _ := renderConversationPreviewWindowed(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, a.convPreviewRowCache, sess.IsLive)
 
 	content := a.prependConvHeaders(sess, rendered, previewW)
 
@@ -4372,15 +4570,21 @@ func (a *App) refreshConvPreview() {
 		return
 	}
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
-	content := renderConversationPreview(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, isLive)
+	content, renderedVisible, localCursor, localExpanded, windowed := renderConversationPreviewWindowed(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, a.convPreviewRowCache, isLive)
 	if sess, ok2 := a.selectedSession(); ok2 {
 		content = a.prependConvHeaders(sess, content, previewW)
 	}
 	oldOffset := a.sessSplit.Preview.YOffset
 	a.sessSplit.Preview.SetContent(content)
 
-	// Scroll to keep cursor visible: estimate cursor line position
-	cursorLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
+	// Scroll to keep cursor visible: estimate cursor line position. In
+	// windowed mode the content is already centered around the cursor, so
+	// line math should use the rendered window's local cursor instead of the
+	// full conversation index.
+	cursorLine := convCursorLine(renderedVisible, localCursor, localExpanded, previewW)
+	if windowed {
+		cursorLine += 1 // top "earlier messages" marker
+	}
 	vpH := a.sessSplit.Preview.Height
 	totalLines := strings.Count(content, "\n") + 1
 	maxOffset := max(totalLines-vpH, 0)
@@ -4459,9 +4663,21 @@ func (a *App) applyConvFilter(term string) {
 
 // clearConvFilter removes the conversation preview filter.
 func (a *App) clearConvFilter() {
+	// Preserve the currently-highlighted entry: when filter is active the
+	// cursor indexes into the filtered (subset) slice, but after clearing
+	// it must index into the full sessConvEntries. Map back via the
+	// stored sessConvFiltered indices.
+	targetIdx := -1
+	if a.sessConvFilterTerm != "" && a.sessConvCursor >= 0 && a.sessConvCursor < len(a.sessConvFiltered) {
+		targetIdx = a.sessConvFiltered[a.sessConvCursor]
+	}
 	a.sessConvFilterTerm = ""
 	a.sessConvFiltered = nil
-	a.sessConvCursor = 0
+	if targetIdx >= 0 && targetIdx < len(a.sessConvEntries) {
+		a.sessConvCursor = targetIdx
+	} else {
+		a.sessConvCursor = 0
+	}
 	a.sessConvExpanded = make(map[int]bool)
 	for i := range a.sessConvEntries {
 		a.sessConvExpanded[i] = true
@@ -4696,6 +4912,122 @@ func (a *App) updateSessionStatsPreview(sess session.Session) {
 	a.sessSplit.Preview.SetContent(content)
 }
 
+func (a *App) updateProjectPreview(pi projectItem) {
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	contentH := max(a.height-3, 1)
+	var sb strings.Builder
+
+	title := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
+	section := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	muted := dimStyle
+	okStyle := doneBadgeStyle
+	warnStyle := waitBadgeStyle
+	errStyle := stuckBadgeStyle
+	liveStyle := liveBadge
+	bgStyle := bgBadgeStyle
+	monStyle := monBadgeStyle
+
+	sb.WriteString(title.Render(pi.displayName))
+	if pi.branch != "" {
+		sb.WriteString(muted.Render(" (" + pi.branch + ")"))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(muted.Render(pi.basePath))
+	sb.WriteString("\n\n")
+
+	sb.WriteString(section.Render("Summary") + "\n")
+	sb.WriteString(fmt.Sprintf("Sessions: %d", len(pi.sessions)))
+	if pi.worktrees > 0 {
+		sb.WriteString(muted.Render(fmt.Sprintf("  •  Worktrees: %d", pi.worktrees)))
+	}
+	sb.WriteString(muted.Render(fmt.Sprintf("  •  Messages: %d", pi.totalMsgs)))
+	sb.WriteString("\n")
+
+	statusParts := []string{}
+	if pi.liveSessions > 0 {
+		statusParts = append(statusParts, liveStyle.Render(fmt.Sprintf("LIVE×%d", pi.liveSessions)))
+	}
+	if pi.busyCount > 0 {
+		statusParts = append(statusParts, busyBadge.Render(fmt.Sprintf("BUSY×%d", pi.busyCount)))
+	}
+	if pi.bgSessions > 0 {
+		statusParts = append(statusParts, bgStyle.Render(fmt.Sprintf("BG×%d", pi.bgSessions)))
+	}
+	if pi.monSessions > 0 {
+		statusParts = append(statusParts, monStyle.Render(fmt.Sprintf("MON×%d", pi.monSessions)))
+	}
+	if pi.waitCount > 0 {
+		statusParts = append(statusParts, warnStyle.Render(fmt.Sprintf("WAIT×%d", pi.waitCount)))
+	}
+	if pi.stuckCount > 0 {
+		statusParts = append(statusParts, errStyle.Render(fmt.Sprintf("STUCK×%d", pi.stuckCount)))
+	}
+	if pi.doneCount > 0 {
+		statusParts = append(statusParts, okStyle.Render(fmt.Sprintf("DONE×%d", pi.doneCount)))
+	}
+	if len(statusParts) > 0 {
+		sb.WriteString(strings.Join(statusParts, "  "))
+		sb.WriteString("\n")
+	}
+	if pi.hereCount > 0 {
+		sb.WriteString(hereBadge.Render(fmt.Sprintf("HERE×%d", pi.hereCount)))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(section.Render("Sessions in project") + "\n")
+	for i, s := range pi.sessions {
+		badgeParts := []string{}
+		if s.IsCurrentWindow {
+			badgeParts = append(badgeParts, hereBadge.Render("HERE"))
+		}
+		if s.IsLive {
+			badgeParts = append(badgeParts, liveStyle.Render("LIVE"))
+		}
+		if s.HasMonitorJobs && s.IsLive {
+			badgeParts = append(badgeParts, monStyle.Render("MON"))
+		}
+		switch s.Lifecycle() {
+		case session.LifecycleBusy:
+			badgeParts = append(badgeParts, busyBadge.Render("BUSY"))
+		case session.LifecycleBG:
+			badgeParts = append(badgeParts, bgStyle.Render("BG"))
+		case session.LifecycleWait:
+			badgeParts = append(badgeParts, warnStyle.Render("WAIT"))
+		case session.LifecycleStuck:
+			badgeParts = append(badgeParts, errStyle.Render("STUCK"))
+		case session.LifecycleDone:
+			badgeParts = append(badgeParts, okStyle.Render("DONE"))
+		}
+		name := s.ProjectName
+		if s.IsWorktree {
+			name = "wt: " + name
+		}
+		line := fmt.Sprintf("%2d. %s  %s  %dm  %s", i+1, timeAgo(s.ModTime), s.ShortID, s.MsgCount, name)
+		sb.WriteString(line)
+		if len(badgeParts) > 0 {
+			sb.WriteString("  ")
+			sb.WriteString(strings.Join(badgeParts, " "))
+		}
+		sb.WriteString("\n")
+		if s.FirstPrompt != "" {
+			prompt := s.FirstPrompt
+			maxPromptW := max(previewW-6, 10)
+			if len(prompt) > maxPromptW {
+				prompt = prompt[:maxPromptW-3] + "..."
+			}
+			sb.WriteString(muted.Render("    " + prompt))
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(muted.Render("Enter/o: expand or collapse project  •  move to a child session to open detailed previews"))
+
+	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	a.sessSplit.Preview.SetContent(sb.String())
+}
+
 func (a *App) updateSessionMemoryPreview(sess session.Session) {
 	if a.sessMemoryCacheKey != sess.ID {
 		a.sessMemoryCache = a.buildMemoryContent(sess)
@@ -4885,13 +5217,13 @@ func (a *App) buildShellsPreviewContent(sess session.Session) string {
 	monStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
 
 	for _, j := range jobs {
-		icon, statusColor := "◉", colorAssistant
+		icon, statusColor := iconActive, colorAssistant
 		switch j.Status {
 		case "polled":
-			icon = "◑"
+			icon = iconProgress
 			statusColor = colorAccent
 		case "killed", "stopped":
-			icon = "⏹"
+			icon = iconStopped
 			statusColor = colorDim
 		}
 		statusStyle := lipgloss.NewStyle().Foreground(statusColor).Bold(true)
@@ -4975,14 +5307,14 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 		}
 		sb.WriteString(dimStyle.Render(label) + "\n\n")
 		for _, t := range tasks {
-			icon := "○"
+			icon := iconIdle
 			style := dimStyle
 			switch t.Status {
 			case "completed":
-				icon = "✓"
+				icon = iconDone
 				style = lipgloss.NewStyle().Foreground(colorAccent)
 			case "in_progress":
-				icon = "◉"
+				icon = iconActive
 				style = lipgloss.NewStyle().Foreground(colorAssistant)
 			}
 			sb.WriteString(style.Render(fmt.Sprintf("  %s %s", icon, t.Subject)) + "\n")
@@ -5013,11 +5345,11 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 		}
 		sb.WriteString(dimStyle.Render(label) + "\n\n")
 		for _, c := range crons {
-			icon := "◉"
+			icon := iconActive
 			style := lipgloss.NewStyle().Foreground(colorAssistant)
 			status := "active"
 			if c.Status == "deleted" {
-				icon = "⏹"
+				icon = iconStopped
 				style = dimStyle
 				status = "deleted"
 			}
@@ -5100,13 +5432,13 @@ func (a *App) buildAgentsPreviewContent(sess session.Session) string {
 	sb.WriteString(dimStyle.Render(label) + "\n\n")
 	sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 	for i, ag := range agents {
-		icon := "⊕"
+		icon := iconAgent
 		style := dimStyle
 		if ag.MsgCount > 0 && ag.MsgCount%2 == 1 {
-			icon = "◉"
+			icon = iconActive
 			style = lipgloss.NewStyle().Foreground(colorAssistant)
 		} else if ag.MsgCount > 0 {
-			icon = "✓"
+			icon = iconDone
 			style = lipgloss.NewStyle().Foreground(colorAccent)
 		}
 		typeBadge := ag.AgentType
@@ -5157,14 +5489,14 @@ func (a *App) buildMemoryContent(sess session.Session) string {
 		}
 		sb.WriteString(dimStyle.Render(fmt.Sprintf("── Todos [%d/%d] ──", completed, len(sess.Todos))) + "\n\n")
 		for _, t := range sess.Todos {
-			icon := "○"
+			icon := iconIdle
 			style := dimStyle
 			switch t.Status {
 			case "completed":
-				icon = "✓"
+				icon = iconDone
 				style = lipgloss.NewStyle().Foreground(colorAccent)
 			case "in_progress":
-				icon = "◉"
+				icon = iconActive
 				style = lipgloss.NewStyle().Foreground(colorAssistant)
 			}
 			sb.WriteString(style.Render(fmt.Sprintf("  %s %s", icon, t.Content)) + "\n")
@@ -5305,7 +5637,7 @@ func (a *App) refreshSessionPreviewLive() {
 	}
 
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
-	content := renderConversationPreview(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, true)
+	content, _, _, _, _ := renderConversationPreviewWindowed(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, a.convPreviewRowCache, true)
 	a.sessSplit.Preview.SetContent(content)
 	if !a.sessPreviewPinned {
 		a.sessSplit.Preview.GotoBottom()
@@ -5503,9 +5835,23 @@ func (a *App) resetActiveFilter() {
 			}
 		}
 	case viewConversation:
+		// Capture stable identity of the selected item before reset so we
+		// can re-select the same logical entry once the filter is cleared.
+		// Falling back to the (filtered) index would land on an unrelated
+		// item because the index space shifts when ResetFilter expands the
+		// visible items back to the full set.
+		selID := selectedConvItemID(&a.convList)
 		idx := a.convList.Index()
 		a.convList.ResetFilter()
-		// Re-select same index (clamped)
+		if selID != "" {
+			for i, item := range a.convList.Items() {
+				if ci, ok := item.(convItem); ok && convItemID(ci) == selID {
+					a.convList.Select(i)
+					return
+				}
+			}
+		}
+		// Fallback: clamp the previous index into the now-larger list.
 		total := len(a.convList.Items())
 		if idx >= total {
 			idx = total - 1
@@ -5719,7 +6065,8 @@ func (a *App) bumpPastHeader(start, dir int) {
 	}
 	idx := start
 	for idx >= 0 && idx < len(visible) {
-		if _, ok := visible[idx].(sessionItem); ok {
+		switch visible[idx].(type) {
+		case sessionItem, projectItem:
 			a.sessionList.Select(idx)
 			return
 		}
@@ -5734,7 +6081,7 @@ func (a *App) resizeAll() tea.Cmd {
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
 	if a.sessionList.Width() == 0 {
 		if len(a.sessions) > 0 {
-			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.config.WorktreeDir)
+			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 			a.sessSplit.CacheKey = ""
 			if a.config.SearchQuery != "" {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
@@ -5837,7 +6184,7 @@ func (a *App) rebuildSessionList() {
 
 	contentH := max(a.height-3, 1)
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.config.WorktreeDir)
+	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 	a.sessSplit.CacheKey = ""
 
 	// Reapply filter
@@ -5862,6 +6209,120 @@ func (a *App) rebuildSessionList() {
 	}
 	// Default: ensure cursor isn't parked on a header.
 	a.bumpPastHeader(0, +1)
+}
+
+// toggleSessGroupFoldAtCursor flips the fold state of the group at the
+// current cursor row. Works for any row in the group (header or child).
+// When called on a non-group row it's a no-op so the key is safe to press.
+func (a *App) toggleSessGroupFoldAtCursor() {
+	// Project rows (project-centric view) have their own toggle key.
+	if pi, ok := a.sessionList.SelectedItem().(projectItem); ok {
+		a.toggleProjectFold(pi)
+		return
+	}
+	si, ok := a.sessionList.SelectedItem().(sessionItem)
+	if !ok {
+		return
+	}
+	key := si.groupKey
+	if key == "" {
+		// Child rows don't carry the groupKey; walk back to the header
+		// that contains them.
+		idx := a.sessionList.Index()
+		items := a.sessionList.VisibleItems()
+		for i := idx - 1; i >= 0; i-- {
+			parent, ok := items[i].(sessionItem)
+			if !ok {
+				continue
+			}
+			if parent.groupKey != "" {
+				key = parent.groupKey
+				break
+			}
+			if parent.treeDepth == 0 {
+				// Hit a non-group top-level row before finding a header.
+				break
+			}
+		}
+	}
+	if key == "" {
+		return
+	}
+	if a.sessFolded == nil {
+		a.sessFolded = make(map[string]bool)
+	}
+	a.sessFolded[key] = !a.sessFolded[key]
+	a.rebuildSessionList()
+	// After rebuild, try to land the cursor on the now-toggled header so
+	// the user can immediately re-expand or move on without searching for
+	// their row again.
+	for i, item := range a.sessionList.VisibleItems() {
+		if s, ok := item.(sessionItem); ok && s.groupKey == key {
+			a.sessionList.Select(i)
+			break
+		}
+	}
+}
+
+// setAllSessGroupsFolded sets the fold flag for every visible group head.
+// Used by `f` (fold all) and `F` (expand all).
+func (a *App) setAllSessGroupsFolded(folded bool) {
+	if a.sessFolded == nil {
+		a.sessFolded = make(map[string]bool)
+	}
+	// Capture currently selected session ID so cursor stays anchored.
+	var selID string
+	if sess, ok := a.selectedSession(); ok {
+		selID = sess.ID
+	}
+	for _, item := range a.sessionList.Items() {
+		switch v := item.(type) {
+		case sessionItem:
+			if v.groupKey == "" {
+				continue
+			}
+			if folded {
+				a.sessFolded[v.groupKey] = true
+			} else {
+				delete(a.sessFolded, v.groupKey)
+			}
+		case projectItem:
+			key := "repo:" + v.basePath
+			if folded {
+				a.sessFolded[key] = true
+			} else {
+				delete(a.sessFolded, key)
+			}
+		}
+	}
+	a.rebuildSessionList()
+	if selID == "" {
+		return
+	}
+	for i, item := range a.sessionList.VisibleItems() {
+		if si, ok := item.(sessionItem); ok && si.sess.ID == selID {
+			a.sessionList.Select(i)
+			return
+		}
+	}
+}
+
+// toggleProjectFold flips the fold state of a project row. The cursor
+// stays on the same project row after rebuild so the user can immediately
+// fold/unfold again or move on.
+func (a *App) toggleProjectFold(pi projectItem) {
+	if a.sessFolded == nil {
+		a.sessFolded = make(map[string]bool)
+	}
+	key := "repo:" + pi.basePath
+	a.sessFolded[key] = !a.sessFolded[key]
+	a.rebuildSessionList()
+	for i, item := range a.sessionList.VisibleItems() {
+		if p, ok := item.(projectItem); ok && p.basePath == pi.basePath {
+			a.sessionList.Select(i)
+			break
+		}
+	}
 }
 
 func (a *App) listReady(l *list.Model) bool {
@@ -5896,7 +6357,7 @@ func (a *App) renderBreadcrumb() string {
 
 	switch a.state {
 	case viewSessions:
-		crumbs = []crumb{{" Sessions", viewSessions}}
+		crumbs = []crumb{{" Projects", viewSessions}}
 		// Show selected project name in breadcrumb
 		if sess, ok := a.selectedSession(); ok && a.sessionList.Width() > 0 {
 			proj := sess.ProjectName
@@ -5914,7 +6375,7 @@ func (a *App) renderBreadcrumb() string {
 		}
 	case viewConversation:
 		crumbs = []crumb{
-			{" Sessions", viewSessions},
+			{" Projects", viewSessions},
 			{a.currentSess.ShortID, viewConversation},
 		}
 		if a.conv.agent.ShortID != "" {
@@ -5956,7 +6417,7 @@ func (a *App) renderBreadcrumb() string {
 		}
 	case viewMessageFull:
 		crumbs = []crumb{
-			{" Sessions", viewSessions},
+			{" Projects", viewSessions},
 			{a.currentSess.ShortID, viewConversation},
 		}
 		// Add nav stack context
@@ -6079,14 +6540,15 @@ func (a *App) renderBreadcrumb() string {
 func (a *App) breadcrumbRightStatus() string {
 	var parts []string
 
-	// Session group mode badge (styled)
+	// Main browser badge: always present it as PROJECTS in the UI even if
+	// alternate legacy grouping modes still exist internally.
 	if a.state == viewSessions {
-		modeLabels := []string{"FLAT", "PROJ", "TREE", "CHAIN", "FORK", "REPO"}
-		modeColors := []lipgloss.Color{"#9CA3AF", "#3B82F6", "#10B981", "#F59E0B", "#EC4899", "#7C3AED"}
-		ml := modeLabels[a.sessGroupMode]
-		mc := modeColors[a.sessGroupMode]
-		modeStyle := lipgloss.NewStyle().Foreground(mc).Bold(true)
-		parts = append(parts, modeStyle.Render(ml))
+		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
+		parts = append(parts, modeStyle.Render("PROJECTS"))
+		if strings.TrimSpace(a.activeFilterValue()) == "is:done" {
+			doneMode := lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
+			parts = append(parts, doneMode.Render("DONE-ONLY"))
+		}
 		if a.hasMultiSelection() {
 			parts = append(parts, fmt.Sprintf("%d selected", len(a.selectedSet)))
 		}
@@ -6259,7 +6721,7 @@ func scrollPreview(vp *viewport.Model, key string) {
 
 func roleLabel(e session.Entry) string {
 	if e.Role == "user" {
-		return "User"
+		return roleChip("user")
 	}
-	return "Assistant"
+	return roleChip("assistant")
 }

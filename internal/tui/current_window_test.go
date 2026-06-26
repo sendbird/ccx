@@ -17,7 +17,7 @@ func TestBuildGroupedItems_PinsCurrentWindowSessions(t *testing.T) {
 		{ID: "s4", ShortID: "s4", ProjectPath: "/tmp/d", ProjectName: "d", ModTime: now.Add(-30 * time.Minute), IsCurrentWindow: true},
 	}
 
-	items := buildGroupedItems(sessions, groupFlat)
+	items := buildGroupedItems(sessions, groupFlat, nil)
 	if len(items) < 5 {
 		t.Fatalf("expected at least 5 items (2 headers + 4 sessions), got %d", len(items))
 	}
@@ -52,12 +52,42 @@ func TestBuildGroupedItems_PinsCurrentWindowSessions(t *testing.T) {
 	}
 }
 
+func TestBuildGroupedItems_ProjectCentric_CurrentWindowIsGroupedByProject(t *testing.T) {
+	now := time.Now()
+	sessions := []session.Session{
+		{ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: now.Add(-1 * time.Minute), IsCurrentWindow: true},
+		{ID: "a2", ShortID: "a2", ProjectPath: "/tmp/repo-a/.worktree/feat", ProjectName: "feat", ModTime: now.Add(-2 * time.Minute), IsCurrentWindow: true, IsWorktree: true},
+		{ID: "b1", ShortID: "b1", ProjectPath: "/tmp/repo-b", ProjectName: "repo-b", ModTime: now.Add(-3 * time.Minute)},
+	}
+	items := buildGroupedItems(sessions, groupProjectCentric, nil, ".worktree")
+	if len(items) < 4 {
+		t.Fatalf("expected grouped items, got %d", len(items))
+	}
+	h0, ok := items[0].(headerItem)
+	if !ok || h0.label != "Current Window Projects" {
+		t.Fatalf("expected first header 'Current Window Projects', got %T %#v", items[0], items[0])
+	}
+	if _, ok := items[1].(projectItem); !ok {
+		t.Fatalf("expected current-window section to start with a projectItem, got %T", items[1])
+	}
+	foundProjectsHeader := false
+	for _, item := range items {
+		if h, ok := item.(headerItem); ok && h.label == "Projects" {
+			foundProjectsHeader = true
+			break
+		}
+	}
+	if !foundProjectsHeader {
+		t.Fatalf("expected a trailing 'Projects' header, got %#v", items)
+	}
+}
+
 func TestBuildGroupedItems_NoCurrentWindow_NoHeader(t *testing.T) {
 	sessions := []session.Session{
 		{ID: "s1", ShortID: "s1", ProjectPath: "/tmp/a", ProjectName: "a"},
 		{ID: "s2", ShortID: "s2", ProjectPath: "/tmp/b", ProjectName: "b"},
 	}
-	items := buildGroupedItems(sessions, groupFlat)
+	items := buildGroupedItems(sessions, groupFlat, nil)
 	for _, it := range items {
 		if _, ok := it.(headerItem); ok {
 			t.Fatalf("did not expect a header when no current-window sessions present")
@@ -73,7 +103,7 @@ func TestPinCurrentWindowFilter_AlwaysIncludesCurrent(t *testing.T) {
 		{ID: "s1", ProjectPath: "/tmp/match", ProjectName: "match"},
 		{ID: "s2", ProjectPath: "/tmp/here", ProjectName: "here", IsCurrentWindow: true},
 	}
-	items := buildGroupedItems(sessions, groupFlat)
+	items := buildGroupedItems(sessions, groupFlat, nil)
 	targets := make([]string, len(items))
 	for i, it := range items {
 		targets[i] = it.FilterValue()
@@ -115,7 +145,7 @@ func TestPinCurrentWindowFilter_KeepsMatchedRest(t *testing.T) {
 		{ID: "s1", ProjectPath: "/tmp/match", ProjectName: "alpha-match"},
 		{ID: "s2", ProjectPath: "/tmp/here", ProjectName: "here-proj", IsCurrentWindow: true},
 	}
-	items := buildGroupedItems(sessions, groupFlat)
+	items := buildGroupedItems(sessions, groupFlat, nil)
 	targets := make([]string, len(items))
 	for i, it := range items {
 		targets[i] = it.FilterValue()

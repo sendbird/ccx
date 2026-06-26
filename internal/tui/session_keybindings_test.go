@@ -13,7 +13,7 @@ func newSessionKeybindingApp() *App {
 	app.sessSplit.Show = false
 	app.sessSplit.Focus = false
 	contentH := ContentHeight(app.height)
-	app.sessionList = newSessionList(app.sessions, app.sessSplit.ListWidth(app.width, app.splitRatio), contentH, app.sessGroupMode, app.selectedSet, app.hiddenBadges, app.config.WorktreeDir)
+	app.sessionList = newSessionList(app.sessions, app.sessSplit.ListWidth(app.width, app.splitRatio), contentH, app.sessGroupMode, app.selectedSet, app.hiddenBadges, app.sessFolded, app.sessionRowCache, app.config.WorktreeDir)
 	app.sessionList.ResetFilter()
 	app.sessSplit.List = &app.sessionList
 	return app
@@ -60,14 +60,18 @@ func TestSessionsGJumpsToEnd(t *testing.T) {
 	}
 }
 
-func TestSessionsTabStillCyclesGroupMode(t *testing.T) {
+func TestSessionsTabCyclesPreviewModeInsteadOfGrouping(t *testing.T) {
 	app := newSessionKeybindingApp()
-	start := app.sessGroupMode
+	app.sessPreviewMode = sessPreviewConversation
+	startGroup := app.sessGroupMode
 
 	m, _ := app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyTab})
 	app = m.(*App)
-	if app.sessGroupMode == start {
-		t.Fatalf("tab should still cycle group mode, stayed at %d", start)
+	if app.sessGroupMode != startGroup {
+		t.Fatalf("tab should no longer cycle group mode, changed from %d to %d", startGroup, app.sessGroupMode)
+	}
+	if !app.sessSplit.Show {
+		t.Fatalf("tab should open the preview when hidden")
 	}
 }
 
@@ -84,12 +88,12 @@ func TestSessionsSpaceDoesNotSelectWhenPreviewFocused(t *testing.T) {
 	}
 }
 
-func TestSessionsHelpShowsNavigationAndTabGrouping(t *testing.T) {
+func TestSessionsHelpShowsNavigationAndPreviewTab(t *testing.T) {
 	app := newSessionKeybindingApp()
 	app.sessSplit.Show = false
 
 	help := stripANSI(app.sessHelpLine())
-	for _, want := range []string{"g/G:top/end", "tab/S-tab:group"} {
+	for _, want := range []string{"g/G:top/end", "tab/S-tab:preview"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("expected sessions help to contain %q, got %q", want, help)
 		}

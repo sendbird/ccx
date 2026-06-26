@@ -2,6 +2,68 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
+const (
+	// Line-art icon palette. Prefer outline Nerd Font / Font Awesome
+	// glyphs over emoji so the TUI stays monochrome and abstract.
+	iconIdle        = "" // circle-o
+	iconActive      = "" // dot-circle-o
+	iconFocused     = "" // circle
+	iconProgress    = "" // spinner
+	iconDone        = "" // check-circle-o
+	iconStopped     = "" // stop-circle-o
+	iconWaiting     = "" // hourglass-o
+	iconTask        = "" // list-ul
+	iconFolder      = "" // folder-o
+	iconFolderOpen  = "" // folder-open-o
+	iconAgent       = "" // code
+	iconImage       = "" // file-image-o
+	iconHook        = "" // bolt
+	iconBlockMarker = "" // dot-circle-o
+	iconFoldClosed  = "▸"
+	iconFoldOpen    = "▾"
+	iconSelect      = iconDone
+
+	iconRoleUser      = ""
+	iconRoleAssistant = ""
+	iconRoleCompact   = ""
+	iconBadgeLive     = ""
+	iconBadgeBusy     = ""
+	iconBadgeBg       = ""
+	iconBadgeMon      = ""
+	iconBadgeHere     = ""
+	iconBadgeDone     = ""
+	iconBadgeWait     = ""
+	iconBadgeStuck    = ""
+	iconBadgeRemote   = ""
+	iconTrendUp       = "▴"
+	iconTrendDown     = "▾"
+	iconBarFull       = "█"
+	iconBarLight      = "▓"
+	iconBarMid        = "▒"
+	iconBarEmpty      = "░"
+)
+
+func roleChip(role string) string {
+	switch role {
+	case "user":
+		return iconRoleUser + " usr"
+	case "assistant":
+		return iconRoleAssistant + " ast"
+	case "compact":
+		return iconRoleCompact + " ctx"
+	default:
+		return role
+	}
+}
+
+func sectionTitle(icon, text string) string {
+	return icon + "  " + text
+}
+
+func badgeLabel(icon, text string) string {
+	return "[" + icon + " " + text + "]"
+}
+
 var (
 	colorPrimary       = lipgloss.Color("#7C3AED")
 	colorTitleBg       = lipgloss.Color("#1E293B") // subtle dark bg for title bar
@@ -37,6 +99,7 @@ var (
 	forkBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
 	hereBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F472B6")).Bold(true)
 	bgBadgeStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
+	monBadgeStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 	waitBadgeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true)
 	doneBadgeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
 	stuckBadgeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Bold(true)

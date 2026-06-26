@@ -37,6 +37,7 @@ func TestFilterValueFor_AllFlags(t *testing.T) {
 		HasCompaction:   true,
 		HasSkills:       true,
 		HasMCP:          true,
+		HasMonitorJobs:  true,
 		TeamName:        "squad",
 		TeammateName:    "bob",
 		ParentSessionID: "parent",
@@ -50,6 +51,7 @@ func TestFilterValueFor_AllFlags(t *testing.T) {
 		"win:work", "is:live", "is:busy", "is:wt",
 		"has:mem", "has:todo", "has:task", "has:plan",
 		"has:agent", "has:compact", "has:skill", "has:mcp",
+		"has:monitor", "is:mon",
 		"is:team", "team:squad", "bob", "is:fork",
 		"tag:tag1", "tag1", "is:remote", "pod-x", "running",
 	)
