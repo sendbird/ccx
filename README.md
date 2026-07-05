@@ -118,7 +118,8 @@ Browse all Claude Code sessions across projects, sorted by recency.
   - **Chain** — resume-chain grouping (parent → child)
   - **Fork** — agent-fork grouping
 - **Directory filter** (`g`) — scope to a single project directory
-- **Preview pane** (`Tab` to cycle): conversation, stats, memory, tasks/plan, live
+- **Preview pane** (`Tab` to cycle): conversation, stats, memory, tasks/plan, workflows, live
+- **Fleet notifications** — when a live session transitions into an attention state (→ `WAIT`/`DONE`/`STUCK`), a `(!)N` indicator appears in the status bar; press `n` to jump to the most recently notified session
 - **Multi-select** (`Space`) — bulk delete, copy paths, send input
 - **Actions menu** (`x`) — delete, move, resume, copy path, worktree, kill, input, jump, URLs, files
 - **Command mode** (`:`) — vim-style commands with fuzzy suggestions

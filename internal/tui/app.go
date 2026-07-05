@@ -259,6 +259,10 @@ type App struct {
 	// Badge visibility
 	hiddenBadges map[string]bool
 
+	// Fleet notifications: lifecycle transitions across live sessions.
+	notifyPrev  map[string]session.LifecycleState // last-seen lifecycle per session ID
+	notifyInbox []session.NotifyEvent             // unread notable transitions (newest last)
+
 	// Live input: prefer $EDITOR mode
 	editorInput bool
 
@@ -735,6 +739,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		splitRatio:          35,
 		selectedSet:         make(map[string]bool),
 		hiddenBadges:        make(map[string]bool),
+		notifyPrev:          make(map[string]session.LifecycleState),
 		sessionRowCache:     newSessionRowCache(1024),
 		convPreviewRowCache: newSessionRowCache(4096),
 		termFocused:         true,
@@ -1786,6 +1791,17 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := a.doRefresh()
 		a.copiedMsg = "Refreshed"
 		return a, cmd
+	case "n":
+		// Jump to the most recent fleet notification's session.
+		if a.notifyUnreadCount() == 0 {
+			return a, nil
+		}
+		if a.jumpToNotification() {
+			a.copiedMsg = "Jumped to notified session"
+		} else {
+			a.copiedMsg = "Notified session not visible"
+		}
+		return a, nil
 	case km.Session.Views:
 		a.viewsMenu = true
 		return a, nil
@@ -4125,6 +4141,9 @@ func (a *App) doRefresh() tea.Cmd {
 				a.rebuildSessionList()
 			}
 		}
+
+		// Detect notable lifecycle transitions across the fleet and queue them.
+		a.collectNotifications()
 
 		// Refresh preview for live sessions (auto-scroll to bottom)
 		a.refreshSessionPreviewLive()
@@ -6766,6 +6785,13 @@ func (a *App) breadcrumbRightStatus() string {
 			parts = append(parts, s.Render(fmt.Sprintf("%s scanning %d sessions", frame, len(a.sessions))))
 		} else {
 			parts = append(parts, s.Render(fmt.Sprintf("%s loading…", frame)))
+		}
+	}
+
+	// Fleet notification indicator (sessions view only).
+	if a.state == viewSessions {
+		if ind := a.notifyIndicator(); ind != "" {
+			parts = append(parts, ind)
 		}
 	}
 
