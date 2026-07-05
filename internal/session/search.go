@@ -201,9 +201,10 @@ func searchSession(sess *Session, query SearchQuery, ctx context.Context, result
 		for i := range entry.Content {
 			block := &entry.Content[i]
 
-			// Tool filter
+			// Tool filter — trailing * on the tool name is a prefix match
+			// (e.g. tool:mcp* matches every mcp__server__tool block).
 			if query.ToolName != "" {
-				if block.Type != "tool_use" || !strings.EqualFold(block.ToolName, query.ToolName) {
+				if block.Type != "tool_use" || !toolNameMatches(block.ToolName, query.ToolName) {
 					continue
 				}
 			}
@@ -276,6 +277,16 @@ func blockSearchText(block *ContentBlock) string {
 	default:
 		return block.Text
 	}
+}
+
+// toolNameMatches reports whether a block's tool name satisfies a tool: filter.
+// A trailing "*" makes it a case-insensitive prefix match (tool:mcp* →
+// mcp__portal__…); otherwise it is an exact case-insensitive match.
+func toolNameMatches(toolName, filter string) bool {
+	if strings.HasSuffix(filter, "*") {
+		return strings.HasPrefix(strings.ToLower(toolName), strings.ToLower(strings.TrimSuffix(filter, "*")))
+	}
+	return strings.EqualFold(toolName, filter)
 }
 
 func buildSnippet(text string, terms, phrases []string) string {

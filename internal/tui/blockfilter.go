@@ -17,8 +17,10 @@ import (
 //	is:text      — text blocks
 //	is:thinking  — thinking blocks
 //	is:skill     — Skill tool_use blocks
+//	is:mcp       — MCP tool_use blocks (name starts with mcp__)
 //	is:image     — image blocks
 //	tool:Name    — tool_use blocks where ToolName matches (case-insensitive)
+//	tool:Prefix* — tool_use blocks where ToolName starts with Prefix (e.g. tool:mcp*)
 //	<free text>  — blocks containing the text (case-insensitive)
 //
 // Multiple terms are ANDed. Prefix ! negates a term.
@@ -77,6 +79,8 @@ func blockMatchesTerm(block session.ContentBlock, term string) bool {
 			return block.Type == "thinking"
 		case "skill":
 			return block.Type == "tool_use" && block.ToolName == "Skill"
+		case "mcp":
+			return block.Type == "tool_use" && strings.HasPrefix(block.ToolName, "mcp__")
 		case "image":
 			return block.Type == "image"
 		}
@@ -85,7 +89,14 @@ func blockMatchesTerm(block session.ContentBlock, term string) bool {
 
 	if strings.HasPrefix(lower, "tool:") {
 		name := lower[5:]
-		return block.Type == "tool_use" && strings.EqualFold(block.ToolName, name)
+		if block.Type != "tool_use" {
+			return false
+		}
+		// Trailing * = prefix match (e.g. tool:mcp* matches mcp__portal__...).
+		if strings.HasSuffix(name, "*") {
+			return strings.HasPrefix(strings.ToLower(block.ToolName), strings.TrimSuffix(name, "*"))
+		}
+		return strings.EqualFold(block.ToolName, name)
 	}
 
 	// Free text search — match against block content

@@ -107,3 +107,32 @@ func TestApplyBlockFilterIsSkill(t *testing.T) {
 		t.Errorf("expected [false true], got %v", vis)
 	}
 }
+
+func TestApplyBlockFilterIsMCP(t *testing.T) {
+	entry := session.Entry{Content: []session.ContentBlock{
+		{Type: "tool_use", ToolName: "Read"},
+		{Type: "tool_use", ToolName: "mcp__portal__loggerhead_search_logs"},
+		{Type: "tool_use", ToolName: "mcp__grafana__query_loki_logs"},
+	}}
+	vis := applyBlockFilter("is:mcp", entry)
+	if vis[0] || !vis[1] || !vis[2] {
+		t.Errorf("expected [false true true], got %v", vis)
+	}
+}
+
+func TestApplyBlockFilterToolPrefixGlob(t *testing.T) {
+	entry := session.Entry{Content: []session.ContentBlock{
+		{Type: "tool_use", ToolName: "Read"},
+		{Type: "tool_use", ToolName: "mcp__portal__loggerhead_search_logs"},
+		{Type: "tool_use", ToolName: "mcp__grafana__query"},
+	}}
+	// tool:mcp* matches any MCP tool; tool:mcp__portal* narrows to one server.
+	vis := applyBlockFilter("tool:mcp*", entry)
+	if vis[0] || !vis[1] || !vis[2] {
+		t.Errorf("tool:mcp* expected [false true true], got %v", vis)
+	}
+	vis = applyBlockFilter("tool:mcp__portal*", entry)
+	if vis[0] || !vis[1] || vis[2] {
+		t.Errorf("tool:mcp__portal* expected [false true false], got %v", vis)
+	}
+}

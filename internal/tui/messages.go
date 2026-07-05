@@ -670,6 +670,10 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				} else {
 					buf.WriteString(toolBlockStyle.Render("Tool: Skill"))
 				}
+			} else if server, tool, ok := session.MCPToolLabel(block.ToolName); ok {
+				// Split MCP tools into server / tool for readability instead of
+				// the long mcp__server__tool identifier.
+				buf.WriteString(toolBlockStyle.Render("MCP: "+server) + dimStyle.Render(" / "+tool))
 			} else {
 				buf.WriteString(toolBlockStyle.Render("Tool: " + block.ToolName))
 			}

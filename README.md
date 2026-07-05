@@ -211,7 +211,7 @@ Drill into any session to read the full conversation.
 - **Block navigation** (`↑`/`↓`) — navigate text, tool calls, and results
 - **Fold/unfold** (`←`/`→`, `f`/`F`) — collapse/expand content blocks
 - **System tag folding** — `<system-reminder>`, `<task-notification>`, `<available-deferred-tools>`, etc. are folded by default, expandable on demand
-- **Block filter** (`/`) — filter by `is:tool`, `is:hook`, `is:error`, `is:skill`, `tool:Name`
+- **Block filter** (`/`) — filter by `is:tool`, `is:hook`, `is:error`, `is:skill`, `is:mcp`, `tool:Name`, `tool:Prefix*` (e.g. `tool:mcp*`)
 - **Subagent drill-down** (`Enter` on agent) — recursive navigation into sub-sessions with back-stack
 - **Side-question context** — background context from parent sessions is collapsed into a summary; only the actual question/answer is shown
 - **Full conversation** (`c`) — scrollable concatenated view with search (`/`) and copy mode
