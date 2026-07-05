@@ -392,7 +392,7 @@ Available from any view. Suggestions are context-aware — only relevant command
 | `view:config:hooks` | All | Config → hooks filter |
 | `view:plugins` | All | Open plugin explorer |
 | `group:flat\|proj\|tree\|chain\|fork` | Sessions | Change grouping mode |
-| `preview:conv\|stats\|mem\|tasks\|live` | Sessions | Change preview mode |
+| `preview:conv\|stats\|mem\|tasks\|wf\|live` | Sessions | Change preview mode (`wf` = workflow runs) |
 | `set:ratio N` | Sessions | Set split pane ratio (15-85) |
 | `page:memory\|hooks\|mcp\|skills\|keymaps\|shortcuts\|...` | Config | Filter config category |
 | `page:tools\|errors\|overview` | Stats | Switch stats page |

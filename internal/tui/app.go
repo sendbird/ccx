@@ -322,6 +322,8 @@ type App struct {
 	sessShellsCacheKey   string
 	sessContextsCache    string
 	sessContextsCacheKey string
+	sessWorkflowsCache   string
+	sessWorkflowsCacheKey string
 	sessPreviewAgents    []session.Subagent // agents shown in Tasks/Plan preview
 	sessAgentCursor      int                // cursor within agents list
 
@@ -684,11 +686,12 @@ const (
 	sessPreviewMemory
 	sessPreviewTasksPlan
 	sessPreviewAgents
+	sessPreviewWorkflows
 	sessPreviewShells
 	sessPreviewContexts
 	sessPreviewLive     // tmux pane capture
 	sessPreviewRemote   // remote session status/stream
-	numSessPreviewModes = 9
+	numSessPreviewModes = 10
 )
 
 // Config holds application configuration from CLI flags.
@@ -783,7 +786,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	// of the projects view.
 	a.sessGroupMode = groupProjectCentric
 	if a.config.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "live": sessPreviewLive}
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
@@ -2370,6 +2373,8 @@ func (a *App) handleSessPageMenu(key string) (tea.Model, tea.Cmd) {
 		a.setSessPreviewMode(sessPreviewTasksPlan)
 	case "a":
 		a.setSessPreviewMode(sessPreviewAgents)
+	case "w":
+		a.setSessPreviewMode(sessPreviewWorkflows)
 	case "c":
 		a.setSessPreviewMode(sessPreviewContexts)
 	case "l":
@@ -2390,7 +2395,7 @@ func (a *App) renderSessPageHintBox() string {
 	line1 := hl.Render("v") + d.Render(":conv") + sp + hl.Render("s") + d.Render(":stats")
 	line2 := hl.Render("m") + d.Render(":mem") + sp + hl.Render("t") + d.Render(":tasks")
 	line3 := hl.Render("a") + d.Render(":agents") + sp + hl.Render("l") + d.Render(":live")
-	line4 := hl.Render("c") + d.Render(":contexts")
+	line4 := hl.Render("w") + d.Render(":workflows") + sp + hl.Render("c") + d.Render(":contexts")
 	body := strings.Join([]string{line1, line2, line3, line4, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -4416,6 +4421,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		a.updateSessionTasksPlanPreview(sess)
 	case sessPreviewAgents:
 		a.updateSessionAgentsPreview(sess)
+	case sessPreviewWorkflows:
+		a.updateSessionWorkflowsPreview(sess)
 	case sessPreviewShells:
 		a.updateSessionShellsPreview(sess)
 	case sessPreviewContexts:
@@ -5057,6 +5064,159 @@ func (a *App) updateSessionAgentsPreview(sess session.Session) {
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.buildAgentsPreviewContent(sess))
+}
+
+func (a *App) updateSessionWorkflowsPreview(sess session.Session) {
+	if a.sessWorkflowsCacheKey != sess.ID {
+		previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+		a.sessWorkflowsCache = a.buildWorkflowsPreviewContent(sess, previewW)
+		a.sessWorkflowsCacheKey = sess.ID
+	}
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	contentH := max(a.height-3, 1)
+	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	a.sessSplit.Preview.SetContent(a.sessWorkflowsCache)
+}
+
+// buildWorkflowsPreviewContent renders the workflow runs recorded for a session:
+// per-run header (name/status/metrics), the phase list, and each agent's label,
+// state, model, tokens/tool-calls and a result preview. Mirrors the section
+// style of buildTasksPlanContent.
+func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) string {
+	runs := sess.Workflows
+	if len(runs) == 0 {
+		runs, _ = session.FindWorkflows(sess.FilePath)
+	}
+	if len(runs) == 0 {
+		return dimStyle.Render("No workflow runs found.")
+	}
+
+	var sb strings.Builder
+	for ri, r := range runs {
+		if ri > 0 {
+			sb.WriteString("\n")
+		}
+		name := r.Name
+		if name == "" {
+			name = r.RunID
+		}
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("── %s ──", name)) + "\n")
+
+		// Status + metrics line.
+		statusStyle := dimStyle
+		switch r.Status {
+		case "completed":
+			statusStyle = lipgloss.NewStyle().Foreground(colorAccent)
+		case "error", "failed":
+			statusStyle = lipgloss.NewStyle().Foreground(colorError)
+		case "running":
+			statusStyle = lipgloss.NewStyle().Foreground(colorAssistant)
+		}
+		meta := fmt.Sprintf("  %s", statusStyle.Render(orDash(r.Status)))
+		if r.AgentCount > 0 {
+			meta += dimStyle.Render(fmt.Sprintf("  ·  %d agents", r.AgentCount))
+		}
+		if r.TotalTokens > 0 {
+			meta += dimStyle.Render(fmt.Sprintf("  ·  %s tok", fmtNum(r.TotalTokens)))
+		}
+		if r.TotalToolCalls > 0 {
+			meta += dimStyle.Render(fmt.Sprintf("  ·  %d tools", r.TotalToolCalls))
+		}
+		if r.DurationMS > 0 {
+			meta += dimStyle.Render("  ·  " + formatDurationMS(r.DurationMS))
+		}
+		sb.WriteString(meta + "\n")
+		if r.Summary != "" {
+			sb.WriteString(dimStyle.Render("  "+r.Summary) + "\n")
+		}
+		sb.WriteString("\n")
+
+		// Phases.
+		if len(r.Phases) > 0 {
+			var titles []string
+			for _, p := range r.Phases {
+				titles = append(titles, p.Title)
+			}
+			sb.WriteString(dimStyle.Render("  phases: "+strings.Join(titles, " → ")) + "\n\n")
+		}
+
+		// Agents grouped by phase.
+		for _, ag := range r.Agents {
+			icon := iconIdle
+			style := dimStyle
+			switch ag.State {
+			case "done":
+				icon = iconDone
+				style = lipgloss.NewStyle().Foreground(colorAccent)
+			case "error", "failed":
+				icon = iconIdle
+				style = lipgloss.NewStyle().Foreground(colorError)
+			case "running":
+				icon = iconActive
+				style = lipgloss.NewStyle().Foreground(colorAssistant)
+			}
+			label := ag.Label
+			if label == "" {
+				label = ag.AgentID
+			}
+			line := fmt.Sprintf("  %s %s", icon, label)
+			if ag.PhaseTitle != "" {
+				line += dimStyle.Render("  ["+ag.PhaseTitle+"]")
+			}
+			sb.WriteString(style.Render(line))
+			var stats []string
+			if ag.Tokens > 0 {
+				stats = append(stats, fmtNum(ag.Tokens)+" tok")
+			}
+			if ag.ToolCalls > 0 {
+				stats = append(stats, fmt.Sprintf("%d tools", ag.ToolCalls))
+			}
+			if ag.DurationMS > 0 {
+				stats = append(stats, formatDurationMS(ag.DurationMS))
+			}
+			if len(stats) > 0 {
+				sb.WriteString(dimStyle.Render("  " + strings.Join(stats, " · ")))
+			}
+			sb.WriteString("\n")
+			if ag.ResultPreview != "" {
+				preview := ag.ResultPreview
+				if idx := strings.IndexByte(preview, '\n'); idx > 0 {
+					preview = preview[:idx]
+				}
+				sb.WriteString(dimStyle.Render("      "+truncate(preview, max(width-8, 20))) + "\n")
+			}
+		}
+
+		// Final result.
+		if strings.TrimSpace(r.Result) != "" {
+			sb.WriteString("\n" + dimStyle.Render("  result:") + "\n")
+			result := renderMarkdownText(r.Result, max(width-4, 20))
+			for _, ln := range strings.Split(result, "\n") {
+				sb.WriteString("  " + ln + "\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
+// orDash returns s, or "—" when empty.
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// formatDurationMS renders a millisecond duration compactly (e.g. "4m55s").
+func formatDurationMS(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func (a *App) updateSessionShellsPreview(sess session.Session) {

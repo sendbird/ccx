@@ -18,19 +18,42 @@ func FindSubagents(sessionFile string) ([]Subagent, error) {
 		return nil, nil
 	}
 
+	var agents []Subagent
+
+	// 1. Ordinary Task/Agent subagents directly under subagents/.
 	matches, err := filepath.Glob(filepath.Join(agentDir, "agent-*.jsonl"))
 	if err != nil {
 		return nil, err
 	}
-
-	var agents []Subagent
 	for _, p := range matches {
-		// Skip auto-compaction files (agent-acompact-*.jsonl)
 		base := filepath.Base(p)
 		if strings.HasPrefix(base, "agent-acompact-") {
 			continue
 		}
 		agents = append(agents, scanSubagentFile(p))
+	}
+
+	// 2. Workflow-spawned agents nested under subagents/workflows/{runId}/.
+	// These were previously invisible: the non-recursive glob above never
+	// descended into the per-run directories.
+	wfDir := filepath.Join(agentDir, "workflows")
+	if runDirs, derr := os.ReadDir(wfDir); derr == nil {
+		for _, rd := range runDirs {
+			if !rd.IsDir() {
+				continue
+			}
+			runID := rd.Name()
+			runMatches, _ := filepath.Glob(filepath.Join(wfDir, runID, "agent-*.jsonl"))
+			for _, p := range runMatches {
+				base := filepath.Base(p)
+				if strings.HasPrefix(base, "agent-acompact-") {
+					continue
+				}
+				sa := scanSubagentFile(p)
+				sa.WorkflowRunID = runID
+				agents = append(agents, sa)
+			}
+		}
 	}
 
 	sort.Slice(agents, func(i, j int) bool {

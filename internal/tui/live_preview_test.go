@@ -81,7 +81,7 @@ func TestCyclePreviewModeSkipsLive(t *testing.T) {
 	}
 
 	// Verify we visit all other modes
-	for _, mode := range []sessPreview{sessPreviewConversation, sessPreviewStats, sessPreviewMemory, sessPreviewTasksPlan, sessPreviewAgents, sessPreviewShells, sessPreviewContexts} {
+	for _, mode := range []sessPreview{sessPreviewConversation, sessPreviewStats, sessPreviewMemory, sessPreviewTasksPlan, sessPreviewAgents, sessPreviewWorkflows, sessPreviewShells, sessPreviewContexts} {
 		if !visited[mode] {
 			t.Errorf("cycleSessionPreviewMode should visit mode %d", mode)
 		}
@@ -388,6 +388,7 @@ func TestPreviewModeConstants(t *testing.T) {
 		sessPreviewMemory,
 		sessPreviewTasksPlan,
 		sessPreviewAgents,
+		sessPreviewWorkflows,
 		sessPreviewShells,
 		sessPreviewContexts,
 		sessPreviewLive,

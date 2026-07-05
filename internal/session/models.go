@@ -82,6 +82,9 @@ type Session struct {
 	HasMonitorJobs bool       // Monitor tool invocations present (subset of HasShellJobs)
 	ShellJobs      []ShellJob // populated lazily when HasShellJobs is true
 
+	HasWorkflows bool          // workflow runs recorded under {sessionID}/workflows/
+	Workflows    []WorkflowRun // populated lazily when HasWorkflows is true
+
 	CustomBadges []string // user-created badge tags
 
 	TmuxWindowName  string // tmux window name (set if pane CWD matches ProjectPath)
@@ -137,4 +140,13 @@ type Subagent struct {
 	FirstPrompt string
 	Timestamp   time.Time
 	AgentType   string
+
+	// WorkflowRunID is set for agents spawned by a Workflow run — they live under
+	// subagents/workflows/{runId}/ rather than directly under subagents/. Empty
+	// for ordinary Task/Agent subagents. Used to group agents by their workflow
+	// and to join against the WorkflowRun summary (workflows/{runId}.json).
+	WorkflowRunID string
+	// WorkflowLabel is the human label from the workflow summary (e.g. "ux-review"),
+	// resolved by matching agentId; empty until joined.
+	WorkflowLabel string
 }
