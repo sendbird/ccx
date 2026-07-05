@@ -5888,19 +5888,32 @@ func (a *App) refreshSessionPreviewLive() {
 	}
 
 	if a.sessPreviewMode != sessPreviewConversation {
-		// Re-render non-message preview for live session
-		a.sessSplit.CacheKey = ""
-		if a.sessPreviewMode == sessPreviewStats {
+		// Re-render non-message preview for live session. Only modes whose
+		// content actually changes as the session writes need refreshing;
+		// crucially, sessPreviewLive/Remote must be left alone — their content is
+		// the tmux pane proxy, refreshed separately, and re-rendering here would
+		// clobber the live pane with another preview (memory) every tick.
+		switch a.sessPreviewMode {
+		case sessPreviewStats:
+			a.sessSplit.CacheKey = ""
 			a.sessStatsCache = nil
 			a.sessStatsCacheKey = ""
 			a.updateSessionStatsPreview(sess)
-		} else if a.sessPreviewMode == sessPreviewTasksPlan {
+		case sessPreviewTasksPlan:
+			a.sessSplit.CacheKey = ""
 			a.sessTasksCacheKey = ""
 			a.updateSessionTasksPlanPreview(sess)
-		} else {
+		case sessPreviewMemory:
+			a.sessSplit.CacheKey = ""
 			a.sessMemoryCacheKey = ""
 			a.updateSessionMemoryPreview(sess)
+		case sessPreviewWorkflows:
+			a.sessSplit.CacheKey = ""
+			a.sessWorkflowsCacheKey = ""
+			a.updateSessionWorkflowsPreview(sess)
 		}
+		// sessPreviewLive, sessPreviewRemote, sessPreviewAgents, sessPreviewShells,
+		// sessPreviewContexts: leave as-is.
 		return
 	}
 
