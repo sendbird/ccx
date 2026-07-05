@@ -140,6 +140,48 @@ func HasWorkflows(sessionFile string) bool {
 	return len(matches) > 0
 }
 
+// JoinWorkflowAgents matches workflow-spawned subagents (from FindSubagents,
+// carrying WorkflowRunID) against the run summaries and fills in each agent's
+// WorkflowLabel from the summary's workflowProgress. Returns only the
+// workflow-nested agents, ordered by run (newest run first) then by the
+// summary's agent order, so drill-down lists read like the workflow itself.
+func JoinWorkflowAgents(runs []WorkflowRun, agents []Subagent) []Subagent {
+	// agentID → label, and agentID → run order index.
+	labelByID := make(map[string]string)
+	runOrder := make(map[string]int)
+	agentOrder := make(map[string]int)
+	for ri, r := range runs {
+		for ai, wa := range r.Agents {
+			if wa.AgentID == "" {
+				continue
+			}
+			labelByID[wa.AgentID] = wa.Label
+			runOrder[wa.AgentID] = ri
+			agentOrder[wa.AgentID] = ai
+		}
+	}
+
+	var out []Subagent
+	for _, a := range agents {
+		if a.WorkflowRunID == "" {
+			continue
+		}
+		if lbl, ok := labelByID[a.ID]; ok {
+			a.WorkflowLabel = lbl
+		}
+		out = append(out, a)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		ri, rj := runOrder[out[i].ID], runOrder[out[j].ID]
+		if ri != rj {
+			return ri < rj
+		}
+		return agentOrder[out[i].ID] < agentOrder[out[j].ID]
+	})
+	return out
+}
+
 func parseWorkflowFile(path string) (WorkflowRun, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {

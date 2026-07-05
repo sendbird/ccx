@@ -83,6 +83,8 @@ func (a *App) sessHelpLine() string {
 			h += " ↑↓:nav c:full " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Open, "jump") + " ←:unfocus /:search tab:mode"
 		case sessPreviewAgents:
 			h += " ↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
+		case sessPreviewWorkflows:
+			h += " ↑↓:agent ↵:transcript ←:unfocus tab:mode"
 		default:
 			h += " ↑↓:scroll ←:unfocus tab:mode"
 		}

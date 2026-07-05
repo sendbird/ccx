@@ -328,6 +328,9 @@ type App struct {
 	sessContextsCacheKey string
 	sessWorkflowsCache   string
 	sessWorkflowsCacheKey string
+	sessWfRuns           []session.WorkflowRun // parsed runs for the selected session
+	sessWfAgents         []session.Subagent    // workflow-nested agents (label-joined), drill-down targets
+	sessWfCursor         int                   // cursor within the workflow agent list
 	sessPreviewAgents    []session.Subagent // agents shown in Tasks/Plan preview
 	sessAgentCursor      int                // cursor within agents list
 
@@ -1714,6 +1717,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m, cmd, _ := a.jumpToAgentConversation()
 			return m, cmd
 		}
+		// If Workflows preview is focused, drill into the selected agent transcript
+		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewWorkflows && len(a.sessWfAgents) > 0 {
+			m, cmd, _ := a.drillIntoWorkflowAgent()
+			return m, cmd
+		}
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
@@ -2022,6 +2030,9 @@ func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, te
 	if a.sessPreviewMode == sessPreviewAgents && len(a.sessPreviewAgents) > 0 {
 		return a.handleTasksPreviewKeys(sp, key)
 	}
+	if a.sessPreviewMode == sessPreviewWorkflows && len(a.sessWfAgents) > 0 {
+		return a.handleWorkflowsPreviewKeys(sp, key)
+	}
 	switch key {
 	case "/":
 		sp.Focus = false
@@ -2080,6 +2091,67 @@ func (a *App) jumpToAgentConversation() (tea.Model, tea.Cmd, bool) {
 	cmd := a.openConversation(sess)
 
 	// Switch to tree view and find the agent
+	a.setConvLeftPaneMode(convPaneTree)
+	for i, item := range a.convList.Items() {
+		ci, ok := item.(convItem)
+		if !ok {
+			continue
+		}
+		if ci.kind == convAgent && (ci.agent.ID == agent.ID || ci.agent.ShortID == agent.ShortID) {
+			a.convList.Select(i)
+			break
+		}
+	}
+	a.updateConvPreview()
+	return a, cmd, true
+}
+
+// handleWorkflowsPreviewKeys handles cursor navigation + drill-down for the
+// workflow preview. Enter opens the selected workflow agent's full transcript.
+func (a *App) handleWorkflowsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
+	case "enter":
+		return a.drillIntoWorkflowAgent()
+	case "/":
+		sp.Focus = false
+		return a, startListSearch(&a.sessionList), true
+	}
+	switch HandleFlatCursorNav(&a.sessWfCursor, len(a.sessWfAgents), key) {
+	case NavCursorMoved:
+		if sess, ok := a.selectedSession(); ok {
+			previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+			sp.Preview.SetContent(a.buildWorkflowsPreviewContent(sess, previewW))
+		}
+		if key == "up" || key == "k" {
+			sp.Preview.LineUp(1)
+		} else if key == "down" || key == "j" {
+			sp.Preview.LineDown(1)
+		}
+		return a, nil, true
+	case NavBoundaryDown, NavBoundaryUp:
+		return a, nil, true
+	}
+	if scrollViewport(&sp.Preview, key) {
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// drillIntoWorkflowAgent opens the conversation view for the current session and
+// navigates into the workflow agent under the cursor — its full transcript,
+// which the workflow run summary only previews.
+func (a *App) drillIntoWorkflowAgent() (tea.Model, tea.Cmd, bool) {
+	if a.sessWfCursor < 0 || a.sessWfCursor >= len(a.sessWfAgents) {
+		return a, nil, true
+	}
+	agent := a.sessWfAgents[a.sessWfCursor]
+	sess, ok := a.selectedSession()
+	if !ok {
+		return a, nil, true
+	}
+	a.currentSess = sess
+	cmd := a.openConversation(sess)
+
 	a.setConvLeftPaneMode(convPaneTree)
 	for i, item := range a.convList.Items() {
 		ci, ok := item.(convItem)
@@ -5086,23 +5158,30 @@ func (a *App) updateSessionAgentsPreview(sess session.Session) {
 }
 
 func (a *App) updateSessionWorkflowsPreview(sess session.Session) {
+	// Load + join workflow runs and their nested agents once per session, so the
+	// cursor can drill into any agent's transcript.
 	if a.sessWorkflowsCacheKey != sess.ID {
-		previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
-		a.sessWorkflowsCache = a.buildWorkflowsPreviewContent(sess, previewW)
+		a.sessWfRuns, _ = session.FindWorkflows(sess.FilePath)
+		allAgents, _ := session.FindSubagents(sess.FilePath)
+		a.sessWfAgents = session.JoinWorkflowAgents(a.sessWfRuns, allAgents)
+		a.sessWfCursor = 0
 		a.sessWorkflowsCacheKey = sess.ID
 	}
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
-	a.sessSplit.Preview.SetContent(a.sessWorkflowsCache)
+	a.sessSplit.Preview.SetContent(a.buildWorkflowsPreviewContent(sess, previewW))
 }
 
-// buildWorkflowsPreviewContent renders the workflow runs recorded for a session:
-// per-run header (name/status/metrics), the phase list, and each agent's label,
-// state, model, tokens/tool-calls and a result preview. Mirrors the section
-// style of buildTasksPlanContent.
+// buildWorkflowsPreviewContent renders the workflow runs recorded for a session
+// as an interactive list: per-run header (name/status/metrics), the phase list,
+// and each agent's label/state/tokens/tool-calls with a result preview. The
+// agent under sessWfCursor is highlighted; Enter drills into that agent's full
+// transcript (something Claude's own workflow view can't do — it only shows the
+// result). Agent rows are indexed to match a.sessWfAgents so the cursor maps to
+// a real drill-down target.
 func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) string {
-	runs := sess.Workflows
+	runs := a.sessWfRuns
 	if len(runs) == 0 {
 		runs, _ = session.FindWorkflows(sess.FilePath)
 	}
@@ -5110,7 +5189,23 @@ func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) stri
 		return dimStyle.Render("No workflow runs found.")
 	}
 
+	focused := a.sessSplit.Focus
+	// Map agentID → index in a.sessWfAgents (drill-down order / cursor space).
+	cursorIdx := make(map[string]int, len(a.sessWfAgents))
+	for i, ag := range a.sessWfAgents {
+		cursorIdx[ag.ID] = i
+	}
+	hasDrill := len(a.sessWfAgents) > 0
+
 	var sb strings.Builder
+	if hasDrill {
+		hint := "↑↓:agent  enter:open transcript"
+		if !focused {
+			hint = "→:focus, then ↑↓/enter to drill into agents"
+		}
+		sb.WriteString(dimStyle.Render(hint) + "\n\n")
+	}
+
 	for ri, r := range runs {
 		if ri > 0 {
 			sb.WriteString("\n")
@@ -5159,7 +5254,7 @@ func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) stri
 			sb.WriteString(dimStyle.Render("  phases: "+strings.Join(titles, " → ")) + "\n\n")
 		}
 
-		// Agents grouped by phase.
+		// Agents.
 		for _, ag := range r.Agents {
 			icon := iconIdle
 			style := dimStyle
@@ -5178,7 +5273,15 @@ func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) stri
 			if label == "" {
 				label = ag.AgentID
 			}
-			line := fmt.Sprintf("  %s %s", icon, label)
+
+			// Cursor marker when this agent is the drill-down target.
+			marker := "  "
+			ci, drillable := cursorIdx[ag.AgentID]
+			if drillable && focused && ci == a.sessWfCursor {
+				marker = selectMarkStyle.Render("> ")
+			}
+
+			line := fmt.Sprintf("%s%s %s", marker, icon, label)
 			if ag.PhaseTitle != "" {
 				line += dimStyle.Render("  ["+ag.PhaseTitle+"]")
 			}
@@ -5192,6 +5295,9 @@ func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) stri
 			}
 			if ag.DurationMS > 0 {
 				stats = append(stats, formatDurationMS(ag.DurationMS))
+			}
+			if drillable {
+				stats = append(stats, "↵ transcript")
 			}
 			if len(stats) > 0 {
 				sb.WriteString(dimStyle.Render("  " + strings.Join(stats, " · ")))

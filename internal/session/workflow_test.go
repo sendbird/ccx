@@ -124,6 +124,32 @@ func TestFindWorkflows_None(t *testing.T) {
 	}
 }
 
+func TestJoinWorkflowAgents(t *testing.T) {
+	runs := []WorkflowRun{{
+		RunID: "wf1",
+		Agents: []WorkflowAgent{
+			{AgentID: "a1", Label: "ux-review"},
+			{AgentID: "a2", Label: "perf-review"},
+		},
+	}}
+	agents := []Subagent{
+		{ID: "top", WorkflowRunID: ""}, // non-workflow, excluded
+		{ID: "a2", WorkflowRunID: "wf1"},
+		{ID: "a1", WorkflowRunID: "wf1"},
+	}
+	got := JoinWorkflowAgents(runs, agents)
+	if len(got) != 2 {
+		t.Fatalf("got %d workflow agents, want 2", len(got))
+	}
+	// Ordered by the run's agent order: a1 then a2, with labels joined.
+	if got[0].ID != "a1" || got[0].WorkflowLabel != "ux-review" {
+		t.Errorf("got[0] = %+v, want a1/ux-review", got[0])
+	}
+	if got[1].ID != "a2" || got[1].WorkflowLabel != "perf-review" {
+		t.Errorf("got[1] = %+v, want a2/perf-review", got[1])
+	}
+}
+
 func TestFindSubagents_RecursesIntoWorkflows(t *testing.T) {
 	// Workflow-spawned agents live under subagents/workflows/{runId}/ and must be
 	// discovered with WorkflowRunID set — the regression this fixes.
