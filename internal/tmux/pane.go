@@ -134,16 +134,78 @@ func HasClaudeSession(shellPID int, sessionID string) bool {
 	return strings.Contains(string(out), sessionID)
 }
 
-// HasClaude checks if a pane's shell has a claude child process.
+// HasClaude checks if a pane's shell has a claude process anywhere in its
+// descendant tree — not just as a direct child. Claude is frequently launched
+// behind a wrapper (ccproxy, tee, sudo, a shell function), so `pgrep -P` on the
+// immediate children misses it. We first try the cheap direct-child check, then
+// fall back to walking the full process subtree. This must stay consistent with
+// MarkLiveSessions, which attributes live claudes to panes via a PPID walk;
+// otherwise a session shows [LIVE] but its live preview capture is rejected.
 func HasClaude(shellPID int) bool {
 	if shellPID == 0 {
 		return false
 	}
-	out, err := exec.Command("pgrep", "-P", strconv.Itoa(shellPID), "-f", "claude").Output()
+	// Fast path: direct child named claude.
+	if out, err := exec.Command("pgrep", "-P", strconv.Itoa(shellPID), "-f", "claude").Output(); err == nil {
+		if len(strings.TrimSpace(string(out))) > 0 {
+			return true
+		}
+	}
+	// Fallback: any descendant process is (or is wrapping) claude.
+	return hasClaudeDescendant(shellPID)
+}
+
+// hasClaudeDescendant reports whether any process in shellPID's subtree has
+// "claude" in its command line. Uses one `ps` snapshot (pid, ppid, command)
+// and a BFS down the tree, bounded against cycles.
+func hasClaudeDescendant(shellPID int) bool {
+	out, err := exec.Command("ps", "-e", "-o", "pid=,ppid=,command=").Output()
 	if err != nil {
 		return false
 	}
-	return len(strings.TrimSpace(string(out))) > 0
+	type proc struct {
+		ppid int
+		cmd  string
+	}
+	procs := make(map[int]proc)
+	children := make(map[int][]int)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(fields[0])
+		ppid, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		cmd := strings.Join(fields[2:], " ")
+		procs[pid] = proc{ppid: ppid, cmd: cmd}
+		children[ppid] = append(children[ppid], pid)
+	}
+
+	// BFS from shellPID over descendants; look for "claude" in any command.
+	queue := append([]int(nil), children[shellPID]...)
+	visited := make(map[int]bool)
+	for len(queue) > 0 {
+		pid := queue[0]
+		queue = queue[1:]
+		if visited[pid] {
+			continue
+		}
+		visited[pid] = true
+		if p, ok := procs[pid]; ok {
+			if strings.Contains(p.cmd, "claude") {
+				return true
+			}
+		}
+		queue = append(queue, children[pid]...)
+	}
+	return false
 }
 
 // SwitchToPane switches the tmux client to the given pane.
