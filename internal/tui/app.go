@@ -5664,26 +5664,57 @@ func (a *App) buildMemoryContent(sess session.Session) string {
 		sb.WriteString("\n")
 	}
 
-	// Auto-memory files
-	encoded := session.EncodeProjectPath(sess.ProjectPath)
-	memDir := home + "/.claude/projects/" + encoded + "/memory"
-	if entries, err := os.ReadDir(memDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			data, err := os.ReadFile(memDir + "/" + e.Name())
-			if err != nil || len(data) == 0 {
-				continue
-			}
-			sb.WriteString(dimStyle.Render("── "+e.Name()+" ──") + "\n\n")
-			sb.WriteString(strings.TrimRight(string(data), "\n") + "\n\n")
-		}
+	// Memory notes — parsed with frontmatter (name/description/type), index first.
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 20)
+	notes := session.LoadMemoryNotes(sess.ProjectPath, home)
+	for _, note := range notes {
+		sb.WriteString(a.renderMemoryNote(note, previewW))
 	}
 
 	if sb.Len() == 0 {
 		return dimStyle.Render("No memory or todos found.")
 	}
+	return sb.String()
+}
+
+// memTypeStyle colors a memory note's type tag.
+func memTypeStyle(t string) lipgloss.Style {
+	switch t {
+	case "user":
+		return lipgloss.NewStyle().Foreground(colorUser).Bold(true)
+	case "feedback":
+		return lipgloss.NewStyle().Foreground(colorAssistant).Bold(true)
+	case "project":
+		return lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	case "reference":
+		return dimStyle.Bold(true)
+	}
+	return dimStyle
+}
+
+// renderMemoryNote renders one parsed memory note as a titled card: a header
+// line (name + type tag), the description as a subtitle, then the markdown body
+// (tables/headings rendered). MEMORY.md (the index) gets a distinct label.
+func (a *App) renderMemoryNote(note session.MemoryNote, width int) string {
+	var sb strings.Builder
+
+	title := note.Name
+	if note.IsIndex {
+		sb.WriteString(dimStyle.Render("══ Memory Index ══") + "\n\n")
+	} else {
+		header := dimStyle.Render("── ") + memTypeStyle(note.Type).Render(title) + dimStyle.Render(" ──")
+		if note.Type != "" {
+			header += "  " + memTypeStyle(note.Type).Render("["+note.Type+"]")
+		}
+		sb.WriteString(header + "\n")
+		if note.Description != "" {
+			sb.WriteString(dimStyle.Render("  "+note.Description) + "\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	body := renderMarkdownText(note.Body, max(width-2, 20))
+	sb.WriteString(strings.TrimRight(body, "\n") + "\n\n")
 	return sb.String()
 }
 
