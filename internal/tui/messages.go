@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -619,8 +620,7 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 						if formatted {
 							text = tryFormatJSON(text)
 						}
-						text = formatMarkdownTables(text)
-						wrapped := wrapText(text, max(w-2, 10))
+						wrapped := renderMarkdownText(text, max(w-2, 10))
 						indent := strings.Repeat(" ", lipgloss.Width(cursorPrefix))
 						for i, line := range strings.Split(wrapped, "\n") {
 							if i > 0 {
@@ -644,8 +644,7 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 					if formatted {
 						text = tryFormatJSON(text)
 					}
-					text = formatMarkdownTables(text)
-					wrapped := wrapText(text, max(w-2, 10))
+					wrapped := renderMarkdownText(text, max(w-2, 10))
 					wrappedLines := strings.Split(wrapped, "\n")
 					indent := strings.Repeat(" ", lipgloss.Width(cursorPrefix))
 					for i, line := range wrappedLines {
@@ -851,27 +850,115 @@ func isDecorativeSeparator(text string) bool {
 	return true
 }
 
-// formatMarkdownTables detects markdown tables in text and re-renders them
-// with aligned columns. Non-table lines pass through unchanged.
-func formatMarkdownTables(text string) string {
+// renderMarkdownText renders assistant/user markdown text for a preview pane of
+// the given display width. Contiguous markdown tables are rendered as aligned
+// Unicode box-drawing tables (never word-wrapped — wrapping would shatter the
+// borders); headings get styled; every other line is word-wrapped to width and
+// gets inline markdown (**bold**, `code`) styling. This replaces the old
+// formatMarkdownTables+wrapText two-step, which wrapped the freshly aligned
+// table rows and broke them apart.
+func renderMarkdownText(text string, width int) string {
 	lines := strings.Split(text, "\n")
-	var result []string
+	var out []string
 	i := 0
 	for i < len(lines) {
-		// Detect table start: line with | and next line is separator (|---|...)
 		if isTableRow(lines[i]) && i+1 < len(lines) && isTableSeparator(lines[i+1]) {
-			// Collect all contiguous table lines
 			start := i
 			for i < len(lines) && (isTableRow(lines[i]) || isTableSeparator(lines[i])) {
 				i++
 			}
-			result = append(result, alignTable(lines[start:i])...)
+			out = append(out, renderMarkdownTable(lines[start:i], width))
 			continue
 		}
-		result = append(result, lines[i])
+		if h, ok := renderMarkdownHeading(lines[i]); ok {
+			out = append(out, h)
+			i++
+			continue
+		}
+		// Wrap first (plain text, correct display width), then apply inline
+		// styling per wrapped line so **/` markers don't distort wrap widths.
+		wrapped := wrapText(lines[i], width)
+		for _, wl := range strings.Split(wrapped, "\n") {
+			out = append(out, applyInlineMarkdown(wl))
+		}
 		i++
 	}
-	return strings.Join(result, "\n")
+	return strings.Join(out, "\n")
+}
+
+// mdHeadingStyle / mdBoldStyle / mdCodeStyle style rendered markdown fragments.
+var (
+	mdHeadingStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	mdBoldStyle    = lipgloss.NewStyle().Bold(true)
+	mdCodeStyle    = lipgloss.NewStyle().Foreground(colorAccent)
+)
+
+// renderMarkdownHeading styles an ATX heading line ("# ".."###### "), returning
+// the styled line and true. Non-heading lines return ("", false).
+func renderMarkdownHeading(line string) (string, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	level := 0
+	for level < len(trimmed) && trimmed[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || level >= len(trimmed) || trimmed[level] != ' ' {
+		return "", false
+	}
+	content := strings.TrimSpace(trimmed[level+1:])
+	if content == "" {
+		return "", false
+	}
+	return mdHeadingStyle.Render(content), true
+}
+
+// applyInlineMarkdown styles **bold** and `code` spans within a single line,
+// stripping the markers. Operates on already-wrapped plain text.
+func applyInlineMarkdown(line string) string {
+	if !strings.Contains(line, "**") && !strings.Contains(line, "`") {
+		return line
+	}
+	var b strings.Builder
+	runes := []rune(line)
+	for i := 0; i < len(runes); {
+		// **bold**
+		if runes[i] == '*' && i+1 < len(runes) && runes[i+1] == '*' {
+			if end := indexRunes(runes, i+2, "**"); end >= 0 {
+				b.WriteString(mdBoldStyle.Render(string(runes[i+2 : end])))
+				i = end + 2
+				continue
+			}
+		}
+		// `code`
+		if runes[i] == '`' {
+			if end := indexRunes(runes, i+1, "`"); end >= 0 {
+				b.WriteString(mdCodeStyle.Render(string(runes[i+1 : end])))
+				i = end + 1
+				continue
+			}
+		}
+		b.WriteRune(runes[i])
+		i++
+	}
+	return b.String()
+}
+
+// indexRunes returns the rune index of the next occurrence of marker at or after
+// start, or -1. marker is 1-2 ASCII bytes ("`" or "**").
+func indexRunes(runes []rune, start int, marker string) int {
+	m := []rune(marker)
+	for i := start; i+len(m) <= len(runes); i++ {
+		match := true
+		for j := range m {
+			if runes[i+j] != m[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }
 
 func isTableRow(line string) bool {
@@ -903,69 +990,69 @@ func parseTableCells(line string) []string {
 	return cells
 }
 
-func alignTable(lines []string) []string {
-	// Parse all rows into cells
-	type row struct {
-		cells []string
-		isSep bool
-	}
-	var rows []row
+// renderMarkdownTable renders a contiguous block of markdown table lines (a
+// header row, a separator, and body rows) into a Unicode box-drawing table.
+// Column widths are computed by display width (lipgloss.Width), so CJK, emoji,
+// and inline markdown markers all align correctly — the core fix over the old
+// byte-length alignment. maxW caps the total table width; when the natural table
+// exceeds it, lipgloss wraps cell content within the budget rather than letting
+// rows overflow and shatter.
+func renderMarkdownTable(lines []string, maxW int) string {
+	var headers []string
+	var rows [][]string
 	maxCols := 0
 	for _, line := range lines {
 		if isTableSeparator(line) {
-			rows = append(rows, row{isSep: true})
 			continue
 		}
 		cells := parseTableCells(line)
 		if len(cells) > maxCols {
 			maxCols = len(cells)
 		}
-		rows = append(rows, row{cells: cells})
-	}
-
-	if maxCols == 0 {
-		return lines
-	}
-
-	// Calculate max width per column
-	colWidths := make([]int, maxCols)
-	for _, r := range rows {
-		if r.isSep {
-			continue
-		}
-		for j, cell := range r.cells {
-			if j < maxCols && len(cell) > colWidths[j] {
-				colWidths[j] = len(cell)
-			}
-		}
-	}
-
-	// Render aligned rows
-	var result []string
-	for _, r := range rows {
-		var sb strings.Builder
-		sb.WriteString("|")
-		if r.isSep {
-			for j := range maxCols {
-				sb.WriteString(" ")
-				sb.WriteString(strings.Repeat("-", colWidths[j]))
-				sb.WriteString(" |")
-			}
+		if headers == nil {
+			headers = cells
 		} else {
-			for j := range maxCols {
-				cell := ""
-				if j < len(r.cells) {
-					cell = r.cells[j]
-				}
-				sb.WriteString(" ")
-				sb.WriteString(cell)
-				sb.WriteString(strings.Repeat(" ", colWidths[j]-len(cell)))
-				sb.WriteString(" |")
-			}
+			rows = append(rows, cells)
 		}
-		result = append(result, sb.String())
 	}
-	return result
+	if maxCols == 0 || headers == nil {
+		return strings.Join(lines, "\n")
+	}
+
+	// Normalize ragged rows to the same column count so lipgloss doesn't panic
+	// or misalign when a body row has fewer cells than the header.
+	pad := func(cells []string) []string {
+		out := make([]string, maxCols)
+		copy(out, cells)
+		return out
+	}
+	headers = pad(headers)
+	normRows := make([][]string, len(rows))
+	for i, r := range rows {
+		normRows[i] = pad(r)
+	}
+
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(dimStyle).
+		StyleFunc(func(row, _ int) lipgloss.Style {
+			s := lipgloss.NewStyle().Padding(0, 1)
+			if row == table.HeaderRow {
+				return s.Bold(true)
+			}
+			return s
+		}).
+		Headers(headers...).
+		Rows(normRows...)
+
+	// Only constrain width when the natural render would overflow the budget;
+	// forcing Width on a narrow table stretches it to fill, which looks worse.
+	if maxW > 0 {
+		if natural := t.String(); lipgloss.Width(natural) > maxW {
+			t = t.Width(maxW).Wrap(true)
+		}
+	}
+	return t.String()
 }
 
 // wrapText wraps text to the given width, preserving existing line breaks.

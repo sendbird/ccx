@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -216,31 +217,126 @@ func TestRender_MarkdownTable(t *testing.T) {
 	assertGolden(t, "markdown_table", stripANSIForGolden(rp.content))
 }
 
-func TestFormatMarkdownTables_Alignment(t *testing.T) {
-	input := "| Name | Age |\n|---|---|\n| Alice | 30 |\n| Bob | 7 |"
-	got := formatMarkdownTables(input)
+func TestMarkdownTable_Alignment(t *testing.T) {
+	// ASCII table renders as a box-drawing table with a header separator.
+	got := renderMarkdownTable([]string{
+		"| Name | Age |",
+		"|---|---|",
+		"| Alice | 30 |",
+		"| Bob | 7 |",
+	}, 0)
+	if !strings.Contains(got, "┌") || !strings.Contains(got, "│") {
+		t.Errorf("expected box-drawing chars, got:\n%s", got)
+	}
+	// All rendered lines share the same display width (aligned columns).
 	lines := strings.Split(got, "\n")
-	if len(lines) != 4 {
-		t.Fatalf("got %d lines, want 4", len(lines))
-	}
-	// All lines should have the same length (aligned columns)
-	w := len(lines[0])
+	w := lipgloss.Width(lines[0])
 	for i, line := range lines {
-		if len(line) != w {
-			t.Errorf("line %d length=%d, want %d: %q", i, len(line), w, line)
+		if lipgloss.Width(line) != w {
+			t.Errorf("line %d display width=%d, want %d: %q", i, lipgloss.Width(line), w, line)
 		}
-	}
-	// Header cells should be padded
-	if !strings.Contains(lines[0], "| Name  |") {
-		t.Errorf("expected padded Name, got: %q", lines[0])
 	}
 }
 
-func TestFormatMarkdownTables_NoTable(t *testing.T) {
+func TestMarkdownTable_CJKAlignment(t *testing.T) {
+	// The key regression: CJK/emoji/marker cells must align by DISPLAY width, not
+	// byte length. Every rendered line must have identical display width.
+	got := renderMarkdownTable([]string{
+		"| 능력 | ccx | cv |",
+		"|---|---|---|",
+		"| 프로세스 트리 매핑 | **MarkLiveSessions** | ❌ |",
+		"| pane 점프 | `FindPane` | ❌ |",
+	}, 0)
+	lines := strings.Split(got, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected multi-line table, got:\n%s", got)
+	}
+	w := lipgloss.Width(lines[0])
+	for i, line := range lines {
+		if lipgloss.Width(line) != w {
+			t.Errorf("CJK line %d display width=%d, want %d: %q", i, lipgloss.Width(line), w, line)
+		}
+	}
+}
+
+func TestMarkdownTable_WidthClampWraps(t *testing.T) {
+	// A wide table clamped to a small width must not overflow the budget; cells
+	// wrap inside the box instead of shattering the borders.
+	got := renderMarkdownTable([]string{
+		"| Col A | Col B |",
+		"|---|---|",
+		"| this is a very long first cell that would overflow | short |",
+	}, 40)
+	for _, line := range strings.Split(got, "\n") {
+		if lipgloss.Width(line) > 40 {
+			t.Errorf("line exceeds width budget 40 (got %d): %q", lipgloss.Width(line), line)
+		}
+	}
+	if !strings.Contains(got, "┌") {
+		t.Errorf("expected box-drawing table, got:\n%s", got)
+	}
+}
+
+func TestRenderMarkdownText_TableNotWrapped(t *testing.T) {
+	// renderMarkdownText must leave table rows intact (box borders unbroken) while
+	// still wrapping surrounding prose.
+	text := "Intro line.\n\n| A | B |\n|---|---|\n| x | y |\n\nOutro."
+	got := renderMarkdownText(text, 80)
+	if !strings.Contains(got, "┌") || !strings.Contains(got, "└") {
+		t.Errorf("table borders missing, got:\n%s", got)
+	}
+	if strings.Contains(got, "| A | B |") {
+		t.Errorf("raw markdown table row leaked through unrendered:\n%s", got)
+	}
+}
+
+func TestRenderMarkdownText_NoTable(t *testing.T) {
 	input := "Just regular text\nwith no tables"
-	got := formatMarkdownTables(input)
+	got := renderMarkdownText(input, 80)
 	if got != input {
-		t.Errorf("non-table text should pass through unchanged")
+		t.Errorf("non-table text should pass through unchanged, got: %q", got)
+	}
+}
+
+func TestRenderMarkdownHeading(t *testing.T) {
+	cases := []struct {
+		line string
+		ok   bool
+		want string // content after stripping ANSI
+	}{
+		{"# Title", true, "Title"},
+		{"### Sub heading", true, "Sub heading"},
+		{"###### h6", true, "h6"},
+		{"####### too deep", false, ""},
+		{"#no space", false, ""},
+		{"not a heading", false, ""},
+		{"", false, ""},
+	}
+	for _, c := range cases {
+		got, ok := renderMarkdownHeading(c.line)
+		if ok != c.ok {
+			t.Errorf("renderMarkdownHeading(%q) ok=%v, want %v", c.line, ok, c.ok)
+			continue
+		}
+		if ok && stripANSI(got) != c.want {
+			t.Errorf("renderMarkdownHeading(%q) content=%q, want %q", c.line, stripANSI(got), c.want)
+		}
+	}
+}
+
+func TestApplyInlineMarkdown(t *testing.T) {
+	// Markers are stripped; content preserved (styling verified via ANSI strip).
+	cases := []struct{ in, want string }{
+		{"plain text", "plain text"},
+		{"a **bold** word", "a bold word"},
+		{"use `code` here", "use code here"},
+		{"**b** and `c`", "b and c"},
+		{"unclosed **bold", "unclosed **bold"},
+	}
+	for _, c := range cases {
+		if got := stripANSI(applyInlineMarkdown(c.in)); got != c.want {
+			t.Errorf("applyInlineMarkdown(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 
