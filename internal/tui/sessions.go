@@ -303,10 +303,6 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 	if pi.branch != "" {
 		branch = " (" + pi.branch + ")"
 	}
-	icon := iconFolder
-	if pi.expanded {
-		icon = iconFolderOpen
-	}
 	chev := dimStyle.Render(chevron)
 	name := nameStyle.Render(pi.displayName)
 	br := branchStyle.Render(branch)
@@ -330,7 +326,7 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 		name = highlighted
 	}
 
-	line1 := fmt.Sprintf("%s%s %s  %s%s  %s%s", cursor, chev, icon, name, br, timeStr, badges)
+	line1 := fmt.Sprintf("%s%s %s%s  %s%s", cursor, chev, name, br, timeStr, badges)
 	// Pad/clamp.
 	if selected {
 		bare := lipgloss.Width(line1)
