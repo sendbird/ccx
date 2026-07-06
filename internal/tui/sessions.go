@@ -1754,14 +1754,20 @@ func overlayCenter(bg, fg string, width, height int) string {
 		}
 	}
 
-	// Center offsets
+	// Center offsets. Pull startX left if the modal would overflow the right
+	// edge, so its right border is never truncated by overlayLine. (Only when
+	// the modal is genuinely wider than the screen does clamping to 0 still
+	// leave an overflow, which overlayLine then trims as a last resort.)
 	startY := (height - fgH) / 2
 	startX := (width - fgW) / 2
-	if startY < 0 {
-		startY = 0
-	}
 	if startX < 0 {
 		startX = 0
+	}
+	if startX+fgW > width {
+		startX = max(width-fgW, 0)
+	}
+	if startY < 0 {
+		startY = 0
 	}
 
 	for i, fgLine := range fgLines {
