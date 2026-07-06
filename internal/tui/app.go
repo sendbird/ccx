@@ -1539,9 +1539,9 @@ func (a *App) View() string {
 		screen = a.liveInputModal.render(screen, a.width, a.height)
 	}
 
-	// Cross-session search overlays everything
+	// Cross-session search overlays everything as a centered modal
 	if a.searchActive {
-		screen = a.renderSearchView()
+		screen = a.renderSearchModal(screen)
 	}
 
 	// Kitty inline image layer: draw or clear images each frame.
