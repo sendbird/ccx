@@ -146,6 +146,8 @@ var (
 
 	// Skill and hook styles for message detail
 	skillBlockStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
+	// Monitor tool style — cyan, matching the shells preview Monitor color.
+	monitorBlockStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
 	hookBadgeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB923C"))
 	hookDetailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF")).Italic(true)
 )
