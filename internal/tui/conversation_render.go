@@ -917,6 +917,58 @@ func buildEntityTree(
 		}
 	}
 
+	// --- Monitors / background shells section ---
+	// Long-lived Monitor watchers and backgrounded Bash jobs would otherwise be
+	// invisible in the tree (they render only as inline tool_use blocks). Surface
+	// them as their own section so a fleet operator can see what a session is
+	// watching without scrolling the conversation.
+	if sess.HasShellJobs {
+		shellJobs := sess.ShellJobs
+		if len(shellJobs) == 0 {
+			entries := make([]session.Entry, 0, len(merged))
+			for _, m := range merged {
+				entries = append(entries, m.entry)
+			}
+			shellJobs = session.LoadShellJobsFromEntries(entries)
+		}
+		if len(shellJobs) > 0 {
+			items = append(items, convItem{
+				kind:     convTask,
+				groupTag: "shelljobs",
+				count:    len(shellJobs),
+				folded:   false,
+				indent:   0,
+				label:    "Monitors",
+				task:     session.TaskItem{Subject: fmt.Sprintf("Monitors & BG Shells (%d)", len(shellJobs))},
+			})
+			for _, j := range shellJobs {
+				label := j.Description
+				if label == "" {
+					label = j.Command
+				}
+				if nl := strings.IndexByte(label, '\n'); nl > 0 {
+					label = label[:nl]
+				}
+				kind := "SH"
+				if j.ToolName == "Monitor" {
+					kind = "MON"
+				}
+				// Map job status onto TaskItem status colors: active→in_progress,
+				// killed/stopped→completed (terminal).
+				st := "in_progress"
+				if j.Status == "killed" || j.Status == "stopped" {
+					st = "completed"
+				}
+				items = append(items, convItem{
+					kind:   convTask,
+					task:   session.TaskItem{Subject: label, ID: j.ID, Status: st},
+					indent: 1,
+					label:  compactTreeLabel(kind, label, 44),
+				})
+			}
+		}
+	}
+
 	// --- Task board section ---
 	if len(tasks) > 0 {
 		completed := 0

@@ -223,10 +223,10 @@ func (d sessionDelegate) hiddenBadgeKey() string {
 func (d sessionDelegate) sessionCacheKey(m list.Model, index int, si sessionItem, selected bool) string {
 	filterTerm := listFilterTerm(m)
 	multi := d.selectedSet != nil && d.selectedSet[si.sess.ID]
-	return fmt.Sprintf("s|%d|%d|%t|%t|%s|%s|%s|%d|%t|%d|%d|%d|%s",
+	return fmt.Sprintf("s|%d|%d|%t|%t|%s|%s|%s|%d|%t|%d|%d|%d|%d|%s",
 		m.Width(), index, selected, multi, filterTerm, d.hiddenBadgeKey(), si.sess.ID,
 		si.groupChildren, si.groupFolded, int(si.sess.Lifecycle()), si.sess.MsgCount,
-		si.sess.ModTime.Unix(), si.sess.FirstPrompt)
+		si.sess.MonitorJobCount, si.sess.ModTime.Unix(), si.sess.FirstPrompt)
 }
 
 func (d sessionDelegate) projectCacheKey(m list.Model, index int, pi projectItem, selected bool) string {
@@ -499,7 +499,11 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	// users explicitly want to see which sessions are currently watching
 	// something.
 	if s.IsLive && s.HasMonitorJobs && !hide["MON"] {
-		badges = appendBadge(badges, &badgesW, monBadgeStyle, badgeLabel(iconBadgeMon, "MON"))
+		monLabel := "MON"
+		if s.MonitorJobCount > 1 {
+			monLabel = fmt.Sprintf("MON×%d", s.MonitorJobCount)
+		}
+		badges = appendBadge(badges, &badgesW, monBadgeStyle, badgeLabel(iconBadgeMon, monLabel))
 	}
 	// Custom user badges
 	for _, badge := range s.CustomBadges {

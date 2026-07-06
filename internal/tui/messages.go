@@ -670,6 +670,17 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				} else {
 					buf.WriteString(toolBlockStyle.Render("Tool: Skill"))
 				}
+			} else if block.ToolName == "Monitor" {
+				// Monitors are long-lived background watchers — distinguish them
+				// from one-shot tools with a dedicated color + their description.
+				desc, persistent, ok := session.MonitorInputSummary(block.ToolInput)
+				buf.WriteString(monitorBlockStyle.Render("Monitor"))
+				if persistent {
+					buf.WriteString(dimStyle.Render(" [persistent]"))
+				}
+				if ok && desc != "" {
+					buf.WriteString(monitorBlockStyle.Render(": " + desc))
+				}
 			} else if server, tool, ok := session.MCPToolLabel(block.ToolName); ok {
 				// Split MCP tools into server / tool for readability instead of
 				// the long mcp__server__tool identifier.
