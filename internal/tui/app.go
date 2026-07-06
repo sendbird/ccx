@@ -1062,6 +1062,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		tmux.MarkLiveSessions(msg.sessions)
+		session.EnrichLiveSessions(msg.sessions)
 
 		// Remember cursor position from phase 1
 		selectedID := ""
@@ -4166,6 +4167,7 @@ func (a *App) doRefresh() tea.Cmd {
 		if err == nil && len(fresh) > 0 {
 			// Preserve live state detection
 			tmux.MarkLiveSessions(fresh)
+			session.EnrichLiveSessions(fresh)
 
 			a.sessions = a.injectRemoteSessions(fresh)
 			a.globalStatsCache = nil // invalidate cached stats
@@ -4196,6 +4198,7 @@ func (a *App) doRefresh() tea.Cmd {
 				a.sessions[i].IsCurrentWindow = false
 			}
 			tmux.MarkLiveSessions(a.sessions)
+			session.EnrichLiveSessions(a.sessions)
 			for i := range a.sessions {
 				if a.sessions[i].IsLive != oldLive[i].live {
 					needsSort = true

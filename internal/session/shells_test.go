@@ -93,3 +93,32 @@ func TestMonitorInputSummary(t *testing.T) {
 		t.Error("expected ok=false for bad JSON")
 	}
 }
+
+func TestAwaitingUserInput(t *testing.T) {
+	ask := func(id string) Entry {
+		return Entry{Role: "assistant", Content: []ContentBlock{{Type: "tool_use", ToolName: "AskUserQuestion", ID: id}}}
+	}
+	answer := func(id string) Entry {
+		return Entry{Role: "user", Content: []ContentBlock{{Type: "tool_result", ID: id}}}
+	}
+	text := func(s string) Entry {
+		return Entry{Role: "assistant", Content: []ContentBlock{{Type: "text", Text: s}}}
+	}
+
+	// Unanswered question at the end → awaiting.
+	if !AwaitingUserInput([]Entry{text("hi"), ask("q1")}) {
+		t.Error("unanswered AskUserQuestion should be awaiting")
+	}
+	// Answered → not awaiting.
+	if AwaitingUserInput([]Entry{ask("q1"), answer("q1")}) {
+		t.Error("answered question should not be awaiting")
+	}
+	// No question at all → not awaiting.
+	if AwaitingUserInput([]Entry{text("hi"), text("bye")}) {
+		t.Error("no question should not be awaiting")
+	}
+	// A later unanswered question after an earlier answered one → awaiting.
+	if !AwaitingUserInput([]Entry{ask("q1"), answer("q1"), text("more"), ask("q2")}) {
+		t.Error("latest unanswered question should be awaiting")
+	}
+}

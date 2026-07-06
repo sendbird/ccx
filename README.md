@@ -141,6 +141,8 @@ Browse all Claude Code sessions across projects, sorted by recency.
 | `has:compact` | Uses message compaction |
 | `has:skill` | Used skills |
 | `has:mcp` | Used MCP tools |
+| `is:mon` | Has a Monitor job in flight |
+| `is:input` | Live, awaiting your answer (AskUserQuestion) |
 | `team:NAME` | Filter by team name |
 | `win:NAME` | Filter by tmux window name |
 | `is:current` | Session's project path matches invoker cwd or tmux-window Claude process |
@@ -155,6 +157,8 @@ Each session row carries two kinds of badges. Independent badges can co-occur; l
 
 - `[HERE]` — session belongs to the current tmux window
 - `[LIVE]` — a Claude process is attached to the session
+- `[MON×N]` — N Monitor jobs currently in flight (live sessions)
+- `[INPUT]` — live session blocked on an unanswered AskUserQuestion
 - `[R·exp]` — remote session (experimental)
 - Custom tags — user-applied via `x` → `t` (see [docs/CUSTOM_BADGES.md](docs/CUSTOM_BADGES.md))
 
