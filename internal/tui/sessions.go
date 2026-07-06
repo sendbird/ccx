@@ -253,9 +253,11 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 	if selected {
 		cursor = "> "
 	}
-	chevron := iconFoldOpen
-	if !pi.expanded {
-		chevron = iconFoldClosed
+	// The folder glyph itself conveys fold state (open when expanded), so no
+	// separate chevron is drawn — that pairing was visually redundant.
+	folderIcon := iconFolder
+	if pi.expanded {
+		folderIcon = iconFolderOpen
 	}
 
 	nameStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
@@ -303,7 +305,7 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 	if pi.branch != "" {
 		branch = " (" + pi.branch + ")"
 	}
-	chev := dimStyle.Render(chevron)
+	folder := dimStyle.Render(folderIcon)
 	name := nameStyle.Render(pi.displayName)
 	br := branchStyle.Render(branch)
 	timeStr := timeStyle.Render(timeAgo(pi.bestTime))
@@ -326,7 +328,7 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 		name = highlighted
 	}
 
-	line1 := fmt.Sprintf("%s%s %s%s  %s%s", cursor, chev, name, br, timeStr, badges)
+	line1 := fmt.Sprintf("%s%s %s%s  %s%s", cursor, folder, name, br, timeStr, badges)
 	// Pad/clamp.
 	if selected {
 		bare := lipgloss.Width(line1)
