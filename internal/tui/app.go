@@ -5524,7 +5524,15 @@ func (a *App) buildShellsPreviewContent(sess session.Session) string {
 			tag = dimStyle.Render(" [bg]")
 		}
 
-		headline := fmt.Sprintf("%s %s%s  %s", statusStyle.Render(icon), toolLabel, tag, statusStyle.Render(j.Status))
+		// Status label: when the owning Claude process is live and the job hasn't
+		// been killed, surface it as actively running now (the JSONL-derived
+		// status alone can't tell "still watching" from "last event was a while
+		// ago"). Registry liveness is authoritative for the process being up.
+		statusLabel := j.Status
+		if sess.IsLive && j.Status != "killed" && j.Status != "stopped" {
+			statusLabel = j.Status + " · live"
+		}
+		headline := fmt.Sprintf("%s %s%s  %s", statusStyle.Render(icon), toolLabel, tag, statusStyle.Render(statusLabel))
 		if j.PollCount > 0 {
 			headline += dimStyle.Render(fmt.Sprintf("  (%d polls)", j.PollCount))
 		}

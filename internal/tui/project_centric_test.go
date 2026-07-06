@@ -80,6 +80,10 @@ func TestProjectCentricPickReturnsAllChildSessions(t *testing.T) {
 	app.width = 160
 	app.height = 50
 	app.sessSplit = SplitPane{List: &app.sessionList, ItemHeight: 2}
+	// Hermetic: clear any persisted startup filter from the developer's local
+	// ~/.config/ccx/config.yaml so the project row is actually visible.
+	app.config.SearchQuery = ""
+	app.sessionList.ResetFilter()
 	app.sessGroupMode = groupProjectCentric
 	app.rebuildSessionList()
 	app.state = viewSessions
