@@ -68,6 +68,31 @@ func (s Session) ActiveBashJobCount() int {
 	return n
 }
 
+// MonitorInputSummary extracts a short human label from a Monitor tool_use
+// input JSON: its description (preferred) or, failing that, the first line of
+// its command. Also reports whether the monitor is persistent. Returns
+// ok=false when the input can't be parsed.
+func MonitorInputSummary(toolInput string) (desc string, persistent, ok bool) {
+	var in shellInputMonitor
+	if err := json.Unmarshal([]byte(toolInput), &in); err != nil {
+		return "", false, false
+	}
+	desc = in.Description
+	if desc == "" {
+		desc = firstLine(in.Command)
+	}
+	return desc, in.Persistent, true
+}
+
+func firstLine(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
 // LoadShellJobsFromEntries scans parsed entries for background Bash and Monitor
 // tool invocations. It correlates BashOutput/KillShell calls (which carry a
 // tool_use_id) back to the originating shell so we can show how many polls

@@ -76,3 +76,20 @@ func TestLoadShellJobsFromEntries(t *testing.T) {
 		t.Errorf("monitor timeout: got %d, want 300000", mon.TimeoutMS)
 	}
 }
+
+func TestMonitorInputSummary(t *testing.T) {
+	// Prefers description.
+	desc, persistent, ok := MonitorInputSummary(`{"description":"watch PR #45","persistent":true,"command":"gh pr view 45\nsleep 30"}`)
+	if !ok || desc != "watch PR #45" || !persistent {
+		t.Errorf("got (%q,%v,%v), want (watch PR #45,true,true)", desc, persistent, ok)
+	}
+	// Falls back to first line of command when no description.
+	desc, _, ok = MonitorInputSummary(`{"command":"tail -f log\ngrep ERROR"}`)
+	if !ok || desc != "tail -f log" {
+		t.Errorf("command fallback: got %q, want 'tail -f log'", desc)
+	}
+	// Bad JSON.
+	if _, _, ok := MonitorInputSummary(`not json`); ok {
+		t.Error("expected ok=false for bad JSON")
+	}
+}
