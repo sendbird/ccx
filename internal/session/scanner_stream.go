@@ -146,12 +146,6 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 				sess.HasMonitorJobs = true
 			}
 		}
-		// Count Monitor tool_use blocks independently (each assistant line with a
-		// Monitor tool_use adds one). Cheap byte check per line; not kill-adjusted
-		// — the exact live count is computed lazily from ShellJobs in previews.
-		if bytes.Contains(line, bMonitorTool) || bytes.Contains(line, bMonitorToolS) {
-			sess.MonitorJobCount++
-		}
 
 		// Team detection (check any line for teamName/agentName)
 		if sess.TeamName == "" {

@@ -80,8 +80,8 @@ type Session struct {
 	HasMCP         bool
 	HasShellJobs   bool       // background Bash or Monitor invocations present
 	HasMonitorJobs bool       // Monitor tool invocations present (subset of HasShellJobs)
-	MonitorJobCount int       // number of Monitor tool_use blocks seen during scan (not kill-adjusted)
-	ShellJobs      []ShellJob // populated lazily when HasShellJobs is true
+	ShellJobs      []ShellJob // populated lazily when HasShellJobs is true (and eagerly for live sessions)
+	AwaitingInput  bool       // live session blocked on an unanswered AskUserQuestion
 
 	HasWorkflows bool          // workflow runs recorded under {sessionID}/workflows/
 	Workflows    []WorkflowRun // populated lazily when HasWorkflows is true

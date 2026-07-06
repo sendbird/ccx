@@ -188,85 +188,88 @@ func (a *App) openSearchResult(result session.SearchResult) {
 	}
 }
 
-func (a *App) renderSearchView() string {
-	var sb strings.Builder
+// renderSearchModal renders the cross-session search as a centered modal
+// overlaid on the current screen (bg), instead of a full-screen takeover. The
+// session list stays visible behind it, matching the URL/files/actions menus.
+func (a *App) renderSearchModal(bg string) string {
+	screenW, screenH := a.width, a.height
+
+	// Modal geometry: ~72 cols (capped to screen), body height a fraction of
+	// the screen so results scroll inside the box.
+	modalW := min(72, screenW-6)
+	if modalW < 30 {
+		modalW = max(screenW-4, 20)
+	}
+	innerW := modalW - 2 // account for border+padding horizontal
+	bodyMaxH := max(screenH-8, 6)
 
 	titleStyle := statTitleStyle
-	ruler := dimStyle.Render(strings.Repeat("─", min(a.width-4, 60)))
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
+	descStyle := dimStyle
 
-	// Title and input
-	sb.WriteString("\n")
-	sb.WriteString("  " + titleStyle.Render("SEARCH SESSIONS") + "\n")
-	sb.WriteString("  " + ruler + "\n\n")
+	var sb strings.Builder
+	sb.WriteString(titleStyle.Render("Search Sessions") + "\n")
 
+	// Input row.
+	a.searchInput.Width = max(innerW-4, 10)
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		Padding(0, 1).
-		Width(min(a.width-6, 60)).
-		MarginLeft(2)
+		Width(innerW)
+	sb.WriteString(inputStyle.Render(a.searchInput.View()) + "\n")
 
-	sb.WriteString(inputStyle.Render(a.searchInput.View()) + "\n\n")
-
-	if a.searchLoading {
-		sb.WriteString("  " + dimStyle.Render("Searching...") + "\n")
-		return sb.String()
-	}
-
-	if a.searchQuery != "" && len(a.searchResults) == 0 {
-		sb.WriteString("  " + dimStyle.Render("No results found") + "\n")
-		return sb.String()
-	}
-
-	if len(a.searchResults) > 0 {
-		sb.WriteString(fmt.Sprintf("  %s\n\n", dimStyle.Render(fmt.Sprintf("%d results", len(a.searchResults)))))
-
-		// Render results
-		listHeight := a.height - 12
-		if listHeight < 5 {
-			listHeight = 5
-		}
-		a.searchResultList.SetSize(a.width-4, listHeight)
+	switch {
+	case a.searchLoading:
+		sb.WriteString(dimStyle.Render("Searching…"))
+	case a.searchQuery != "" && len(a.searchResults) == 0:
+		sb.WriteString(dimStyle.Render("No results found"))
+	case len(a.searchResults) > 0:
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("%d results", len(a.searchResults))) + "\n")
+		// Reserve rows already used (title + input box(3) + count + help) so the
+		// list fits inside the modal without overflowing.
+		listH := max(min(len(a.searchResults), bodyMaxH-6), 3)
+		a.searchResultList.SetSize(innerW, listH)
 		sb.WriteString(a.searchResultList.View())
-	} else if a.searchQuery == "" {
-		sb.WriteString("  " + dimStyle.Render("Type a query and press Enter to search") + "\n\n")
-
-		keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
-		descStyle := dimStyle
-
-		sb.WriteString("  " + titleStyle.Render("Syntax") + "\n")
-		sb.WriteString("  " + ruler + "\n")
-		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("word1 word2    "), descStyle.Render("AND match (both must appear)")))
-		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("\"exact phrase\" "), descStyle.Render("phrase match")))
-		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("-exclude       "), descStyle.Render("exclude term from results")))
-		sb.WriteString("\n")
-		sb.WriteString("  " + titleStyle.Render("Filters") + "\n")
-		sb.WriteString("  " + ruler + "\n")
-		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("user:          "), descStyle.Render("only user messages")))
-		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("assistant:     "), descStyle.Render("only assistant responses")))
-		sb.WriteString(fmt.Sprintf("  %s  %s\n", keyStyle.Render("tool:          "), descStyle.Render("only tool usage")))
+	default:
+		// Empty query: compact syntax + filters help.
+		sb.WriteString(dimStyle.Render("Type a query and press Enter.") + "\n\n")
+		sb.WriteString(titleStyle.Render("Syntax") + "\n")
+		sb.WriteString(fmt.Sprintf("%s %s\n", keyStyle.Render("word1 word2 "), descStyle.Render("AND match")))
+		sb.WriteString(fmt.Sprintf("%s %s\n", keyStyle.Render("\"phrase\"    "), descStyle.Render("exact phrase")))
+		sb.WriteString(fmt.Sprintf("%s %s\n", keyStyle.Render("-exclude    "), descStyle.Render("exclude term")))
+		sb.WriteString("\n" + titleStyle.Render("Scopes") + "\n")
+		sb.WriteString(fmt.Sprintf("%s %s\n", keyStyle.Render("user:       "), descStyle.Render("user messages only")))
+		sb.WriteString(fmt.Sprintf("%s %s\n", keyStyle.Render("assistant:  "), descStyle.Render("assistant only")))
+		sb.WriteString(fmt.Sprintf("%s %s", keyStyle.Render("tool:Name   "), descStyle.Render("tool calls (tool:mcp*)")))
 	}
 
-	// Help line at bottom
+	// Help line.
 	var help string
-	if a.searchInput.Focused() {
-		help = "  enter:search  esc:close"
-	} else if len(a.searchResults) > 0 {
-		help = "  ↑↓/jk:nav  enter:open  /:edit  esc:close"
-	} else {
-		help = "  esc:close"
+	switch {
+	case a.searchInput.Focused():
+		help = "enter:search  esc:close"
+	case len(a.searchResults) > 0:
+		help = "↑↓/jk:nav  enter:open  /:edit  esc:close"
+	default:
+		help = "esc:close"
+	}
+	sb.WriteString("\n\n" + dimStyle.Render(help))
+
+	// Clamp body height to fit the screen.
+	body := sb.String()
+	bodyLines := strings.Split(body, "\n")
+	if len(bodyLines) > bodyMaxH {
+		bodyLines = bodyLines[:bodyMaxH]
+		body = strings.Join(bodyLines, "\n")
 	}
 
-	// Add padding to push help to bottom
-	contentHeight := strings.Count(sb.String(), "\n")
-	neededPadding := a.height - contentHeight - 2
-	if neededPadding > 0 {
-		sb.WriteString(strings.Repeat("\n", neededPadding))
-	}
-
-	sb.WriteString("\n" + dimStyle.Render(help))
-
-	return sb.String()
+	modalStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorPrimary).
+		Width(modalW).
+		Padding(0, 1)
+	return overlayCenter(bg, modalStyle.Render(body), screenW, screenH)
 }
 
 func (a *App) updateSearchResults(results []session.SearchResult) {

@@ -154,6 +154,7 @@ type projectItem struct {
 	liveSessions int               // number of live sessions
 	bgSessions   int               // sessions whose lifecycle is BG
 	monSessions  int               // sessions with active monitor jobs
+	inputSessions int              // sessions awaiting user answer (AskUserQuestion)
 	stuckCount   int               // STUCK lifecycle sessions
 	waitCount    int               // WAIT lifecycle sessions
 	doneCount    int               // DONE lifecycle sessions
@@ -209,7 +210,7 @@ func (d sessionDelegate) hiddenBadgeKey() string {
 	if len(d.hiddenBadges) == 0 {
 		return ""
 	}
-	keys := []string{"HERE", "LIVE", "BUSY", "BG", "MON", "WAIT", "DONE", "STUCK"}
+	keys := []string{"HERE", "LIVE", "BUSY", "BG", "MON", "INPUT", "WAIT", "DONE", "STUCK"}
 	var b strings.Builder
 	for _, k := range keys {
 		if d.hiddenBadges[k] {
@@ -223,17 +224,17 @@ func (d sessionDelegate) hiddenBadgeKey() string {
 func (d sessionDelegate) sessionCacheKey(m list.Model, index int, si sessionItem, selected bool) string {
 	filterTerm := listFilterTerm(m)
 	multi := d.selectedSet != nil && d.selectedSet[si.sess.ID]
-	return fmt.Sprintf("s|%d|%d|%t|%t|%s|%s|%s|%d|%t|%d|%d|%d|%d|%s",
+	return fmt.Sprintf("s|%d|%d|%t|%t|%s|%s|%s|%d|%t|%d|%d|%d|%t|%d|%s",
 		m.Width(), index, selected, multi, filterTerm, d.hiddenBadgeKey(), si.sess.ID,
 		si.groupChildren, si.groupFolded, int(si.sess.Lifecycle()), si.sess.MsgCount,
-		si.sess.MonitorJobCount, si.sess.ModTime.Unix(), si.sess.FirstPrompt)
+		si.sess.ActiveMonitorCount(), si.sess.AwaitingInput, si.sess.ModTime.Unix(), si.sess.FirstPrompt)
 }
 
 func (d sessionDelegate) projectCacheKey(m list.Model, index int, pi projectItem, selected bool) string {
-	return fmt.Sprintf("p|%d|%d|%t|%s|%s|%t|%d|%d|%d|%d|%d|%d|%d|%d|%s",
+	return fmt.Sprintf("p|%d|%d|%t|%s|%s|%t|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s",
 		m.Width(), index, selected, listFilterTerm(m), d.hiddenBadgeKey(), pi.expanded,
 		len(pi.sessions), pi.totalMsgs, pi.liveSessions, pi.bgSessions, pi.monSessions,
-		pi.stuckCount, pi.waitCount, pi.doneCount, pi.basePath)
+		pi.inputSessions, pi.stuckCount, pi.waitCount, pi.doneCount, pi.basePath)
 }
 
 // renderProject draws a folder-style row for a project: chevron + name +
@@ -289,6 +290,9 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 	}
 	if pi.monSessions > 0 && !hide["MON"] {
 		badges = appendBadge(badges, &badgesW, monBadgeStyle, badgeLabel(iconBadgeMon, fmt.Sprintf("MON×%d", pi.monSessions)))
+	}
+	if pi.inputSessions > 0 && !hide["INPUT"] {
+		badges = appendBadge(badges, &badgesW, inputBadgeStyle, badgeLabel(iconBadgeInput, fmt.Sprintf("INPUT×%d", pi.inputSessions)))
 	}
 	if pi.stuckCount > 0 && !hide["STUCK"] {
 		badges = appendBadge(badges, &badgesW, stuckBadgeStyle, badgeLabel(iconBadgeStuck, fmt.Sprintf("STUCK×%d", pi.stuckCount)))
@@ -497,11 +501,20 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	// users explicitly want to see which sessions are currently watching
 	// something.
 	if s.IsLive && s.HasMonitorJobs && !hide["MON"] {
-		monLabel := "MON"
-		if s.MonitorJobCount > 1 {
-			monLabel = fmt.Sprintf("MON×%d", s.MonitorJobCount)
+		// ActiveMonitorCount is kill/stop-adjusted from the loaded ShellJobs
+		// (populated for live sessions), so a count of 0 means every monitor has
+		// ended — hide the badge in that case.
+		if n := s.ActiveMonitorCount(); n > 0 {
+			monLabel := "MON"
+			if n > 1 {
+				monLabel = fmt.Sprintf("MON×%d", n)
+			}
+			badges = appendBadge(badges, &badgesW, monBadgeStyle, badgeLabel(iconBadgeMon, monLabel))
 		}
-		badges = appendBadge(badges, &badgesW, monBadgeStyle, badgeLabel(iconBadgeMon, monLabel))
+	}
+	// Live session blocked on an unanswered question — the user needs to act.
+	if s.IsLive && s.AwaitingInput && !hide["INPUT"] {
+		badges = appendBadge(badges, &badgesW, inputBadgeStyle, badgeLabel(iconBadgeInput, "INPUT"))
 	}
 	// Custom user badges
 	for _, badge := range s.CustomBadges {
@@ -1368,8 +1381,11 @@ func buildProjectCentricItems(sessions []session.Session, folded map[string]bool
 			if s.IsCurrentWindow {
 				pi.hereCount++
 			}
-			if s.HasMonitorJobs && s.IsLive {
+			if s.IsLive && s.ActiveMonitorCount() > 0 {
 				pi.monSessions++
+			}
+			if s.IsLive && s.AwaitingInput {
+				pi.inputSessions++
 			}
 			switch s.Lifecycle() {
 			case session.LifecycleBusy:
@@ -1529,6 +1545,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{busyBadge, badgeLabel(iconBadgeBusy, "BUSY"), "Responding now"},
 		{bgBadgeStyle, badgeLabel(iconBadgeBg, "BG"), "Background shell/monitor/cron"},
 		{monBadgeStyle, badgeLabel(iconBadgeMon, "MON"), "Monitor tool currently in flight"},
+		{inputBadgeStyle, badgeLabel(iconBadgeInput, "INPUT"), "Awaiting your answer (AskUserQuestion)"},
 		{waitBadgeStyle, badgeLabel(iconBadgeWait, "WAIT"), "Idle, waiting for user"},
 		{doneBadgeStyle, badgeLabel(iconBadgeDone, "DONE"), "All work completed"},
 		{stuckBadgeStyle, badgeLabel(iconBadgeStuck, "STUCK"), "Live but stale with unfinished work"},
@@ -1570,6 +1587,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{"has:skill", "With skills"},
 		{"has:mcp", "With MCP tools"},
 		{"is:mon", "Monitor in flight"},
+		{"is:input", "Awaiting user answer"},
 		{"proj:<name>", "By project name"},
 		{"team:<name>", "By team name"},
 		{"is:fork", "Forked sessions"},

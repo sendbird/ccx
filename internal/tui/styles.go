@@ -34,6 +34,7 @@ const (
 	iconBadgeDone     = ""
 	iconBadgeWait     = ""
 	iconBadgeStuck    = ""
+	iconBadgeInput    = "" // live session awaiting user answer (AskUserQuestion)
 	iconBadgeRemote   = ""
 	iconTrendUp       = "▴"
 	iconTrendDown     = "▾"
@@ -103,6 +104,7 @@ var (
 	waitBadgeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true)
 	doneBadgeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
 	stuckBadgeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Bold(true)
+	inputBadgeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#EC4899")).Bold(true)
 	customBadgeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#84CC16")).Bold(true).Italic(true)
 	blockCursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 	blockSelectedBg     = lipgloss.NewStyle().Background(lipgloss.Color("#1E293B"))

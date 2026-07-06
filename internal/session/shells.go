@@ -93,6 +93,72 @@ func firstLine(s string) string {
 	return s
 }
 
+// LoadShellJobs reads a session's JSONL and returns its shell/monitor jobs.
+// Convenience wrapper over LoadMessages + LoadShellJobsFromEntries.
+func LoadShellJobs(filePath string) []ShellJob {
+	entries, err := LoadMessages(filePath)
+	if err != nil {
+		return nil
+	}
+	return LoadShellJobsFromEntries(entries)
+}
+
+// EnrichLiveSessions fills the per-session runtime detail that only matters for
+// live sessions and is too expensive to compute for every session during the
+// fast scan: the ShellJobs list (for active-monitor counts) and the
+// AwaitingInput flag (unanswered AskUserQuestion). Non-live sessions are left
+// untouched. One JSONL read per live session; the live set is small.
+func EnrichLiveSessions(sessions []Session) {
+	for i := range sessions {
+		if !sessions[i].IsLive {
+			continue
+		}
+		if sessions[i].FilePath == "" {
+			continue
+		}
+		entries, err := LoadMessages(sessions[i].FilePath)
+		if err != nil {
+			continue
+		}
+		if sessions[i].HasShellJobs {
+			sessions[i].ShellJobs = LoadShellJobsFromEntries(entries)
+		}
+		sessions[i].AwaitingInput = AwaitingUserInput(entries)
+	}
+}
+
+// AwaitingUserInput reports whether the session's last tool interaction is an
+// unanswered AskUserQuestion — i.e. Claude asked the user a question and is
+// blocked waiting for the answer. Detected purely from the JSONL: the most
+// recent AskUserQuestion tool_use has no matching tool_result. Only meaningful
+// for live sessions.
+func AwaitingUserInput(entries []Entry) bool {
+	// Find the last AskUserQuestion tool_use and collect all tool_result IDs
+	// that appear after it.
+	lastAskID := ""
+	lastAskIdx := -1
+	for i := range entries {
+		for _, b := range entries[i].Content {
+			if b.Type == "tool_use" && b.ToolName == "AskUserQuestion" {
+				lastAskID = b.ID
+				lastAskIdx = i
+			}
+		}
+	}
+	if lastAskIdx < 0 || lastAskID == "" {
+		return false
+	}
+	// Look for a tool_result referencing that ID at or after the ask.
+	for i := lastAskIdx; i < len(entries); i++ {
+		for _, b := range entries[i].Content {
+			if b.Type == "tool_result" && b.ID == lastAskID {
+				return false // answered
+			}
+		}
+	}
+	return true
+}
+
 // LoadShellJobsFromEntries scans parsed entries for background Bash and Monitor
 // tool invocations. It correlates BashOutput/KillShell calls (which carry a
 // tool_use_id) back to the originating shell so we can show how many polls
