@@ -69,6 +69,9 @@ func (a *App) sessHelpLine() string {
 	// Normal session list/preview
 	sk := a.keymap.Session
 	h := fmtKey(sk.Open, "open") + " " + fmtKey(sk.Edit, "edit") + " " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Views, "views") + " " + fmtKey(sk.Refresh, "refresh")
+	if a.notifyUnreadCount() > 0 {
+		h += " n:notify"
+	}
 	if a.config.PickMode {
 		h = fmtKey(sk.Pick, "pick") + " " + h
 	}
@@ -80,6 +83,8 @@ func (a *App) sessHelpLine() string {
 			h += " ↑↓:nav c:full " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Open, "jump") + " ←:unfocus /:search tab:mode"
 		case sessPreviewAgents:
 			h += " ↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
+		case sessPreviewWorkflows:
+			h += " ↑↓:agent ↵:transcript ←:unfocus tab:mode"
 		default:
 			h += " ↑↓:scroll ←:unfocus tab:mode"
 		}

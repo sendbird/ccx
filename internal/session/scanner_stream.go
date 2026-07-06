@@ -235,6 +235,9 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 	// Check for subagents
 	sess.HasAgents = hasSubagents(path)
 
+	// Check for workflow runs
+	sess.HasWorkflows = HasWorkflows(path)
+
 	// Load custom badges
 	if badgeStore != nil {
 		sess.CustomBadges = badgeStore.Get(sess.ID)

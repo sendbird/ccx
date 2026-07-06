@@ -441,6 +441,22 @@ func mcpServerLabel(toolName string) string {
 	return strings.ReplaceAll(parts[0], "_", " ")
 }
 
+// MCPToolLabel splits an mcp__server__tool name into a display server and tool.
+// Returns ok=false for non-MCP tool names. E.g.
+// "mcp__portal__loggerhead_search_logs" → ("portal", "loggerhead_search_logs").
+func MCPToolLabel(toolName string) (server, tool string, ok bool) {
+	if !strings.HasPrefix(toolName, "mcp__") {
+		return "", "", false
+	}
+	trimmed := strings.TrimPrefix(toolName, "mcp__")
+	parts := strings.SplitN(trimmed, "__", 2)
+	server = parts[0]
+	if len(parts) == 2 {
+		tool = parts[1]
+	}
+	return server, tool, true
+}
+
 func usedHookNodes(entries []Entry) []ContextNode {
 	seen := map[string]ContextNode{}
 	for _, entry := range entries {

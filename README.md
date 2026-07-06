@@ -118,7 +118,8 @@ Browse all Claude Code sessions across projects, sorted by recency.
   - **Chain** — resume-chain grouping (parent → child)
   - **Fork** — agent-fork grouping
 - **Directory filter** (`g`) — scope to a single project directory
-- **Preview pane** (`Tab` to cycle): conversation, stats, memory, tasks/plan, live
+- **Preview pane** (`Tab` to cycle): conversation, stats, memory, tasks/plan, workflows, live
+- **Fleet notifications** — when a live session transitions into an attention state (→ `WAIT`/`DONE`/`STUCK`), a `(!)N` indicator appears in the status bar; press `n` to jump to the most recently notified session
 - **Multi-select** (`Space`) — bulk delete, copy paths, send input
 - **Actions menu** (`x`) — delete, move, resume, copy path, worktree, kill, input, jump, URLs, files
 - **Command mode** (`:`) — vim-style commands with fuzzy suggestions
@@ -211,7 +212,7 @@ Drill into any session to read the full conversation.
 - **Block navigation** (`↑`/`↓`) — navigate text, tool calls, and results
 - **Fold/unfold** (`←`/`→`, `f`/`F`) — collapse/expand content blocks
 - **System tag folding** — `<system-reminder>`, `<task-notification>`, `<available-deferred-tools>`, etc. are folded by default, expandable on demand
-- **Block filter** (`/`) — filter by `is:tool`, `is:hook`, `is:error`, `is:skill`, `tool:Name`
+- **Block filter** (`/`) — filter by `is:tool`, `is:hook`, `is:error`, `is:skill`, `is:mcp`, `tool:Name`, `tool:Prefix*` (e.g. `tool:mcp*`)
 - **Subagent drill-down** (`Enter` on agent) — recursive navigation into sub-sessions with back-stack
 - **Side-question context** — background context from parent sessions is collapsed into a summary; only the actual question/answer is shown
 - **Full conversation** (`c`) — scrollable concatenated view with search (`/`) and copy mode
@@ -392,7 +393,7 @@ Available from any view. Suggestions are context-aware — only relevant command
 | `view:config:hooks` | All | Config → hooks filter |
 | `view:plugins` | All | Open plugin explorer |
 | `group:flat\|proj\|tree\|chain\|fork` | Sessions | Change grouping mode |
-| `preview:conv\|stats\|mem\|tasks\|live` | Sessions | Change preview mode |
+| `preview:conv\|stats\|mem\|tasks\|wf\|live` | Sessions | Change preview mode (`wf` = workflow runs) |
 | `set:ratio N` | Sessions | Set split pane ratio (15-85) |
 | `page:memory\|hooks\|mcp\|skills\|keymaps\|shortcuts\|...` | Config | Filter config category |
 | `page:tools\|errors\|overview` | Stats | Switch stats page |

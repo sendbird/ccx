@@ -81,7 +81,7 @@ func TestCyclePreviewModeSkipsLive(t *testing.T) {
 	}
 
 	// Verify we visit all other modes
-	for _, mode := range []sessPreview{sessPreviewConversation, sessPreviewStats, sessPreviewMemory, sessPreviewTasksPlan, sessPreviewAgents, sessPreviewShells, sessPreviewContexts} {
+	for _, mode := range []sessPreview{sessPreviewConversation, sessPreviewStats, sessPreviewMemory, sessPreviewTasksPlan, sessPreviewAgents, sessPreviewWorkflows, sessPreviewShells, sessPreviewContexts} {
 		if !visited[mode] {
 			t.Errorf("cycleSessionPreviewMode should visit mode %d", mode)
 		}
@@ -388,6 +388,7 @@ func TestPreviewModeConstants(t *testing.T) {
 		sessPreviewMemory,
 		sessPreviewTasksPlan,
 		sessPreviewAgents,
+		sessPreviewWorkflows,
 		sessPreviewShells,
 		sessPreviewContexts,
 		sessPreviewLive,
@@ -403,5 +404,47 @@ func TestPreviewModeConstants(t *testing.T) {
 		if int(m) != i {
 			t.Errorf("mode %d has value %d, expected %d", i, int(m), i)
 		}
+	}
+}
+
+// TestRefreshLivePreviewDoesNotClobberLiveMode guards the regression where the
+// live tmux pane preview was overwritten (with the memory preview) on every
+// tick because refreshSessionPreviewLive's fallback branch called
+// updateSessionMemoryPreview for any non-conversation mode — including
+// sessPreviewLive.
+func TestRefreshLivePreviewDoesNotClobberLiveMode(t *testing.T) {
+	app := newTestApp(fakeSessions())
+	app.sessionList.Select(0)
+	sess, ok := app.selectedSession()
+	if !ok || !sess.IsLive {
+		t.Fatalf("expected a live session selected, got ok=%v live=%v", ok, sess.IsLive)
+	}
+	app.sessSplit.Show = true
+	app.sessPreviewMode = sessPreviewLive
+
+	// Sentinel: the memory builder path resets sessMemoryCacheKey to "". If a
+	// live-mode refresh leaves this untouched, it did not fall through to the
+	// memory preview (the bug).
+	app.sessMemoryCacheKey = "LIVE-GUARD"
+	app.refreshSessionPreviewLive()
+
+	if app.sessPreviewMode != sessPreviewLive {
+		t.Errorf("refresh changed preview mode away from live: %d", app.sessPreviewMode)
+	}
+	if app.sessMemoryCacheKey != "LIVE-GUARD" {
+		t.Error("refreshSessionPreviewLive fell through to the memory preview in live mode")
+	}
+}
+
+// TestRefreshLivePreviewRemoteUntouched: remote mode must likewise be left alone.
+func TestRefreshLivePreviewRemoteUntouched(t *testing.T) {
+	app := newTestApp(fakeSessions())
+	app.sessionList.Select(0)
+	app.sessSplit.Show = true
+	app.sessPreviewMode = sessPreviewRemote
+	app.sessMemoryCacheKey = "REMOTE-GUARD"
+	app.refreshSessionPreviewLive()
+	if app.sessMemoryCacheKey != "REMOTE-GUARD" {
+		t.Error("refreshSessionPreviewLive clobbered remote mode via memory preview")
 	}
 }

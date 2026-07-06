@@ -259,6 +259,10 @@ type App struct {
 	// Badge visibility
 	hiddenBadges map[string]bool
 
+	// Fleet notifications: lifecycle transitions across live sessions.
+	notifyPrev  map[string]session.LifecycleState // last-seen lifecycle per session ID
+	notifyInbox []session.NotifyEvent             // unread notable transitions (newest last)
+
 	// Live input: prefer $EDITOR mode
 	editorInput bool
 
@@ -322,6 +326,11 @@ type App struct {
 	sessShellsCacheKey   string
 	sessContextsCache    string
 	sessContextsCacheKey string
+	sessWorkflowsCache   string
+	sessWorkflowsCacheKey string
+	sessWfRuns           []session.WorkflowRun // parsed runs for the selected session
+	sessWfAgents         []session.Subagent    // workflow-nested agents (label-joined), drill-down targets
+	sessWfCursor         int                   // cursor within the workflow agent list
 	sessPreviewAgents    []session.Subagent // agents shown in Tasks/Plan preview
 	sessAgentCursor      int                // cursor within agents list
 
@@ -684,11 +693,12 @@ const (
 	sessPreviewMemory
 	sessPreviewTasksPlan
 	sessPreviewAgents
+	sessPreviewWorkflows
 	sessPreviewShells
 	sessPreviewContexts
 	sessPreviewLive     // tmux pane capture
 	sessPreviewRemote   // remote session status/stream
-	numSessPreviewModes = 9
+	numSessPreviewModes = 10
 )
 
 // Config holds application configuration from CLI flags.
@@ -732,6 +742,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		splitRatio:          35,
 		selectedSet:         make(map[string]bool),
 		hiddenBadges:        make(map[string]bool),
+		notifyPrev:          make(map[string]session.LifecycleState),
 		sessionRowCache:     newSessionRowCache(1024),
 		convPreviewRowCache: newSessionRowCache(4096),
 		termFocused:         true,
@@ -783,7 +794,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	// of the projects view.
 	a.sessGroupMode = groupProjectCentric
 	if a.config.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "live": sessPreviewLive}
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
@@ -1706,6 +1717,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m, cmd, _ := a.jumpToAgentConversation()
 			return m, cmd
 		}
+		// If Workflows preview is focused, drill into the selected agent transcript
+		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewWorkflows && len(a.sessWfAgents) > 0 {
+			m, cmd, _ := a.drillIntoWorkflowAgent()
+			return m, cmd
+		}
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
@@ -1783,6 +1799,17 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := a.doRefresh()
 		a.copiedMsg = "Refreshed"
 		return a, cmd
+	case "n":
+		// Jump to the most recent fleet notification's session.
+		if a.notifyUnreadCount() == 0 {
+			return a, nil
+		}
+		if a.jumpToNotification() {
+			a.copiedMsg = "Jumped to notified session"
+		} else {
+			a.copiedMsg = "Notified session not visible"
+		}
+		return a, nil
 	case km.Session.Views:
 		a.viewsMenu = true
 		return a, nil
@@ -2003,6 +2030,9 @@ func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, te
 	if a.sessPreviewMode == sessPreviewAgents && len(a.sessPreviewAgents) > 0 {
 		return a.handleTasksPreviewKeys(sp, key)
 	}
+	if a.sessPreviewMode == sessPreviewWorkflows && len(a.sessWfAgents) > 0 {
+		return a.handleWorkflowsPreviewKeys(sp, key)
+	}
 	switch key {
 	case "/":
 		sp.Focus = false
@@ -2061,6 +2091,67 @@ func (a *App) jumpToAgentConversation() (tea.Model, tea.Cmd, bool) {
 	cmd := a.openConversation(sess)
 
 	// Switch to tree view and find the agent
+	a.setConvLeftPaneMode(convPaneTree)
+	for i, item := range a.convList.Items() {
+		ci, ok := item.(convItem)
+		if !ok {
+			continue
+		}
+		if ci.kind == convAgent && (ci.agent.ID == agent.ID || ci.agent.ShortID == agent.ShortID) {
+			a.convList.Select(i)
+			break
+		}
+	}
+	a.updateConvPreview()
+	return a, cmd, true
+}
+
+// handleWorkflowsPreviewKeys handles cursor navigation + drill-down for the
+// workflow preview. Enter opens the selected workflow agent's full transcript.
+func (a *App) handleWorkflowsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
+	case "enter":
+		return a.drillIntoWorkflowAgent()
+	case "/":
+		sp.Focus = false
+		return a, startListSearch(&a.sessionList), true
+	}
+	switch HandleFlatCursorNav(&a.sessWfCursor, len(a.sessWfAgents), key) {
+	case NavCursorMoved:
+		if sess, ok := a.selectedSession(); ok {
+			previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+			sp.Preview.SetContent(a.buildWorkflowsPreviewContent(sess, previewW))
+		}
+		if key == "up" || key == "k" {
+			sp.Preview.LineUp(1)
+		} else if key == "down" || key == "j" {
+			sp.Preview.LineDown(1)
+		}
+		return a, nil, true
+	case NavBoundaryDown, NavBoundaryUp:
+		return a, nil, true
+	}
+	if scrollViewport(&sp.Preview, key) {
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// drillIntoWorkflowAgent opens the conversation view for the current session and
+// navigates into the workflow agent under the cursor — its full transcript,
+// which the workflow run summary only previews.
+func (a *App) drillIntoWorkflowAgent() (tea.Model, tea.Cmd, bool) {
+	if a.sessWfCursor < 0 || a.sessWfCursor >= len(a.sessWfAgents) {
+		return a, nil, true
+	}
+	agent := a.sessWfAgents[a.sessWfCursor]
+	sess, ok := a.selectedSession()
+	if !ok {
+		return a, nil, true
+	}
+	a.currentSess = sess
+	cmd := a.openConversation(sess)
+
 	a.setConvLeftPaneMode(convPaneTree)
 	for i, item := range a.convList.Items() {
 		ci, ok := item.(convItem)
@@ -2370,6 +2461,8 @@ func (a *App) handleSessPageMenu(key string) (tea.Model, tea.Cmd) {
 		a.setSessPreviewMode(sessPreviewTasksPlan)
 	case "a":
 		a.setSessPreviewMode(sessPreviewAgents)
+	case "w":
+		a.setSessPreviewMode(sessPreviewWorkflows)
 	case "c":
 		a.setSessPreviewMode(sessPreviewContexts)
 	case "l":
@@ -2390,7 +2483,7 @@ func (a *App) renderSessPageHintBox() string {
 	line1 := hl.Render("v") + d.Render(":conv") + sp + hl.Render("s") + d.Render(":stats")
 	line2 := hl.Render("m") + d.Render(":mem") + sp + hl.Render("t") + d.Render(":tasks")
 	line3 := hl.Render("a") + d.Render(":agents") + sp + hl.Render("l") + d.Render(":live")
-	line4 := hl.Render("c") + d.Render(":contexts")
+	line4 := hl.Render("w") + d.Render(":workflows") + sp + hl.Render("c") + d.Render(":contexts")
 	body := strings.Join([]string{line1, line2, line3, line4, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -4121,6 +4214,9 @@ func (a *App) doRefresh() tea.Cmd {
 			}
 		}
 
+		// Detect notable lifecycle transitions across the fleet and queue them.
+		a.collectNotifications()
+
 		// Refresh preview for live sessions (auto-scroll to bottom)
 		a.refreshSessionPreviewLive()
 
@@ -4416,6 +4512,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		a.updateSessionTasksPlanPreview(sess)
 	case sessPreviewAgents:
 		a.updateSessionAgentsPreview(sess)
+	case sessPreviewWorkflows:
+		a.updateSessionWorkflowsPreview(sess)
 	case sessPreviewShells:
 		a.updateSessionShellsPreview(sess)
 	case sessPreviewContexts:
@@ -5059,6 +5157,193 @@ func (a *App) updateSessionAgentsPreview(sess session.Session) {
 	a.sessSplit.Preview.SetContent(a.buildAgentsPreviewContent(sess))
 }
 
+func (a *App) updateSessionWorkflowsPreview(sess session.Session) {
+	// Load + join workflow runs and their nested agents once per session, so the
+	// cursor can drill into any agent's transcript.
+	if a.sessWorkflowsCacheKey != sess.ID {
+		a.sessWfRuns, _ = session.FindWorkflows(sess.FilePath)
+		allAgents, _ := session.FindSubagents(sess.FilePath)
+		a.sessWfAgents = session.JoinWorkflowAgents(a.sessWfRuns, allAgents)
+		a.sessWfCursor = 0
+		a.sessWorkflowsCacheKey = sess.ID
+	}
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	contentH := max(a.height-3, 1)
+	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	a.sessSplit.Preview.SetContent(a.buildWorkflowsPreviewContent(sess, previewW))
+}
+
+// buildWorkflowsPreviewContent renders the workflow runs recorded for a session
+// as an interactive list: per-run header (name/status/metrics), the phase list,
+// and each agent's label/state/tokens/tool-calls with a result preview. The
+// agent under sessWfCursor is highlighted; Enter drills into that agent's full
+// transcript (something Claude's own workflow view can't do — it only shows the
+// result). Agent rows are indexed to match a.sessWfAgents so the cursor maps to
+// a real drill-down target.
+func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) string {
+	runs := a.sessWfRuns
+	if len(runs) == 0 {
+		runs, _ = session.FindWorkflows(sess.FilePath)
+	}
+	if len(runs) == 0 {
+		return dimStyle.Render("No workflow runs found.")
+	}
+
+	focused := a.sessSplit.Focus
+	// Map agentID → index in a.sessWfAgents (drill-down order / cursor space).
+	cursorIdx := make(map[string]int, len(a.sessWfAgents))
+	for i, ag := range a.sessWfAgents {
+		cursorIdx[ag.ID] = i
+	}
+	hasDrill := len(a.sessWfAgents) > 0
+
+	var sb strings.Builder
+	if hasDrill {
+		hint := "↑↓:agent  enter:open transcript"
+		if !focused {
+			hint = "→:focus, then ↑↓/enter to drill into agents"
+		}
+		sb.WriteString(dimStyle.Render(hint) + "\n\n")
+	}
+
+	for ri, r := range runs {
+		if ri > 0 {
+			sb.WriteString("\n")
+		}
+		name := r.Name
+		if name == "" {
+			name = r.RunID
+		}
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("── %s ──", name)) + "\n")
+
+		// Status + metrics line.
+		statusStyle := dimStyle
+		switch r.Status {
+		case "completed":
+			statusStyle = lipgloss.NewStyle().Foreground(colorAccent)
+		case "error", "failed":
+			statusStyle = lipgloss.NewStyle().Foreground(colorError)
+		case "running":
+			statusStyle = lipgloss.NewStyle().Foreground(colorAssistant)
+		}
+		meta := fmt.Sprintf("  %s", statusStyle.Render(orDash(r.Status)))
+		if r.AgentCount > 0 {
+			meta += dimStyle.Render(fmt.Sprintf("  ·  %d agents", r.AgentCount))
+		}
+		if r.TotalTokens > 0 {
+			meta += dimStyle.Render(fmt.Sprintf("  ·  %s tok", fmtNum(r.TotalTokens)))
+		}
+		if r.TotalToolCalls > 0 {
+			meta += dimStyle.Render(fmt.Sprintf("  ·  %d tools", r.TotalToolCalls))
+		}
+		if r.DurationMS > 0 {
+			meta += dimStyle.Render("  ·  " + formatDurationMS(r.DurationMS))
+		}
+		sb.WriteString(meta + "\n")
+		if r.Summary != "" {
+			sb.WriteString(dimStyle.Render("  "+r.Summary) + "\n")
+		}
+		sb.WriteString("\n")
+
+		// Phases.
+		if len(r.Phases) > 0 {
+			var titles []string
+			for _, p := range r.Phases {
+				titles = append(titles, p.Title)
+			}
+			sb.WriteString(dimStyle.Render("  phases: "+strings.Join(titles, " → ")) + "\n\n")
+		}
+
+		// Agents.
+		for _, ag := range r.Agents {
+			icon := iconIdle
+			style := dimStyle
+			switch ag.State {
+			case "done":
+				icon = iconDone
+				style = lipgloss.NewStyle().Foreground(colorAccent)
+			case "error", "failed":
+				icon = iconIdle
+				style = lipgloss.NewStyle().Foreground(colorError)
+			case "running":
+				icon = iconActive
+				style = lipgloss.NewStyle().Foreground(colorAssistant)
+			}
+			label := ag.Label
+			if label == "" {
+				label = ag.AgentID
+			}
+
+			// Cursor marker when this agent is the drill-down target.
+			marker := "  "
+			ci, drillable := cursorIdx[ag.AgentID]
+			if drillable && focused && ci == a.sessWfCursor {
+				marker = selectMarkStyle.Render("> ")
+			}
+
+			line := fmt.Sprintf("%s%s %s", marker, icon, label)
+			if ag.PhaseTitle != "" {
+				line += dimStyle.Render("  ["+ag.PhaseTitle+"]")
+			}
+			sb.WriteString(style.Render(line))
+			var stats []string
+			if ag.Tokens > 0 {
+				stats = append(stats, fmtNum(ag.Tokens)+" tok")
+			}
+			if ag.ToolCalls > 0 {
+				stats = append(stats, fmt.Sprintf("%d tools", ag.ToolCalls))
+			}
+			if ag.DurationMS > 0 {
+				stats = append(stats, formatDurationMS(ag.DurationMS))
+			}
+			if drillable {
+				stats = append(stats, "↵ transcript")
+			}
+			if len(stats) > 0 {
+				sb.WriteString(dimStyle.Render("  " + strings.Join(stats, " · ")))
+			}
+			sb.WriteString("\n")
+			if ag.ResultPreview != "" {
+				preview := ag.ResultPreview
+				if idx := strings.IndexByte(preview, '\n'); idx > 0 {
+					preview = preview[:idx]
+				}
+				sb.WriteString(dimStyle.Render("      "+truncate(preview, max(width-8, 20))) + "\n")
+			}
+		}
+
+		// Final result.
+		if strings.TrimSpace(r.Result) != "" {
+			sb.WriteString("\n" + dimStyle.Render("  result:") + "\n")
+			result := renderMarkdownText(r.Result, max(width-4, 20))
+			for _, ln := range strings.Split(result, "\n") {
+				sb.WriteString("  " + ln + "\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
+// orDash returns s, or "—" when empty.
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// formatDurationMS renders a millisecond duration compactly (e.g. "4m55s").
+func formatDurationMS(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+}
+
 func (a *App) updateSessionShellsPreview(sess session.Session) {
 	if a.sessShellsCacheKey != sess.ID {
 		a.sessShellsCache = a.buildShellsPreviewContent(sess)
@@ -5504,26 +5789,57 @@ func (a *App) buildMemoryContent(sess session.Session) string {
 		sb.WriteString("\n")
 	}
 
-	// Auto-memory files
-	encoded := session.EncodeProjectPath(sess.ProjectPath)
-	memDir := home + "/.claude/projects/" + encoded + "/memory"
-	if entries, err := os.ReadDir(memDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			data, err := os.ReadFile(memDir + "/" + e.Name())
-			if err != nil || len(data) == 0 {
-				continue
-			}
-			sb.WriteString(dimStyle.Render("── "+e.Name()+" ──") + "\n\n")
-			sb.WriteString(strings.TrimRight(string(data), "\n") + "\n\n")
-		}
+	// Memory notes — parsed with frontmatter (name/description/type), index first.
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 20)
+	notes := session.LoadMemoryNotes(sess.ProjectPath, home)
+	for _, note := range notes {
+		sb.WriteString(a.renderMemoryNote(note, previewW))
 	}
 
 	if sb.Len() == 0 {
 		return dimStyle.Render("No memory or todos found.")
 	}
+	return sb.String()
+}
+
+// memTypeStyle colors a memory note's type tag.
+func memTypeStyle(t string) lipgloss.Style {
+	switch t {
+	case "user":
+		return lipgloss.NewStyle().Foreground(colorUser).Bold(true)
+	case "feedback":
+		return lipgloss.NewStyle().Foreground(colorAssistant).Bold(true)
+	case "project":
+		return lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	case "reference":
+		return dimStyle.Bold(true)
+	}
+	return dimStyle
+}
+
+// renderMemoryNote renders one parsed memory note as a titled card: a header
+// line (name + type tag), the description as a subtitle, then the markdown body
+// (tables/headings rendered). MEMORY.md (the index) gets a distinct label.
+func (a *App) renderMemoryNote(note session.MemoryNote, width int) string {
+	var sb strings.Builder
+
+	title := note.Name
+	if note.IsIndex {
+		sb.WriteString(dimStyle.Render("══ Memory Index ══") + "\n\n")
+	} else {
+		header := dimStyle.Render("── ") + memTypeStyle(note.Type).Render(title) + dimStyle.Render(" ──")
+		if note.Type != "" {
+			header += "  " + memTypeStyle(note.Type).Render("["+note.Type+"]")
+		}
+		sb.WriteString(header + "\n")
+		if note.Description != "" {
+			sb.WriteString(dimStyle.Render("  "+note.Description) + "\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	body := renderMarkdownText(note.Body, max(width-2, 20))
+	sb.WriteString(strings.TrimRight(body, "\n") + "\n\n")
 	return sb.String()
 }
 
@@ -5572,19 +5888,32 @@ func (a *App) refreshSessionPreviewLive() {
 	}
 
 	if a.sessPreviewMode != sessPreviewConversation {
-		// Re-render non-message preview for live session
-		a.sessSplit.CacheKey = ""
-		if a.sessPreviewMode == sessPreviewStats {
+		// Re-render non-message preview for live session. Only modes whose
+		// content actually changes as the session writes need refreshing;
+		// crucially, sessPreviewLive/Remote must be left alone — their content is
+		// the tmux pane proxy, refreshed separately, and re-rendering here would
+		// clobber the live pane with another preview (memory) every tick.
+		switch a.sessPreviewMode {
+		case sessPreviewStats:
+			a.sessSplit.CacheKey = ""
 			a.sessStatsCache = nil
 			a.sessStatsCacheKey = ""
 			a.updateSessionStatsPreview(sess)
-		} else if a.sessPreviewMode == sessPreviewTasksPlan {
+		case sessPreviewTasksPlan:
+			a.sessSplit.CacheKey = ""
 			a.sessTasksCacheKey = ""
 			a.updateSessionTasksPlanPreview(sess)
-		} else {
+		case sessPreviewMemory:
+			a.sessSplit.CacheKey = ""
 			a.sessMemoryCacheKey = ""
 			a.updateSessionMemoryPreview(sess)
+		case sessPreviewWorkflows:
+			a.sessSplit.CacheKey = ""
+			a.sessWorkflowsCacheKey = ""
+			a.updateSessionWorkflowsPreview(sess)
 		}
+		// sessPreviewLive, sessPreviewRemote, sessPreviewAgents, sessPreviewShells,
+		// sessPreviewContexts: leave as-is.
 		return
 	}
 
@@ -6575,6 +6904,13 @@ func (a *App) breadcrumbRightStatus() string {
 			parts = append(parts, s.Render(fmt.Sprintf("%s scanning %d sessions", frame, len(a.sessions))))
 		} else {
 			parts = append(parts, s.Render(fmt.Sprintf("%s loading…", frame)))
+		}
+	}
+
+	// Fleet notification indicator (sessions view only).
+	if a.state == viewSessions {
+		if ind := a.notifyIndicator(); ind != "" {
+			parts = append(parts, ind)
 		}
 	}
 

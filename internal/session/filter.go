@@ -63,6 +63,9 @@ func FilterValueFor(s Session, cwdProjectPaths []string) string {
 	if s.HasAgents {
 		parts = append(parts, "has:agent")
 	}
+	if s.HasWorkflows {
+		parts = append(parts, "has:wf", "has:workflow")
+	}
 	if s.HasCompaction {
 		parts = append(parts, "has:compact")
 	}

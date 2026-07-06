@@ -140,6 +140,10 @@ var (
 	taskDoneStyle       = lipgloss.NewStyle().Foreground(colorAccent)
 	taskInProgressStyle = lipgloss.NewStyle().Foreground(colorAssistant)
 
+	// Fleet notification indicator
+	notifyBadgeStyle = lipgloss.NewStyle().Foreground(colorAssistant).Bold(true)
+	notifyCountStyle = lipgloss.NewStyle().Foreground(colorAssistant)
+
 	// Skill and hook styles for message detail
 	skillBlockStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 	hookBadgeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB923C"))

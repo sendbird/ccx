@@ -268,6 +268,9 @@ func refreshSessionDerivedState(sess *Session, home string) {
 		sess.IsWorktree = isGitWorktree(sess.ProjectPath)
 		sess.HasMemory = hasProjectMemory(sess.ProjectPath, home)
 	}
+	if sess.FilePath != "" {
+		sess.HasWorkflows = HasWorkflows(sess.FilePath)
+	}
 	sess.HasPlan = false
 	for _, slug := range sess.PlanSlugs {
 		if planFileExists(slug, home) {
@@ -284,8 +287,12 @@ func hasSubagents(sessionFilePath string) bool {
 	if _, err := os.Stat(agentDir); err != nil {
 		return false
 	}
-	matches, _ := filepath.Glob(filepath.Join(agentDir, "agent-*.jsonl"))
-	return len(matches) > 0
+	if matches, _ := filepath.Glob(filepath.Join(agentDir, "agent-*.jsonl")); len(matches) > 0 {
+		return true
+	}
+	// Workflow-spawned agents nested one level deeper.
+	wfMatches, _ := filepath.Glob(filepath.Join(agentDir, "workflows", "*", "agent-*.jsonl"))
+	return len(wfMatches) > 0
 }
 
 func planFileExists(slug, home string) bool {

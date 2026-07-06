@@ -3239,7 +3239,7 @@ func (a *App) openFullConversation() (tea.Model, tea.Cmd) {
 func (a *App) startBlockFilter() {
 	ti := textinput.New()
 	ti.Prompt = "Filter: "
-	ti.Placeholder = "is:hook is:tool tool:Grep is:error ..."
+	ti.Placeholder = "is:hook is:tool is:mcp tool:Grep tool:mcp* is:error ..."
 	ti.CharLimit = 200
 	ti.Width = a.conv.split.PreviewWidth(a.width, a.splitRatio) - 10
 	// Pre-fill with existing filter

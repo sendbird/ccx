@@ -271,6 +271,8 @@ func sessPreviewString(mode sessPreview) string {
 		return "tasks"
 	case sessPreviewAgents:
 		return "agents"
+	case sessPreviewWorkflows:
+		return "wf"
 	case sessPreviewShells:
 		return "shells"
 	case sessPreviewContexts:
