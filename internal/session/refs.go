@@ -284,10 +284,28 @@ func ResolveRefs(ctx context.Context, refs []SessionRef) []SessionRef {
 // ResolveRef fetches and fills status for a single ref, honoring the URL-keyed
 // TTL cache. Safe for concurrent use (the cache is mutex-guarded). Callers that
 // want to stream results as they land resolve refs individually via this.
+//
+// Cache hits return immediately. Cache misses acquire a slot from a small
+// process-wide semaphore before spawning gh / making a Jira call, so a preview
+// with many refs (plus the background enrich sweep) cannot fan out dozens of gh
+// subprocesses at once — that spiked CPU and starved the UI event loop.
 func ResolveRef(ctx context.Context, r SessionRef) SessionRef {
 	if cached, ok := getCachedRef(r.URL); ok {
 		// The cache is keyed by URL and stores only resolved status; keep this
 		// occurrence's FirstSeen/Label rather than the cached entry's.
+		cached.FirstSeen = r.FirstSeen
+		cached.Label = r.Label
+		return cached
+	}
+	// Bound concurrent network work. Respect ctx cancellation while waiting.
+	select {
+	case resolveSem <- struct{}{}:
+		defer func() { <-resolveSem }()
+	case <-ctx.Done():
+		return r // leave unresolved; a later pass retries
+	}
+	// Another goroutine may have resolved this URL while we waited for a slot.
+	if cached, ok := getCachedRef(r.URL); ok {
 		cached.FirstSeen = r.FirstSeen
 		cached.Label = r.Label
 		return cached
@@ -298,6 +316,10 @@ func ResolveRef(ctx context.Context, r SessionRef) SessionRef {
 	setCachedRef(resolved)
 	return resolved
 }
+
+// resolveSem caps concurrent PR/Jira status resolutions process-wide. gh spawns
+// a subprocess per call, so this is deliberately small to protect the UI.
+var resolveSem = make(chan struct{}, 4)
 
 func getCachedRef(url string) (SessionRef, bool) {
 	refCacheMu.Lock()

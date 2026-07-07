@@ -342,6 +342,7 @@ type App struct {
 	sessRefsResolved      bool                  // whether the currently-previewed session's refs have been resolved
 	sessRefsResolveID     string                // session ID awaiting on-demand ref resolution (flushed to a cmd in handleTick)
 	sessRefsResolvePath   string                // transcript path for the pending on-demand resolve
+	refsInFlight          map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -752,6 +753,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		splitRatio:          35,
 		selectedSet:         make(map[string]bool),
 		hiddenBadges:        make(map[string]bool),
+		refsInFlight:        make(map[string]bool),
 		notifyPrev:          make(map[string]session.LifecycleState),
 		sessionRowCache:     newSessionRowCache(1024),
 		convPreviewRowCache: newSessionRowCache(4096),
@@ -1139,8 +1141,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.sessions[i].Refs = msg.refs
 			if len(msg.refs) == 0 {
-				// Nothing to resolve — mark done so we stop re-targeting it.
+				// Nothing to resolve — mark done and clear in-flight so we stop
+				// re-targeting it.
 				a.sessions[i].RefsResolved = true
+				delete(a.refsInFlight, msg.id)
 			} else {
 				statusCmd = a.resolveRefsStatusCmd(msg.id, msg.refs)
 			}
@@ -1174,6 +1178,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if allResolved {
 				a.sessions[i].RefsResolved = true
+				delete(a.refsInFlight, msg.id)
 			}
 			break
 		}
@@ -1192,6 +1197,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		attempted := make(map[string]bool, len(msg.attempted))
 		for _, id := range msg.attempted {
 			attempted[id] = true
+			delete(a.refsInFlight, id) // resolve pass finished; allow future re-targeting
 		}
 		changed := false
 		for i := range a.sessions {
@@ -4373,8 +4379,14 @@ func (a *App) doRefresh() tea.Cmd {
 					needsSort = true
 					// New activity may have introduced fresh PR/Jira links, so
 					// allow one more resolve pass (the URL→status cache is still
-					// TTL-guarded, so this stays cheap when nothing changed).
-					a.sessions[i].RefsResolved = false
+					// TTL-guarded, so this stays cheap when nothing changed). Skip
+					// if a resolve is already in flight — a live session's mtime
+					// changes every few seconds, and resetting mid-pass made
+					// enrichRefsCmd re-parse the (large) transcript and re-run gh
+					// every tick, spiking CPU and stalling navigation.
+					if !a.refsInFlight[a.sessions[i].ID] {
+						a.sessions[i].RefsResolved = false
+					}
 				}
 			}
 			type liveState struct{ live, responding bool }
@@ -5588,15 +5600,18 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 
 	var resolveCmd tea.Cmd
 	refs := sess.Refs
-	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved {
+	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved && !a.refsInFlight[sess.ID] {
 		// Not extracted yet: show the placeholder now and extract offline (no
 		// network) so URLs/labels appear fast; status resolves in a second step.
 		// Record the target as pending too — this method is also reached from the
 		// render path (View), where the returned cmd would be discarded; handleTick
-		// flushes the pending target so the extract always runs.
+		// flushes the pending target so the extract always runs. Guard on
+		// refsInFlight so repeated renders/ticks don't re-parse + re-resolve the
+		// same session while a pass is already running (that spiked CPU).
 		resolveCmd = a.extractSessionRefsCmd(sess.ID, sess.FilePath)
 		a.sessRefsResolveID = sess.ID
 		a.sessRefsResolvePath = sess.FilePath
+		a.refsInFlight[sess.ID] = true
 	}
 	// Order refs (open PRs first) and stash them so the focused-pane key handler
 	// can map the cursor to a concrete URL to open.
@@ -7556,15 +7571,21 @@ func (a *App) enrichRefsCmd() tea.Cmd {
 	var targets []target
 	for i := range a.sessions {
 		s := &a.sessions[i]
-		// Only target sessions that have links and have never been through a
-		// resolve pass. RefsResolved stays true afterward even if the pass found
-		// nothing usable, so a broken/absent link does not re-run gh every tick.
-		if s.HasRefs && !s.RefsResolved && s.FilePath != "" {
+		// Only target sessions that have links, have never been through a resolve
+		// pass, and are not already being resolved. RefsResolved stays true
+		// afterward even if the pass found nothing usable, so a broken/absent link
+		// does not re-run gh every tick; refsInFlight prevents re-targeting a
+		// session whose (slow) resolve is still running, which otherwise spawned
+		// duplicate gh fan-outs every 3s tick and spiked CPU.
+		if s.HasRefs && !s.RefsResolved && s.FilePath != "" && !a.refsInFlight[s.ID] {
 			targets = append(targets, target{id: s.ID, filePath: s.FilePath})
 		}
 	}
 	if len(targets) == 0 {
 		return nil
+	}
+	for _, t := range targets {
+		a.refsInFlight[t.id] = true
 	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
