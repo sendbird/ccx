@@ -1078,9 +1078,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		a.sessions = a.injectRemoteSessions(msg.sessions)
-		// Kick off background PR/Jira ref resolution for sessions that carry
-		// links; the result merges in via refsEnrichedMsg.
-		refsCmd := a.enrichRefsCmd()
+		// PR/Jira ref resolution (network-bound: gh + Jira REST) is deferred to
+		// the first background refresh tick rather than fired here, so the initial
+		// session list renders without waiting on a fan-out of gh subprocesses.
 		// Build/rebuild session list
 		if a.width > 0 && a.height > 0 {
 			contentH := a.height - 3
@@ -1096,14 +1096,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i, item := range a.sessionList.VisibleItems() {
 					if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
 						a.sessionList.Select(i)
-						return a, refsCmd
+						return a, nil
 					}
 				}
 			}
 			a.bumpPastHeader(0, +1)
-			return a, tea.Batch(a.autoSelectSession(), refsCmd)
+			return a, a.autoSelectSession()
 		}
-		return a, refsCmd
+		return a, nil
 
 	case globalStatsMsg:
 		stats := session.GlobalStats(msg)
@@ -1151,6 +1151,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// navigation stutter on every background refresh).
 		if changed && a.state == viewSessions && !a.isFiltering() {
 			a.rebuildSessionList()
+		}
+		// If the References preview is open on a session whose refs just resolved,
+		// re-render it live so the "Resolving…" placeholder (or stale ○ badges)
+		// updates to the fetched status without the user having to re-navigate.
+		if changed && a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
+			if sess, ok := a.selectedSession(); ok && attempted[sess.ID] {
+				a.sessRefsCacheKey = "" // force re-render with the new refs
+				return a, a.updateSessionRefsPreview(sess)
+			}
 		}
 		return a, nil
 
@@ -2211,7 +2220,7 @@ func (a *App) handleRefsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 	case NavCursorMoved:
 		a.sessRefsCacheKey = "" // cursor moved → force re-render with new highlight
 		if sess, ok := a.selectedSession(); ok {
-			a.updateSessionRefsPreview(sess)
+			return a, a.updateSessionRefsPreview(sess), true
 		}
 		return a, nil, true
 	case NavBoundaryDown, NavBoundaryUp:
@@ -4634,7 +4643,7 @@ func (a *App) updateSessionPreview() tea.Cmd {
 	case sessPreviewContexts:
 		a.updateSessionContextsPreview(sess)
 	case sessPreviewRefs:
-		a.updateSessionRefsPreview(sess)
+		return a.updateSessionRefsPreview(sess)
 	case sessPreviewLive:
 		if sess.IsLive {
 			a.sessSplit.Preview.SetContent(dimStyle.Render("(connecting…)"))
@@ -5491,9 +5500,11 @@ func (a *App) updateSessionContextsPreview(sess session.Session) {
 
 // updateSessionRefsPreview renders the PR/Jira references for a session with
 // their resolved status. Refs are normally pre-resolved in the background
-// (enrichRefsCmd); if not yet available, we fall back to a short synchronous
-// resolve so the panel is never empty for a session that has links.
-func (a *App) updateSessionRefsPreview(sess session.Session) {
+// (enrichRefsCmd). If a session has links but has not been through a resolve
+// pass yet, we render a "Resolving…" placeholder and kick off an async resolve
+// (returned as a tea.Cmd) instead of blocking navigation — the result merges
+// back via refsEnrichedMsg and re-renders this preview if it is still open.
+func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 
@@ -5504,21 +5515,12 @@ func (a *App) updateSessionRefsPreview(sess session.Session) {
 		a.sessRefsCacheID = sess.ID
 	}
 
+	var resolveCmd tea.Cmd
 	refs := sess.Refs
 	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved {
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-		refs = session.LoadSessionRefs(ctx, sess.FilePath)
-		cancel()
-		// Cache the resolved refs back onto the in-memory session so the badge
-		// and future renders pick them up without re-fetching. Mark resolved
-		// even on an empty result so we don't block for 6s again next visit.
-		for i := range a.sessions {
-			if a.sessions[i].ID == sess.ID {
-				a.sessions[i].Refs = refs
-				a.sessions[i].RefsResolved = true
-				break
-			}
-		}
+		// Not resolved yet: show the placeholder now and resolve in the
+		// background so we never block the UI on gh/Jira network calls.
+		resolveCmd = a.resolveOneSessionRefsCmd(sess.ID, sess.FilePath)
 	}
 	// Order refs (open PRs first) and stash them so the focused-pane key handler
 	// can map the cursor to a concrete URL to open.
@@ -5533,6 +5535,27 @@ func (a *App) updateSessionRefsPreview(sess session.Session) {
 	}
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessRefsCache)
+	return resolveCmd
+}
+
+// resolveOneSessionRefsCmd resolves a single session's PR/Jira refs off the UI
+// thread and reports the result via refsEnrichedMsg. Used for on-demand
+// resolution when the user opens the References preview for a session that has
+// not been enriched in the background yet.
+func (a *App) resolveOneSessionRefsCmd(id, filePath string) tea.Cmd {
+	if id == "" || filePath == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		refs := session.LoadSessionRefs(ctx, filePath)
+		out := map[string][]session.SessionRef{}
+		if len(refs) > 0 {
+			out[id] = refs
+		}
+		return refsEnrichedMsg{refs: out, attempted: []string{id}}
+	}
 }
 
 // orderRefs returns refs sorted PRs-first, open items leading within each kind.
