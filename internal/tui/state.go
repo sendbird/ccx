@@ -277,6 +277,8 @@ func sessPreviewString(mode sessPreview) string {
 		return "shells"
 	case sessPreviewContexts:
 		return "contexts"
+	case sessPreviewRefs:
+		return "refs"
 	case sessPreviewLive:
 		return "live"
 	}
