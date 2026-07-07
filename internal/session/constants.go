@@ -50,6 +50,10 @@ var (
 	// Fork detection markers
 	bForkedFrom = []byte(`"forkedFrom"`)
 
+	// External reference markers (PR / Jira links in message text).
+	bPRPath   = []byte(`/pull/`)
+	bJiraPath = []byte(`atlassian.net/browse/`)
+
 	// Stats-specific markers
 	bUsage      = []byte(`"usage":{`)
 	bUsageS     = []byte(`"usage": {`)
