@@ -210,13 +210,16 @@ func (a *App) renderSearchModal(bg string) string {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("Search Sessions") + "\n")
 
-	// Input row.
-	a.searchInput.Width = max(innerW-4, 10)
+	// Input row. innerW is the modal's content budget (modalW minus the modal's
+	// own horizontal padding). The input box itself draws a border (+2), so its
+	// lipgloss Width must be innerW-2 or the box wraps and shatters the modal.
+	inputBoxW := max(innerW-2, 8)
+	a.searchInput.Width = max(inputBoxW-4, 8)
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		Padding(0, 1).
-		Width(innerW)
+		Width(inputBoxW)
 	sb.WriteString(inputStyle.Render(a.searchInput.View()) + "\n")
 
 	switch {
