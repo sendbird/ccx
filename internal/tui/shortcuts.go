@@ -26,6 +26,7 @@ func DefaultShortcuts() Shortcuts {
 				"5": "preview:agents",
 				"6": "preview:live",
 				"7": "preview:contexts",
+				"8": "preview:refs",
 			},
 		},
 		"conversation": {
@@ -102,6 +103,9 @@ func migrateShortcuts(sc Shortcuts) {
 	}
 	if _, exists := sess.Left["7"]; !exists {
 		sess.Left["7"] = "preview:contexts"
+	}
+	if _, exists := sess.Left["8"]; !exists {
+		sess.Left["8"] = "preview:refs"
 	}
 	sc["sessions"] = sess
 }
