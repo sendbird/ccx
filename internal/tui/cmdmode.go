@@ -98,6 +98,8 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewWorkflows); return a, nil }},
 		{name: "preview:contexts", aliases: []string{"p:contexts", "p:ctx", "contexts", "page:contexts"}, desc: "context tree preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewContexts); return a, nil }},
+		{name: "preview:refs", aliases: []string{"p:refs", "refs", "preview:pr", "p:pr"}, desc: "PR/Jira references preview", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewRefs); return a, nil }},
 		{name: "preview:live", aliases: []string{"p:live"}, desc: "live preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				sess, ok := a.selectedSession()
@@ -292,7 +294,10 @@ func buildCmdRegistry() []cmdEntry {
 		{name: "refresh", aliases: []string{"R"}, desc: "refresh sessions", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { cmd := a.doRefresh(); a.copiedMsg = "Refreshed"; return a, cmd }},
 		{name: "filter:done", aliases: []string{"done", "completed"}, desc: "show completed-only projects", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessionListFilter("is:done"); return a, a.updateSessionPreview() }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.setSessionListFilter("is:done")
+				return a, a.updateSessionPreview()
+			}},
 		{name: "filter:all", aliases: []string{"all"}, desc: "clear project filter", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessionListFilter(""); return a, a.updateSessionPreview() }},
 

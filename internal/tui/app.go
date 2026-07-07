@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -315,24 +316,26 @@ type App struct {
 	convPageActionsMenu bool
 
 	// Session preview mode
-	sessPreviewMode      sessPreview
-	sessStatsCache       *session.SessionStats
-	sessStatsCacheKey    string
-	sessMemoryCache      string // rendered memory content
-	sessMemoryCacheKey   string
-	sessTasksCache       string
-	sessTasksCacheKey    string
-	sessShellsCache      string
-	sessShellsCacheKey   string
-	sessContextsCache    string
-	sessContextsCacheKey string
-	sessWorkflowsCache   string
+	sessPreviewMode       sessPreview
+	sessStatsCache        *session.SessionStats
+	sessStatsCacheKey     string
+	sessMemoryCache       string // rendered memory content
+	sessMemoryCacheKey    string
+	sessTasksCache        string
+	sessTasksCacheKey     string
+	sessShellsCache       string
+	sessShellsCacheKey    string
+	sessContextsCache     string
+	sessContextsCacheKey  string
+	sessRefsCache         string
+	sessRefsCacheKey      string
+	sessWorkflowsCache    string
 	sessWorkflowsCacheKey string
-	sessWfRuns           []session.WorkflowRun // parsed runs for the selected session
-	sessWfAgents         []session.Subagent    // workflow-nested agents (label-joined), drill-down targets
-	sessWfCursor         int                   // cursor within the workflow agent list
-	sessPreviewAgents    []session.Subagent // agents shown in Tasks/Plan preview
-	sessAgentCursor      int                // cursor within agents list
+	sessWfRuns            []session.WorkflowRun // parsed runs for the selected session
+	sessWfAgents          []session.Subagent    // workflow-nested agents (label-joined), drill-down targets
+	sessWfCursor          int                   // cursor within the workflow agent list
+	sessPreviewAgents     []session.Subagent    // agents shown in Tasks/Plan preview
+	sessAgentCursor       int                   // cursor within agents list
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -696,9 +699,10 @@ const (
 	sessPreviewWorkflows
 	sessPreviewShells
 	sessPreviewContexts
+	sessPreviewRefs     // PR / Jira references with resolved status
 	sessPreviewLive     // tmux pane capture
 	sessPreviewRemote   // remote session status/stream
-	numSessPreviewModes = 10
+	numSessPreviewModes = 11
 )
 
 // Config holds application configuration from CLI flags.
@@ -794,7 +798,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	// of the projects view.
 	a.sessGroupMode = groupProjectCentric
 	if a.config.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "live": sessPreviewLive}
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "refs": sessPreviewRefs, "pr": sessPreviewRefs, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
@@ -1071,6 +1075,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		a.sessions = a.injectRemoteSessions(msg.sessions)
+		// Kick off background PR/Jira ref resolution for sessions that carry
+		// links; the result merges in via refsEnrichedMsg.
+		refsCmd := a.enrichRefsCmd()
 		// Build/rebuild session list
 		if a.width > 0 && a.height > 0 {
 			contentH := a.height - 3
@@ -1086,14 +1093,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i, item := range a.sessionList.VisibleItems() {
 					if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
 						a.sessionList.Select(i)
-						return a, nil
+						return a, refsCmd
 					}
 				}
 			}
 			a.bumpPastHeader(0, +1)
-			return a, a.autoSelectSession()
+			return a, tea.Batch(a.autoSelectSession(), refsCmd)
 		}
-		return a, nil
+		return a, refsCmd
 
 	case globalStatsMsg:
 		stats := session.GlobalStats(msg)
@@ -1112,6 +1119,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case searchBatchMsg:
 		a.updateSearchResults(msg.results)
+		return a, nil
+
+	case refsEnrichedMsg:
+		if len(msg.refs) == 0 {
+			return a, nil
+		}
+		changed := false
+		for i := range a.sessions {
+			if refs, ok := msg.refs[a.sessions[i].ID]; ok {
+				a.sessions[i].Refs = refs
+				changed = true
+			}
+		}
+		// Refs feed the open-PR badge and counts, so re-render the list (unless
+		// the user is mid-filter, where rebuild would disrupt their view).
+		if changed && a.state == viewSessions && !a.isFiltering() {
+			a.sessionRowCache.Clear()
+			a.rebuildSessionList()
+		}
 		return a, nil
 
 	case tea.MouseMsg:
@@ -1790,6 +1816,21 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a.openLivePreview(sess)
+	case km.Session.Switch:
+		// Jump straight to the session's live tmux window (client switch).
+		if !a.config.TmuxEnabled || !tmux.InTmux() {
+			a.copiedMsg = "Requires tmux"
+			return a, nil
+		}
+		sess, ok := a.selectedSession()
+		if !ok {
+			return a, nil
+		}
+		if !sess.IsLive {
+			a.copiedMsg = "Not a live session"
+			return a, nil
+		}
+		return a.jumpToTmuxPane(sess.ProjectPath, sess.ID)
 	case km.Session.Edit:
 		sess, ok := a.selectedSession()
 		if !ok {
@@ -2466,6 +2507,8 @@ func (a *App) handleSessPageMenu(key string) (tea.Model, tea.Cmd) {
 		a.setSessPreviewMode(sessPreviewWorkflows)
 	case "c":
 		a.setSessPreviewMode(sessPreviewContexts)
+	case "r":
+		a.setSessPreviewMode(sessPreviewRefs)
 	case "l":
 		if sess, ok := a.selectedSession(); ok {
 			if sess.IsRemote {
@@ -4235,6 +4278,8 @@ func (a *App) doRefresh() tea.Cmd {
 				}
 			}
 		}
+		// Re-resolve PR/Jira refs (TTL-cached, so this is cheap when warm).
+		return a.enrichRefsCmd()
 	}
 
 	return nil
@@ -4521,6 +4566,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		a.updateSessionShellsPreview(sess)
 	case sessPreviewContexts:
 		a.updateSessionContextsPreview(sess)
+	case sessPreviewRefs:
+		a.updateSessionRefsPreview(sess)
 	case sessPreviewLive:
 		if sess.IsLive {
 			a.sessSplit.Preview.SetContent(dimStyle.Render("(connecting…)"))
@@ -5286,7 +5333,7 @@ func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) stri
 
 			line := fmt.Sprintf("%s%s %s", marker, icon, label)
 			if ag.PhaseTitle != "" {
-				line += dimStyle.Render("  ["+ag.PhaseTitle+"]")
+				line += dimStyle.Render("  [" + ag.PhaseTitle + "]")
 			}
 			sb.WriteString(style.Render(line))
 			var stats []string
@@ -5373,6 +5420,163 @@ func (a *App) updateSessionContextsPreview(sess session.Session) {
 	}
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessContextsCache)
+}
+
+// updateSessionRefsPreview renders the PR/Jira references for a session with
+// their resolved status. Refs are normally pre-resolved in the background
+// (enrichRefsCmd); if not yet available, we fall back to a short synchronous
+// resolve so the panel is never empty for a session that has links.
+func (a *App) updateSessionRefsPreview(sess session.Session) {
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	contentH := max(a.height-3, 1)
+
+	refs := sess.Refs
+	if len(refs) == 0 && sess.HasRefs {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		refs = session.LoadSessionRefs(ctx, sess.FilePath)
+		cancel()
+		// Cache the resolved refs back onto the in-memory session so the badge
+		// and future renders pick them up without re-fetching.
+		for i := range a.sessions {
+			if a.sessions[i].ID == sess.ID {
+				a.sessions[i].Refs = refs
+				break
+			}
+		}
+	}
+	cacheKey := fmt.Sprintf("%s:%d:%d", sess.ID, len(refs), previewW)
+	if a.sessRefsCacheKey != cacheKey {
+		a.sessRefsCache = renderSessionRefs(refs, previewW, sess.HasRefs)
+		a.sessRefsCacheKey = cacheKey
+	}
+	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	a.sessSplit.Preview.SetContent(a.sessRefsCache)
+}
+
+// renderSessionRefs draws the PR/Jira reference list with status indicators.
+func renderSessionRefs(refs []session.SessionRef, width int, hasRefs bool) string {
+	var sb strings.Builder
+	sb.WriteString(statTitleStyle.Render("── References ──") + "\n\n")
+	if len(refs) == 0 {
+		if hasRefs {
+			sb.WriteString(dimStyle.Render("Resolving PR/Jira status…"))
+		} else {
+			sb.WriteString(dimStyle.Render("No PR or Jira links in this session."))
+		}
+		return sb.String()
+	}
+
+	// PRs first (already sorted by ExtractSessionRefs), open ones on top within
+	// each kind so the actionable items lead.
+	ordered := make([]session.SessionRef, len(refs))
+	copy(ordered, refs)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		ki, kj := ordered[i].Kind, ordered[j].Kind
+		if ki != kj {
+			return ki == session.RefPR
+		}
+		return ordered[i].IsOpen() && !ordered[j].IsOpen()
+	})
+
+	lastKind := session.RefKind("")
+	for _, r := range ordered {
+		if r.Kind != lastKind {
+			title := "Pull Requests"
+			if r.Kind == session.RefJira {
+				title = "Jira Issues"
+			}
+			sb.WriteString("\n" + dimStyle.Bold(true).Render(title) + "\n")
+			lastKind = r.Kind
+		}
+		sb.WriteString(refLine(r, width) + "\n")
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// refLine renders a single reference: state dot + label + status detail.
+func refLine(r session.SessionRef, width int) string {
+	dot, label := refStateBadge(r)
+	line := "  " + dot + " " + label
+
+	var detail string
+	switch r.Kind {
+	case session.RefPR:
+		parts := []string{}
+		if r.ReviewDecision != "" {
+			parts = append(parts, prettyReview(r.ReviewDecision))
+		}
+		if r.ChecksState != "" {
+			parts = append(parts, prettyChecks(r.ChecksState))
+		}
+		detail = strings.Join(parts, "  ")
+	case session.RefJira:
+		if r.JiraStatus != "" {
+			detail = r.JiraStatus
+		} else if !r.Resolved {
+			detail = "…"
+		}
+	}
+	if detail != "" {
+		line += "  " + dimStyle.Render(detail)
+	}
+	return line
+}
+
+// refStateBadge returns a colored state token and the styled label for a ref.
+func refStateBadge(r session.SessionRef) (dot, label string) {
+	labelStyle := lipgloss.NewStyle().Bold(true)
+	switch r.Kind {
+	case session.RefPR:
+		switch r.State {
+		case session.RefStateOpen:
+			return liveDotStyle.Render(iconStatusDot), prBadgeStyle.Render(r.Label) + dimStyle.Render(" OPEN")
+		case session.RefStateDraft:
+			return dimStyle.Render(iconStatusDot), labelStyle.Render(r.Label) + dimStyle.Render(" DRAFT")
+		case session.RefStateMerged:
+			return compactBadgeStyle.Render(iconStatusDot), dimStyle.Render(r.Label + " MERGED")
+		case session.RefStateClosed:
+			return stuckBadgeStyle.Render(iconStatusDot), dimStyle.Render(r.Label + " CLOSED")
+		default:
+			return dimStyle.Render("○"), labelStyle.Render(r.Label)
+		}
+	case session.RefJira:
+		if r.Resolved && r.JiraStatusDone {
+			return doneBadgeStyle.Render(iconStatusDot), dimStyle.Render(r.Label)
+		}
+		return waitDotIfOpen(r), memoryBadge.Render(r.Label)
+	}
+	return dimStyle.Render("○"), r.Label
+}
+
+func waitDotIfOpen(r session.SessionRef) string {
+	if r.Resolved && r.JiraStatus != "" {
+		return liveDotStyle.Render(iconStatusDot)
+	}
+	return dimStyle.Render("○") // unknown status
+}
+
+func prettyReview(d string) string {
+	switch d {
+	case "APPROVED":
+		return doneBadgeStyle.Render("✓ approved")
+	case "CHANGES_REQUESTED":
+		return stuckBadgeStyle.Render("✗ changes")
+	case "REVIEW_REQUIRED":
+		return waitBadgeStyle.Render("review needed")
+	}
+	return d
+}
+
+func prettyChecks(s string) string {
+	switch s {
+	case "SUCCESS":
+		return doneBadgeStyle.Render("✓ CI")
+	case "FAILURE":
+		return stuckBadgeStyle.Render("✗ CI")
+	case "PENDING":
+		return waitBadgeStyle.Render("• CI")
+	}
+	return s
 }
 
 func renderSessionContextTree(tree *session.SessionContextTree, width int) string {
@@ -7071,4 +7275,59 @@ func roleLabel(e session.Entry) string {
 		return roleChip("user")
 	}
 	return roleChip("assistant")
+}
+
+// refsEnrichedMsg carries resolved refs for sessions, keyed by session ID.
+type refsEnrichedMsg struct {
+	refs map[string][]session.SessionRef
+}
+
+// enrichRefsCmd resolves PR/Jira references for sessions flagged HasRefs. It
+// runs in the background (network-bound: gh CLI + Jira REST) and returns a
+// refsEnrichedMsg to merge into the session list. A concurrency cap keeps the
+// gh subprocess fan-out bounded; a shared deadline stops a slow refresh from
+// hanging the UI's merge indefinitely.
+func (a *App) enrichRefsCmd() tea.Cmd {
+	type target struct {
+		id       string
+		filePath string
+	}
+	var targets []target
+	for i := range a.sessions {
+		s := &a.sessions[i]
+		if s.HasRefs && len(s.Refs) == 0 && s.FilePath != "" {
+			targets = append(targets, target{id: s.ID, filePath: s.FilePath})
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		const maxConcurrent = 4
+		sem := make(chan struct{}, maxConcurrent)
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		out := make(map[string][]session.SessionRef, len(targets))
+
+		for _, t := range targets {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(t target) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				refs := session.LoadSessionRefs(ctx, t.filePath)
+				if len(refs) == 0 {
+					return
+				}
+				mu.Lock()
+				out[t.id] = refs
+				mu.Unlock()
+			}(t)
+		}
+		wg.Wait()
+		return refsEnrichedMsg{refs: out}
+	}
 }

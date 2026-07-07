@@ -38,6 +38,8 @@ const (
 	iconBadgeRemote   = ""
 	iconTrendUp       = "▴"
 	iconTrendDown     = "▾"
+	iconStatusDot     = "●" // live/busy status dot before the session ID
+	iconBadgePR       = "" // open pull request (code-fork glyph)
 	iconBarFull       = "█"
 	iconBarLight      = "▓"
 	iconBarMid        = "▒"
@@ -105,6 +107,12 @@ var (
 	doneBadgeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
 	stuckBadgeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Bold(true)
 	inputBadgeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#EC4899")).Bold(true)
+	// PR reference badge (open PRs surfaced on the session row) — GitHub purple.
+	prBadgeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
+	// Status dots that replace the LIVE/BUSY text badges: a single ● before the
+	// session ID. Green = live & idle, amber = busy/responding.
+	liveDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
+	busyDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
 	customBadgeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#84CC16")).Bold(true).Italic(true)
 	blockCursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 	blockSelectedBg     = lipgloss.NewStyle().Background(lipgloss.Color("#1E293B"))

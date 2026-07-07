@@ -150,6 +150,9 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if s.Live == "" {
 		s.Live = d.Session.Live
 	}
+	if s.Switch == "" {
+		s.Switch = d.Session.Switch
+	}
 	if s.Select == "" {
 		s.Select = d.Session.Select
 	}
@@ -277,6 +280,8 @@ func sessPreviewString(mode sessPreview) string {
 		return "shells"
 	case sessPreviewContexts:
 		return "contexts"
+	case sessPreviewRefs:
+		return "refs"
 	case sessPreviewLive:
 		return "live"
 	}

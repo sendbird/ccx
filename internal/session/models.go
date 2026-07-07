@@ -86,6 +86,9 @@ type Session struct {
 	HasWorkflows bool          // workflow runs recorded under {sessionID}/workflows/
 	Workflows    []WorkflowRun // populated lazily when HasWorkflows is true
 
+	HasRefs bool         // PR or Jira links present in the transcript
+	Refs    []SessionRef // populated lazily (extracted + status-resolved) when HasRefs is true
+
 	CustomBadges []string // user-created badge tags
 
 	TmuxWindowName  string // tmux window name (set if pane CWD matches ProjectPath)

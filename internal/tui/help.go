@@ -93,7 +93,7 @@ func (a *App) sessHelpLine() string {
 		h += " g/G:top/end tab/S-tab:preview →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	}
 	if a.config.TmuxEnabled && tmux.InTmux() {
-		h += " " + fmtKey(sk.Live, "live")
+		h += " " + fmtKey(sk.Live, "live") + " " + fmtKey(sk.Switch, "switch")
 	}
 	if sc := a.shortcutHint(); sc != "" {
 		h += " " + dimStyle.Render(sc)

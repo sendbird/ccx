@@ -391,6 +391,7 @@ func TestPreviewModeConstants(t *testing.T) {
 		sessPreviewWorkflows,
 		sessPreviewShells,
 		sessPreviewContexts,
+		sessPreviewRefs,
 		sessPreviewLive,
 		sessPreviewRemote,
 	}

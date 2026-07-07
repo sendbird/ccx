@@ -134,6 +134,11 @@ func scanSessionStream(path string, modTime time.Time, home string, badgeStore *
 				sess.HasCrons = true
 			}
 		}
+		if !sess.HasRefs {
+			if bytes.Contains(line, bPRPath) || bytes.Contains(line, bJiraPath) {
+				sess.HasRefs = true
+			}
+		}
 		if !sess.HasShellJobs {
 			if bytes.Contains(line, bMonitorTool) || bytes.Contains(line, bMonitorToolS) {
 				sess.HasShellJobs = true
