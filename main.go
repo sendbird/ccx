@@ -200,6 +200,22 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "move":
+			fs := flag.NewFlagSet("move", flag.ExitOnError)
+			sess := fs.String("session", "", "session ID (prefix match); defaults to the current tmux window's session")
+			from := fs.String("from", "", "project directory to move (moves every session under it)")
+			dirFlag := fs.String("dir", "", "path to Claude data directory (default: ~/.claude)")
+			fs.Parse(os.Args[2:])
+			if fs.NArg() != 1 {
+				fmt.Fprintf(os.Stderr, "usage: ccx move [--from <dir> | --session <id>] <new-path>\n")
+				os.Exit(1)
+			}
+			dir := resolveClaudeDir(*dirFlag)
+			if err := cli.RunMove(dir, *sess, *from, fs.Arg(0)); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "urls", "files", "changes", "images", "conversation", "info", "help":
 			subcmd := os.Args[1]
 			fs := flag.NewFlagSet(subcmd, flag.ExitOnError)

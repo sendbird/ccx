@@ -26,6 +26,7 @@ var Commands = []struct {
 	{"conversation", "List conversation turns from the Claude session (interactive on TTY)"},
 	{"info", "Show the matched Claude session metadata"},
 	{"sessions", "List session IDs with metadata (use --pick for TUI JSON picker)"},
+	{"move", "Move a session's project path to a new location"},
 	{"config", "View/edit ccx config and get/set dot-path values"},
 	{"help", "Show available commands and usage"},
 }
@@ -149,6 +150,8 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "  ccx images            Interactive image picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx conversation      Interactive conversation picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx info              Show current matched session metadata\n")
+	fmt.Fprintf(os.Stderr, "  ccx move <new-path>          Move current session's project path\n")
+	fmt.Fprintf(os.Stderr, "  ccx move --from <dir> <new>  Move a project dir's sessions by path\n")
 	fmt.Fprintf(os.Stderr, "  ccx config view       Print ~/.config/ccx/config.yaml\n")
 	fmt.Fprintf(os.Stderr, "  ccx config edit       Open config in $EDITOR\n")
 	fmt.Fprintf(os.Stderr, "  ccx config set remote.pod_name ccx-worker\n\n")
@@ -319,6 +322,57 @@ func RunSessions(claudeDir string, all bool) error {
 		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%d\t%s\t%s\n",
 			s.ID, s.ShortID, s.ModTime.Format("2006-01-02 15:04"), s.MsgCount, s.ProjectName, prompt)
 	}
+	return nil
+}
+
+// RunMove moves a project's session directory to newPath, taking every
+// session under it along. oldDir, if set, is used directly. Otherwise
+// sessionID resolves to its project dir; if that's empty too, the session
+// is resolved the same way other subcommands do (tmux window / live
+// registry match).
+func RunMove(claudeDir, sessionID, oldDir, newPath string) error {
+	newPath = strings.TrimSpace(newPath)
+	if newPath == "" {
+		return fmt.Errorf("usage: ccx move [--from <dir> | --session <id>] <new-path>")
+	}
+	abs, err := filepath.Abs(newPath)
+	if err != nil {
+		return fmt.Errorf("resolve new path: %w", err)
+	}
+	newPath = abs
+
+	oldPath := strings.TrimSpace(oldDir)
+	if oldPath != "" {
+		abs, err := filepath.Abs(oldPath)
+		if err != nil {
+			return fmt.Errorf("resolve old path: %w", err)
+		}
+		oldPath = abs
+	} else if sessionID != "" {
+		sess, ok := session.FindSessionByID(claudeDir, sessionID)
+		if !ok {
+			return fmt.Errorf("session %s not found", sessionID)
+		}
+		oldPath = sess.ProjectPath
+	} else {
+		_, sessID, err := findSessionFile(claudeDir)
+		if err != nil {
+			return err
+		}
+		sess, ok := session.FindSessionByID(claudeDir, sessID)
+		if !ok {
+			return fmt.Errorf("session %s not found", sessID)
+		}
+		oldPath = sess.ProjectPath
+	}
+
+	if oldPath == newPath {
+		return fmt.Errorf("new path is the same as the current path: %s", oldPath)
+	}
+	if err := session.MoveProject(oldPath, newPath); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "%s -> %s\n", oldPath, newPath)
 	return nil
 }
 
