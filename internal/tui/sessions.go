@@ -155,6 +155,7 @@ type projectItem struct {
 	bgSessions   int               // sessions whose lifecycle is BG
 	monSessions  int               // sessions with active monitor jobs
 	inputSessions int              // sessions awaiting user answer (AskUserQuestion)
+	openPRs       int              // sessions with at least one open PR (summed open-PR count)
 	stuckCount   int               // STUCK lifecycle sessions
 	waitCount    int               // WAIT lifecycle sessions
 	doneCount    int               // DONE lifecycle sessions
@@ -210,7 +211,7 @@ func (d sessionDelegate) hiddenBadgeKey() string {
 	if len(d.hiddenBadges) == 0 {
 		return ""
 	}
-	keys := []string{"HERE", "LIVE", "BUSY", "BG", "MON", "INPUT", "WAIT", "DONE", "STUCK"}
+	keys := []string{"BG", "MON", "INPUT", "WAIT", "DONE", "STUCK", "PR"}
 	var b strings.Builder
 	for _, k := range keys {
 		if d.hiddenBadges[k] {
@@ -224,17 +225,18 @@ func (d sessionDelegate) hiddenBadgeKey() string {
 func (d sessionDelegate) sessionCacheKey(m list.Model, index int, si sessionItem, selected bool) string {
 	filterTerm := listFilterTerm(m)
 	multi := d.selectedSet != nil && d.selectedSet[si.sess.ID]
-	return fmt.Sprintf("s|%d|%d|%t|%t|%s|%s|%s|%d|%t|%d|%d|%d|%t|%d|%s",
+	openPRs, openJira := si.sess.OpenRefCounts()
+	return fmt.Sprintf("s|%d|%d|%t|%t|%s|%s|%s|%d|%t|%d|%d|%d|%t|%d|%d|%d|%s",
 		m.Width(), index, selected, multi, filterTerm, d.hiddenBadgeKey(), si.sess.ID,
 		si.groupChildren, si.groupFolded, int(si.sess.Lifecycle()), si.sess.MsgCount,
-		si.sess.ActiveMonitorCount(), si.sess.AwaitingInput, si.sess.ModTime.Unix(), si.sess.FirstPrompt)
+		si.sess.ActiveMonitorCount(), si.sess.AwaitingInput, openPRs, openJira, si.sess.ModTime.Unix(), si.sess.FirstPrompt)
 }
 
 func (d sessionDelegate) projectCacheKey(m list.Model, index int, pi projectItem, selected bool) string {
-	return fmt.Sprintf("p|%d|%d|%t|%s|%s|%t|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s",
+	return fmt.Sprintf("p|%d|%d|%t|%s|%s|%t|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s",
 		m.Width(), index, selected, listFilterTerm(m), d.hiddenBadgeKey(), pi.expanded,
 		len(pi.sessions), pi.totalMsgs, pi.liveSessions, pi.bgSessions, pi.monSessions,
-		pi.inputSessions, pi.stuckCount, pi.waitCount, pi.doneCount, pi.basePath)
+		pi.inputSessions, pi.stuckCount, pi.waitCount, pi.doneCount, pi.openPRs, pi.basePath)
 }
 
 // renderProject draws a folder-style row for a project: chevron + name +
@@ -272,19 +274,12 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 		timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
 	}
 
-	// Badges roll up project-wide lifecycle counts.
+	// Badges roll up project-wide lifecycle counts. Live/busy are shown as a
+	// status dot before the folder (green=live, amber=busy) rather than text
+	// badges; HERE is dropped entirely.
 	hide := d.hiddenBadges
 	badges := ""
 	badgesW := 0
-	if pi.hereCount > 0 && !hide["HERE"] {
-		badges = appendBadge(badges, &badgesW, hereBadge, badgeLabel(iconBadgeHere, fmt.Sprintf("HERE×%d", pi.hereCount)))
-	}
-	if pi.liveSessions > 0 && !hide["LIVE"] {
-		badges = appendBadge(badges, &badgesW, liveBadge, badgeLabel(iconBadgeLive, fmt.Sprintf("LIVE×%d", pi.liveSessions)))
-	}
-	if pi.busyCount > 0 && !hide["BUSY"] {
-		badges = appendBadge(badges, &badgesW, busyBadge, badgeLabel(iconBadgeBusy, fmt.Sprintf("BUSY×%d", pi.busyCount)))
-	}
 	if pi.bgSessions > 0 && !hide["BG"] {
 		badges = appendBadge(badges, &badgesW, bgBadgeStyle, badgeLabel(iconBadgeBg, fmt.Sprintf("BG×%d", pi.bgSessions)))
 	}
@@ -302,6 +297,21 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 	}
 	if pi.doneCount > 0 && !hide["DONE"] {
 		badges = appendBadge(badges, &badgesW, doneBadgeStyle, badgeLabel(iconBadgeDone, fmt.Sprintf("DONE×%d", pi.doneCount)))
+	}
+	if pi.openPRs > 0 && !hide["PR"] {
+		label := "PR"
+		if pi.openPRs > 1 {
+			label = fmt.Sprintf("PR×%d", pi.openPRs)
+		}
+		badges = appendBadge(badges, &badgesW, prBadgeStyle, badgeLabel(iconBadgePR, label))
+	}
+
+	// Live/busy status dot before the folder icon (2-cell reserved column).
+	projDot := "  "
+	if pi.busyCount > 0 {
+		projDot = busyDotStyle.Render(iconStatusDot) + " "
+	} else if pi.liveSessions > 0 {
+		projDot = liveDotStyle.Render(iconStatusDot) + " "
 	}
 
 	// Header text: line-art folder, name, branch, time, and badges.
@@ -332,7 +342,7 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 		name = highlighted
 	}
 
-	line1 := fmt.Sprintf("%s%s %s%s  %s%s", cursor, folder, name, br, timeStr, badges)
+	line1 := fmt.Sprintf("%s%s%s %s%s  %s%s", cursor, projDot, folder, name, br, timeStr, badges)
 	// Pad/clamp.
 	if selected {
 		bare := lipgloss.Width(line1)
@@ -342,7 +352,7 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 		line1 = selectedRowStyle.Render(line1)
 	}
 
-	line2 := "      " + summaryStyled
+	line2 := "        " + summaryStyled
 	if selected {
 		bare := lipgloss.Width(line2)
 		if bare < width {
@@ -452,6 +462,16 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		promptStyle = selectedStyle
 	}
 
+	// Status dot (live/busy) rendered as a fixed 2-cell column before the ID so
+	// rows stay aligned whether or not a dot is present. Replaces the old
+	// LIVE/BUSY/HERE text badges.
+	dot := statusDot(s)
+	dotPrefix := "  " // 2 cells: reserve column even when no dot
+	dotPrefixW := 2
+	if dot != "" {
+		dotPrefix = dot + " "
+	}
+
 	idStr := idStyle.Render(s.ShortID)
 
 	timeRaw := timeAgo(s.ModTime)
@@ -462,21 +482,13 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	msgPad := fmt.Sprintf("%*s", d.msgW, msgRaw)
 	msgStr := msgStyle.Render(msgPad)
 
-	// Build badges first to know their width
+	// Build badges first to know their width. LIVE/BUSY/HERE are no longer text
+	// badges — live/busy is the status dot before the ID, and "current window"
+	// is conveyed by the dot column plus the HERE-free layout.
 	badges := ""
 	badgesW := 0
 	hide := d.hiddenBadges
-	if s.IsCurrentWindow && !hide["HERE"] {
-		badges = appendBadge(badges, &badgesW, hereBadge, badgeLabel(iconBadgeHere, "HERE"))
-	}
-	if s.IsLive && !hide["LIVE"] {
-		badges = appendBadge(badges, &badgesW, liveBadge, badgeLabel(iconBadgeLive, "LIVE"))
-	}
 	switch s.Lifecycle() {
-	case session.LifecycleBusy:
-		if !hide["BUSY"] {
-			badges = appendBadge(badges, &badgesW, busyBadge, badgeLabel(iconBadgeBusy, "BUSY"))
-		}
 	case session.LifecycleBG:
 		if !hide["BG"] {
 			badges = appendBadge(badges, &badgesW, bgBadgeStyle, badgeLabel(iconBadgeBg, "BG"))
@@ -516,6 +528,26 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if s.IsLive && s.AwaitingInput && !hide["INPUT"] {
 		badges = appendBadge(badges, &badgesW, inputBadgeStyle, badgeLabel(iconBadgeInput, "INPUT"))
 	}
+	// Open PR / Jira badge: surfaces unfinished external work attached to this
+	// session. Only open PRs (and non-done Jira) are counted; merged/closed are
+	// intentionally hidden so the badge means "still needs attention".
+	if !hide["PR"] {
+		openPRs, openJira := s.OpenRefCounts()
+		if openPRs > 0 {
+			label := "PR"
+			if openPRs > 1 {
+				label = fmt.Sprintf("PR×%d", openPRs)
+			}
+			badges = appendBadge(badges, &badgesW, prBadgeStyle, badgeLabel(iconBadgePR, label))
+		}
+		if openJira > 0 {
+			label := "JIRA"
+			if openJira > 1 {
+				label = fmt.Sprintf("JIRA×%d", openJira)
+			}
+			badges = appendBadge(badges, &badgesW, memoryBadge, badgeLabel(iconTask, label))
+		}
+	}
 	// Custom user badges
 	for _, badge := range s.CustomBadges {
 		badgeText := "[" + badge + "]"
@@ -537,8 +569,8 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 
 	// Calculate available width for project column
-	// cursor(2) + fold(foldPrefixW) + tree(treePrefixW) + id(8) + 2 + time + 2 + msg + 2 + project + badges
-	fixedW := 2 + foldPrefixW + treePrefixW + 8 + 2 + d.timeW + 2 + d.msgW + 2 + badgesW
+	// cursor(2) + fold + tree + dot(2) + id(8) + 2 + time + 2 + msg + 2 + project + badges
+	fixedW := 2 + foldPrefixW + treePrefixW + dotPrefixW + 8 + 2 + d.timeW + 2 + d.msgW + 2 + badgesW
 	maxProjW := width - fixedW
 	if maxProjW < 4 {
 		maxProjW = 4
@@ -589,11 +621,11 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		}
 	}
 
-	line1 := fmt.Sprintf("%s%s%s%s  %s  %s  %s%s", cursor, foldPrefix, treePrefix, idStr, timeStr, msgStr, project, badges)
+	line1 := fmt.Sprintf("%s%s%s%s%s  %s  %s  %s%s", cursor, foldPrefix, treePrefix, dotPrefix, idStr, timeStr, msgStr, project, badges)
 
 	prompt := s.FirstPrompt
-	maxW := width - 6 - treePrefixW - foldPrefixW
-	promptIndent := "    " + strings.Repeat(" ", treePrefixW+foldPrefixW)
+	maxW := width - 6 - treePrefixW - foldPrefixW - dotPrefixW
+	promptIndent := "    " + strings.Repeat(" ", treePrefixW+foldPrefixW+dotPrefixW)
 	var line2 string
 	if filterTerm != "" && maxW > 0 {
 		line2 = promptIndent + highlightSnippet(prompt, filterTerm, maxW, promptStyle)
@@ -1387,6 +1419,9 @@ func buildProjectCentricItems(sessions []session.Session, folded map[string]bool
 			if s.IsLive && s.AwaitingInput {
 				pi.inputSessions++
 			}
+			if openPRs, _ := s.OpenRefCounts(); openPRs > 0 {
+				pi.openPRs += openPRs
+			}
 			switch s.Lifecycle() {
 			case session.LifecycleBusy:
 				pi.busyCount++
@@ -1442,6 +1477,20 @@ func filepathBase(p string) string {
 		}
 	}
 	return p
+}
+
+// statusDot renders the live/busy status indicator that replaces the old
+// LIVE/BUSY text badges: a single ● before the session ID. Returns an empty
+// string (no dot) for non-live sessions. Green = live & idle, amber =
+// busy/responding.
+func statusDot(s session.Session) string {
+	if !s.IsLive {
+		return ""
+	}
+	if s.Lifecycle() == session.LifecycleBusy {
+		return busyDotStyle.Render(iconStatusDot)
+	}
+	return liveDotStyle.Render(iconStatusDot)
 }
 
 func appendBadge(badges string, badgesW *int, style lipgloss.Style, text string) string {
@@ -1540,9 +1589,10 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		desc  string
 	}
 	allBadges := []badge{
-		{hereBadge, badgeLabel(iconBadgeHere, "HERE"), "In current tmux window"},
-		{liveBadge, badgeLabel(iconBadgeLive, "LIVE"), "Running Claude"},
-		{busyBadge, badgeLabel(iconBadgeBusy, "BUSY"), "Responding now"},
+		{liveDotStyle, iconStatusDot + " ", "Live & idle (dot before ID)"},
+		{busyDotStyle, iconStatusDot + " ", "Busy / responding now"},
+		{prBadgeStyle, badgeLabel(iconBadgePR, "PR"), "Open pull request(s)"},
+		{memoryBadge, badgeLabel(iconTask, "JIRA"), "Open Jira issue(s)"},
 		{bgBadgeStyle, badgeLabel(iconBadgeBg, "BG"), "Background shell/monitor/cron"},
 		{monBadgeStyle, badgeLabel(iconBadgeMon, "MON"), "Monitor tool currently in flight"},
 		{inputBadgeStyle, badgeLabel(iconBadgeInput, "INPUT"), "Awaiting your answer (AskUserQuestion)"},
