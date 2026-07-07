@@ -3,6 +3,7 @@ package session
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExtractSessionRefs(t *testing.T) {
@@ -25,6 +26,41 @@ func TestExtractSessionRefs(t *testing.T) {
 	}
 	if refs[1].Kind != RefJira || refs[1].Label != "CPLAT-1234" {
 		t.Errorf("ref[1] = %+v, want Jira CPLAT-1234", refs[1])
+	}
+}
+
+// TestExtractSessionRefsDedupAndTimestamp verifies label-keyed dedup (the same
+// PR via different URL forms collapses to one) keeps the EARLIEST FirstSeen, and
+// that within a kind refs sort most-recent-first.
+func TestExtractSessionRefsDedupAndTimestamp(t *testing.T) {
+	t0 := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	t1 := t0.Add(1 * time.Hour)
+	t2 := t0.Add(2 * time.Hour)
+	entries := []Entry{
+		{Timestamp: t0, Content: []ContentBlock{
+			{Type: "text", Text: "first https://github.com/sendbird/ccx/pull/52"},
+		}},
+		{Timestamp: t1, Content: []ContentBlock{
+			// same PR via an anchor URL — must dedup to #52, keep t0 as FirstSeen
+			{Type: "text", Text: "again https://github.com/sendbird/ccx/pull/52#discussion_r1"},
+		}},
+		{Timestamp: t2, Content: []ContentBlock{
+			{Type: "text", Text: "newer https://github.com/sendbird/ccx/pull/99"},
+		}},
+	}
+	refs := ExtractSessionRefs(entries)
+	if len(refs) != 2 {
+		t.Fatalf("want 2 deduped PRs, got %d: %+v", len(refs), refs)
+	}
+	// Most-recent-first: #99 (t2) before #52 (t0).
+	if refs[0].Label != "sendbird/ccx#99" || refs[1].Label != "sendbird/ccx#52" {
+		t.Errorf("order = [%s, %s], want [#99, #52]", refs[0].Label, refs[1].Label)
+	}
+	// #52 keeps its earliest appearance (t0), not the anchor URL's t1.
+	for _, r := range refs {
+		if r.Label == "sendbird/ccx#52" && !r.FirstSeen.Equal(t0) {
+			t.Errorf("#52 FirstSeen = %v, want %v", r.FirstSeen, t0)
+		}
 	}
 }
 

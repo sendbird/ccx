@@ -46,6 +46,8 @@ type SessionRef struct {
 	URL   string
 	Label string // e.g. "sendbird/ccx#52" or "CPLAT-1234"
 
+	FirstSeen time.Time // timestamp of the entry where this ref first appeared
+
 	State RefState // resolved lifecycle state (RefStateUnknown until fetched)
 
 	// PR-only detail.
@@ -80,24 +82,36 @@ func (r SessionRef) IsOpen() bool {
 // has no such references. Intended for lazy enrichment when a session preview
 // or badge needs ref detail.
 func LoadSessionRefs(ctx context.Context, filePath string) []SessionRef {
-	entries, err := LoadMessages(filePath)
-	if err != nil {
-		return nil
-	}
-	refs := ExtractSessionRefs(entries)
+	refs := ExtractSessionRefsFromFile(filePath)
 	if len(refs) == 0 {
 		return nil
 	}
 	return ResolveRefs(ctx, refs)
 }
 
+// ExtractSessionRefsFromFile reads a session's JSONL and extracts its PR/Jira
+// references WITHOUT resolving status. This is the cheap, offline half of
+// LoadSessionRefs — the preview uses it to render URLs/labels/timestamps
+// instantly, then resolves status asynchronously.
+func ExtractSessionRefsFromFile(filePath string) []SessionRef {
+	entries, err := LoadMessages(filePath)
+	if err != nil {
+		return nil
+	}
+	return ExtractSessionRefs(entries)
+}
+
 // ExtractSessionRefs scans a session's entries for PR and Jira URLs and returns
-// a deduplicated, ordered list (PRs first, then Jira). Status is NOT resolved
-// here — callers use ResolveRefs for that (it is network-bound and cached).
+// a deduplicated, ordered list (PRs first, then Jira). References are keyed by
+// their canonical Label (e.g. "sendbird/ccx#52"), so the same PR referenced via
+// different URL forms (#discussion anchors, query strings) collapses into one
+// entry, keeping the earliest appearance's timestamp in FirstSeen. Status is
+// NOT resolved here — callers use ResolveRefs for that (network-bound, cached).
 func ExtractSessionRefs(entries []Entry) []SessionRef {
-	seen := make(map[string]bool)
+	seen := make(map[string]bool) // by canonical Label
 	var refs []SessionRef
 	for i := range entries {
+		ts := entries[i].Timestamp
 		for _, b := range entries[i].Content {
 			for _, text := range [2]string{b.Text, b.ToolInput} {
 				if text == "" {
@@ -105,14 +119,15 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 				}
 				for _, raw := range refURLRegex.FindAllString(text, -1) {
 					u := cleanRefURL(raw)
-					if u == "" || seen[u] {
+					if u == "" {
 						continue
 					}
 					ref, ok := classifyRef(u)
-					if !ok {
+					if !ok || seen[ref.Label] {
 						continue
 					}
-					seen[u] = true
+					seen[ref.Label] = true
+					ref.FirstSeen = ts
 					refs = append(refs, ref)
 				}
 			}
@@ -122,10 +137,15 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 	return refs
 }
 
+// sortRefs orders PRs before Jira, then most-recent-first within each kind by
+// first appearance so the newest work surfaces at the top of the preview.
 func sortRefs(refs []SessionRef) {
 	order := map[RefKind]int{RefPR: 0, RefJira: 1}
 	sort.SliceStable(refs, func(i, j int) bool {
-		return order[refs[i].Kind] < order[refs[j].Kind]
+		if order[refs[i].Kind] != order[refs[j].Kind] {
+			return order[refs[i].Kind] < order[refs[j].Kind]
+		}
+		return refs[i].FirstSeen.After(refs[j].FirstSeen)
 	})
 }
 
@@ -239,6 +259,10 @@ func ResolveRefs(ctx context.Context, refs []SessionRef) []SessionRef {
 	out := make([]SessionRef, len(refs))
 	for i, r := range refs {
 		if cached, ok := getCachedRef(r.URL); ok {
+			// The cache is keyed by URL and stores only resolved status; keep this
+			// occurrence's FirstSeen/Label rather than the cached entry's.
+			cached.FirstSeen = r.FirstSeen
+			cached.Label = r.Label
 			out[i] = cached
 			continue
 		}

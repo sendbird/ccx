@@ -1127,6 +1127,34 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.updateSearchResults(msg.results)
 		return a, nil
 
+	case refsExtractedMsg:
+		// Offline extract landed: store the link list (status still unresolved)
+		// and, if this session's refs preview is open, render it immediately so
+		// URLs/labels/timestamps appear without waiting on the network. Then kick
+		// off the status resolve, which comes back as refsEnrichedMsg.
+		var statusCmd tea.Cmd
+		for i := range a.sessions {
+			if a.sessions[i].ID != msg.id {
+				continue
+			}
+			a.sessions[i].Refs = msg.refs
+			if len(msg.refs) == 0 {
+				// Nothing to resolve — mark done so we stop re-targeting it.
+				a.sessions[i].RefsResolved = true
+			} else {
+				statusCmd = a.resolveRefsStatusCmd(msg.id, msg.refs)
+			}
+			break
+		}
+		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
+			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
+				a.sessRefsCacheKey = ""
+				previewCmd := a.updateSessionRefsPreview(sess)
+				return a, tea.Batch(previewCmd, statusCmd)
+			}
+		}
+		return a, statusCmd
+
 	case refsEnrichedMsg:
 		if len(msg.attempted) == 0 {
 			return a, nil
@@ -4250,12 +4278,12 @@ func (a *App) refreshRespondingState() {
 }
 
 func (a *App) handleTick() tea.Cmd {
-	// Flush any pending on-demand ref resolve first (set from the render path,
+	// Flush any pending on-demand ref extract first (set from the render path,
 	// where the cmd would otherwise be discarded). This guarantees the refs
-	// preview resolves even when liveUpdate is off and no navigation follows.
+	// preview populates even when liveUpdate is off and no navigation follows.
 	var refsCmd tea.Cmd
 	if a.sessRefsResolveID != "" {
-		refsCmd = a.resolveOneSessionRefsCmd(a.sessRefsResolveID, a.sessRefsResolvePath)
+		refsCmd = a.extractSessionRefsCmd(a.sessRefsResolveID, a.sessRefsResolvePath)
 		a.sessRefsResolveID = ""
 		a.sessRefsResolvePath = ""
 	}
@@ -5531,12 +5559,12 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	var resolveCmd tea.Cmd
 	refs := sess.Refs
 	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved {
-		// Not resolved yet: show the placeholder now and resolve in the
-		// background so we never block the UI on gh/Jira network calls. Record
-		// the target as pending too — this method is also reached from the render
-		// path (View), where the returned cmd would be discarded; handleTick
-		// flushes the pending target so the resolve always runs.
-		resolveCmd = a.resolveOneSessionRefsCmd(sess.ID, sess.FilePath)
+		// Not extracted yet: show the placeholder now and extract offline (no
+		// network) so URLs/labels appear fast; status resolves in a second step.
+		// Record the target as pending too — this method is also reached from the
+		// render path (View), where the returned cmd would be discarded; handleTick
+		// flushes the pending target so the extract always runs.
+		resolveCmd = a.extractSessionRefsCmd(sess.ID, sess.FilePath)
 		a.sessRefsResolveID = sess.ID
 		a.sessRefsResolvePath = sess.FilePath
 	}
@@ -5557,10 +5585,39 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	return resolveCmd
 }
 
+// extractSessionRefsCmd reads a session's transcript and extracts its PR/Jira
+// refs (offline — no status resolution). Fast enough to run on demand; the
+// result comes back as refsExtractedMsg so the preview can render URLs/labels
+// immediately, then a status resolve is kicked off separately.
+func (a *App) extractSessionRefsCmd(id, filePath string) tea.Cmd {
+	if id == "" || filePath == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		refs := session.ExtractSessionRefsFromFile(filePath)
+		return refsExtractedMsg{id: id, refs: refs}
+	}
+}
+
+// resolveRefsStatusCmd resolves status (gh + Jira REST, TTL-cached) for an
+// already-extracted set of refs, off the UI thread, reporting via
+// refsEnrichedMsg. Used after refsExtractedMsg has rendered the link list.
+func (a *App) resolveRefsStatusCmd(id string, refs []session.SessionRef) tea.Cmd {
+	if id == "" || len(refs) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resolved := session.ResolveRefs(ctx, refs)
+		return refsEnrichedMsg{refs: map[string][]session.SessionRef{id: resolved}, attempted: []string{id}}
+	}
+}
+
 // resolveOneSessionRefsCmd resolves a single session's PR/Jira refs off the UI
-// thread and reports the result via refsEnrichedMsg. Used for on-demand
-// resolution when the user opens the References preview for a session that has
-// not been enriched in the background yet.
+// thread (extract + status in one pass) and reports the result via
+// refsEnrichedMsg. Used by the background enrich sweep for sessions that have
+// not been touched yet.
 func (a *App) resolveOneSessionRefsCmd(id, filePath string) tea.Cmd {
 	if id == "" || filePath == "" {
 		return nil
@@ -5577,7 +5634,8 @@ func (a *App) resolveOneSessionRefsCmd(id, filePath string) tea.Cmd {
 	}
 }
 
-// orderRefs returns refs sorted PRs-first, open items leading within each kind.
+// orderRefs returns refs sorted PRs-first, then most-recently-seen first within
+// each kind so the newest work is at the top of the preview.
 func orderRefs(refs []session.SessionRef) []session.SessionRef {
 	ordered := make([]session.SessionRef, len(refs))
 	copy(ordered, refs)
@@ -5586,7 +5644,7 @@ func orderRefs(refs []session.SessionRef) []session.SessionRef {
 		if ki != kj {
 			return ki == session.RefPR
 		}
-		return ordered[i].IsOpen() && !ordered[j].IsOpen()
+		return ordered[i].FirstSeen.After(ordered[j].FirstSeen)
 	})
 	return ordered
 }
@@ -5661,6 +5719,10 @@ func refLine(r session.SessionRef, width int, selected bool) string {
 	}
 	if detail != "" {
 		line += "  " + dimStyle.Render(detail)
+	}
+	// Timestamp of first appearance, so the list reads newest-first with context.
+	if !r.FirstSeen.IsZero() {
+		line += "  " + dimStyle.Render("· "+timeAgo(r.FirstSeen))
 	}
 	return line
 }
@@ -7418,6 +7480,14 @@ func roleLabel(e session.Entry) string {
 		return roleChip("user")
 	}
 	return roleChip("assistant")
+}
+
+// refsExtractedMsg carries the offline-extracted refs (URLs, labels, timestamps
+// — no status) for one session, so the preview can render instantly before the
+// network-bound status resolve completes.
+type refsExtractedMsg struct {
+	id   string
+	refs []session.SessionRef
 }
 
 // refsEnrichedMsg carries resolved refs for sessions, keyed by session ID.
