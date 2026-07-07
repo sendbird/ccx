@@ -144,27 +144,40 @@ var prNumRegex = regexp.MustCompile(`^[0-9]+`)
 
 // classifyRef turns a raw URL into a SessionRef if it is a GitHub PR or a Jira
 // browse link. Returns ok=false otherwise.
+//
+// A GitHub "/pull/new/<branch>" URL is the compare/create page, not an existing
+// PR — `gh pr view` can never resolve it, so it would sit at unknown status
+// forever. We only accept "/pull/<number>" where <number> starts with a digit.
 func classifyRef(u string) (SessionRef, bool) {
 	low := strings.ToLower(u)
 	switch {
 	case strings.Contains(low, "github.com") && strings.Contains(low, "/pull/"):
-		return SessionRef{Kind: RefPR, URL: u, Label: prLabel(u)}, true
+		num := prNumber(u)
+		if num == "" {
+			return SessionRef{}, false // compare page or malformed → not a real PR
+		}
+		return SessionRef{Kind: RefPR, URL: u, Label: prLabel(u, num)}, true
 	case strings.Contains(low, "atlassian.net") && strings.Contains(low, "/browse/"):
 		return SessionRef{Kind: RefJira, URL: u, Label: jiraKey(u)}, true
 	}
 	return SessionRef{}, false
 }
 
-// prLabel builds "owner/repo#number" from a PR URL. Any prose glued onto the
-// number segment (e.g. "435CPLAT-10747") is trimmed to the leading digits.
-func prLabel(u string) string {
-	// .../<owner>/<repo>/pull/<n>
+// prNumber returns the leading digits of a PR URL's number segment, or "" if the
+// segment is not numeric (e.g. "new" in a "/pull/new/<branch>" compare URL).
+func prNumber(u string) string {
 	parts := strings.Split(strings.Trim(pathOf(u), "/"), "/")
 	if len(parts) >= 4 && parts[2] == "pull" {
-		num := prNumRegex.FindString(trimQuery(parts[3]))
-		if num == "" {
-			return u
-		}
+		return prNumRegex.FindString(trimQuery(parts[3]))
+	}
+	return ""
+}
+
+// prLabel builds "owner/repo#number" from a PR URL. The already-validated
+// leading-digit number segment is passed in by classifyRef.
+func prLabel(u, num string) string {
+	parts := strings.Split(strings.Trim(pathOf(u), "/"), "/")
+	if len(parts) >= 4 && parts[2] == "pull" && num != "" {
 		return parts[0] + "/" + parts[1] + "#" + num
 	}
 	return u

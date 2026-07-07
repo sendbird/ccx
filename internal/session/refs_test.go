@@ -28,6 +28,23 @@ func TestExtractSessionRefs(t *testing.T) {
 	}
 }
 
+// TestExtractSessionRefsSkipsCompareURL guards that GitHub "/pull/new/<branch>"
+// compare-page URLs (which `gh pr view` can never resolve) are not tracked as PRs.
+func TestExtractSessionRefsSkipsCompareURL(t *testing.T) {
+	entries := []Entry{
+		{Content: []ContentBlock{
+			{Type: "text", Text: "create it at https://github.com/sendbird/ccx/pull/new/CPLAT-10756-refs then real one https://github.com/sendbird/ccx/pull/56"},
+		}},
+	}
+	refs := ExtractSessionRefs(entries)
+	if len(refs) != 1 {
+		t.Fatalf("want 1 ref (compare URL skipped), got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Label != "sendbird/ccx#56" {
+		t.Errorf("ref = %+v, want sendbird/ccx#56", refs[0])
+	}
+}
+
 // TestExtractSessionRefsGlued guards the regression where two URLs separated by
 // a literal "\n" (raw JSON escape in the transcript) were concatenated into one
 // ref, and where prose glued onto a PR number / Jira key leaked into the label.
@@ -74,6 +91,9 @@ func TestClassifyRef(t *testing.T) {
 		{"https://github.com/sendbird/ccx/pull/52#discussion_r1", RefPR, "sendbird/ccx#52", true},
 		{"https://sendbird.atlassian.net/browse/CPLAT-9497", RefJira, "CPLAT-9497", true},
 		{"https://github.com/sendbird/ccx/issues/9", "", "", false},
+		// "/pull/new/<branch>" is the compare/create page, not a real PR.
+		{"https://github.com/sendbird/ccx/pull/new/CPLAT-10756-refs", "", "", false},
+		{"https://github.com/sendbird/ccx/pull/new/feat/rendering", "", "", false},
 		{"https://example.com/foo", "", "", false},
 	}
 	for _, c := range cases {
