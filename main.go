@@ -202,12 +202,21 @@ func main() {
 			os.Exit(0)
 		case "move":
 			fs := flag.NewFlagSet("move", flag.ExitOnError)
-			sess := fs.String("session", "", "session ID (prefix match); defaults to the current tmux window's session")
-			from := fs.String("from", "", "project directory to move (moves every session under it)")
+			sess := fs.String("session", "", "session ID to move (prefix match); default: current tmux window's session")
+			from := fs.String("from", "", "project directory to move by path instead of session ID (moves every session under it)")
 			dirFlag := fs.String("dir", "", "path to Claude data directory (default: ~/.claude)")
+			fs.Usage = func() {
+				fmt.Fprintf(os.Stderr, "Move a Claude session's project path to a new location.\n\n")
+				fmt.Fprintf(os.Stderr, "Usage:\n")
+				fmt.Fprintf(os.Stderr, "  ccx move <new-path>                  Move current tmux session's project path\n")
+				fmt.Fprintf(os.Stderr, "  ccx move --session <id> <new-path>   Move a specific session by ID\n")
+				fmt.Fprintf(os.Stderr, "  ccx move --from <dir> <new-path>     Move a project dir by path (no session lookup)\n\n")
+				fmt.Fprintf(os.Stderr, "Flags:\n")
+				fs.PrintDefaults()
+			}
 			fs.Parse(os.Args[2:])
 			if fs.NArg() != 1 {
-				fmt.Fprintf(os.Stderr, "usage: ccx move [--from <dir> | --session <id>] <new-path>\n")
+				fs.Usage()
 				os.Exit(1)
 			}
 			dir := resolveClaudeDir(*dirFlag)

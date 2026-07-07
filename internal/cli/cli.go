@@ -26,7 +26,7 @@ var Commands = []struct {
 	{"conversation", "List conversation turns from the Claude session (interactive on TTY)"},
 	{"info", "Show the matched Claude session metadata"},
 	{"sessions", "List session IDs with metadata (use --pick for TUI JSON picker)"},
-	{"move", "Move a session's project path to a new location"},
+	{"move", "Move a session's project path to a new location (--from, --session, --help)"},
 	{"config", "View/edit ccx config and get/set dot-path values"},
 	{"help", "Show available commands and usage"},
 }
@@ -150,8 +150,9 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "  ccx images            Interactive image picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx conversation      Interactive conversation picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx info              Show current matched session metadata\n")
-	fmt.Fprintf(os.Stderr, "  ccx move <new-path>          Move current session's project path\n")
-	fmt.Fprintf(os.Stderr, "  ccx move --from <dir> <new>  Move a project dir's sessions by path\n")
+	fmt.Fprintf(os.Stderr, "  ccx move <new-path>             Move current session's project path\n")
+	fmt.Fprintf(os.Stderr, "  ccx move --session <id> <new>  Move a session by ID\n")
+	fmt.Fprintf(os.Stderr, "  ccx move --from <dir> <new>     Move a project dir by path (no session ID needed)\n")
 	fmt.Fprintf(os.Stderr, "  ccx config view       Print ~/.config/ccx/config.yaml\n")
 	fmt.Fprintf(os.Stderr, "  ccx config edit       Open config in $EDITOR\n")
 	fmt.Fprintf(os.Stderr, "  ccx config set remote.pod_name ccx-worker\n\n")
