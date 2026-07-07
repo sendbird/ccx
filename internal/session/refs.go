@@ -432,3 +432,20 @@ func httpDoJSON(req *http.Request) ([]byte, bool) {
 	}
 	return body, true
 }
+
+// OpenRefCounts returns how many of the session's resolved refs are open PRs
+// and open (non-done) Jira issues. Only meaningful once Refs is populated.
+func (s Session) OpenRefCounts() (openPRs, openJira int) {
+	for _, r := range s.Refs {
+		if !r.IsOpen() {
+			continue
+		}
+		switch r.Kind {
+		case RefPR:
+			openPRs++
+		case RefJira:
+			openJira++
+		}
+	}
+	return openPRs, openJira
+}

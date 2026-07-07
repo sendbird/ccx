@@ -1816,6 +1816,21 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a.openLivePreview(sess)
+	case km.Session.Switch:
+		// Jump straight to the session's live tmux window (client switch).
+		if !a.config.TmuxEnabled || !tmux.InTmux() {
+			a.copiedMsg = "Requires tmux"
+			return a, nil
+		}
+		sess, ok := a.selectedSession()
+		if !ok {
+			return a, nil
+		}
+		if !sess.IsLive {
+			a.copiedMsg = "Not a live session"
+			return a, nil
+		}
+		return a.jumpToTmuxPane(sess.ProjectPath, sess.ID)
 	case km.Session.Edit:
 		sess, ok := a.selectedSession()
 		if !ok {

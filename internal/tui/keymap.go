@@ -21,6 +21,7 @@ type SessionKeymap struct {
 	Search       string `yaml:"search"`
 	GlobalSearch string `yaml:"global_search"`
 	Live         string `yaml:"live"`
+	Switch       string `yaml:"switch"` // jump to the session's live tmux window
 	Select       string `yaml:"select"`
 	Preview      string `yaml:"preview"`
 	PreviewBack  string `yaml:"preview_back"`
@@ -118,6 +119,7 @@ func DefaultKeymap() Keymap {
 			Search:       "/",
 			GlobalSearch: "ctrl+s",
 			Live:         "L",
+			Switch:       "s",
 			Select:       " ",
 			Preview:      "tab",
 			PreviewBack:  "shift+tab",
@@ -239,6 +241,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Session.Live != "" {
 		dst.Session.Live = src.Session.Live
+	}
+	if src.Session.Switch != "" {
+		dst.Session.Switch = src.Session.Switch
 	}
 	if src.Session.Select != "" {
 		dst.Session.Select = src.Session.Select

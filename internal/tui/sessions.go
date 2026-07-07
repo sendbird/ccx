@@ -1668,6 +1668,7 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 		{displayKey(sk.Refresh), "Refresh list"},
 		{displayKey(sk.Preview), "Cycle preview mode (conv→stats→mem→tasks/plan)"},
 		{displayKey(sk.Live), "Live preview (^Q:unfocus)"},
+		{displayKey(sk.Switch), "Switch to live tmux window"},
 		{displayKey(sk.Select), "Toggle multi-select"},
 		{"o", "Fold/expand project group"},
 		{"f / F", "Fold all / expand all groups"},
