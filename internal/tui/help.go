@@ -85,6 +85,8 @@ func (a *App) sessHelpLine() string {
 			h += " ↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
 		case sessPreviewWorkflows:
 			h += " ↑↓:agent ↵:transcript ←:unfocus tab:mode"
+		case sessPreviewRefs:
+			h += " ↑↓:nav ↵:open ←:unfocus tab:mode"
 		default:
 			h += " ↑↓:scroll ←:unfocus tab:mode"
 		}
