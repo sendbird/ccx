@@ -339,6 +339,9 @@ type App struct {
 	sessAgentCursor       int                   // cursor within agents list
 	sessPreviewRefs       []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
 	sessRefsCursor        int                   // cursor within the References preview list
+	sessRefsResolved      bool                  // whether the currently-previewed session's refs have been resolved
+	sessRefsResolveID     string                // session ID awaiting on-demand ref resolution (flushed to a cmd in handleTick)
+	sessRefsResolvePath   string                // transcript path for the pending on-demand resolve
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -1155,9 +1158,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// If the References preview is open on a session whose refs just resolved,
 		// re-render it live so the "Resolving…" placeholder (or stale ○ badges)
 		// updates to the fetched status without the user having to re-navigate.
-		if changed && a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
+		// This fires even when no refs landed (all links unresolvable) so the
+		// placeholder flips to "No resolvable…" instead of spinning forever.
+		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
 			if sess, ok := a.selectedSession(); ok && attempted[sess.ID] {
-				a.sessRefsCacheKey = "" // force re-render with the new refs
+				a.sessRefsCacheKey = "" // force re-render with the new refs / resolved flag
 				return a, a.updateSessionRefsPreview(sess)
 			}
 		}
@@ -4245,6 +4250,15 @@ func (a *App) refreshRespondingState() {
 }
 
 func (a *App) handleTick() tea.Cmd {
+	// Flush any pending on-demand ref resolve first (set from the render path,
+	// where the cmd would otherwise be discarded). This guarantees the refs
+	// preview resolves even when liveUpdate is off and no navigation follows.
+	var refsCmd tea.Cmd
+	if a.sessRefsResolveID != "" {
+		refsCmd = a.resolveOneSessionRefsCmd(a.sessRefsResolveID, a.sessRefsResolvePath)
+		a.sessRefsResolveID = ""
+		a.sessRefsResolvePath = ""
+	}
 	// Always refresh conversation preview for live sessions (regardless of liveUpdate)
 	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
 		if sess, ok := a.selectedSession(); ok && sess.IsLive {
@@ -4266,12 +4280,9 @@ func (a *App) handleTick() tea.Cmd {
 	}
 
 	if !a.liveUpdate {
-		return pollCmd
+		return tea.Batch(refsCmd, pollCmd)
 	}
-	if pollCmd != nil {
-		return tea.Batch(a.doRefresh(), pollCmd)
-	}
-	return a.doRefresh()
+	return tea.Batch(refsCmd, pollCmd, a.doRefresh())
 }
 
 func (a *App) doRefresh() tea.Cmd {
@@ -4479,9 +4490,11 @@ func (a *App) renderSessionSplit() string {
 		a.sessionList.Select(idx)
 	}
 
-	// Don't call updateSessionPreview for live mode from render path — the
-	// returned async cmd would be discarded. Live mode is initialized from
-	// Update paths (resizeAll, key handlers) where cmds are dispatched.
+	// Don't call updateSessionPreview for live mode from the render path — the
+	// returned async cmd would be discarded. Live mode is initialized from Update
+	// paths (resizeAll, key handlers). Refs mode renders its content here (pure),
+	// but its resolve cmd is dispatched via the pending-flush in handleTick so it
+	// is never lost to the render path.
 	if a.sessPreviewMode != sessPreviewLive {
 		_ = a.updateSessionPreview()
 	}
@@ -5519,8 +5532,13 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	refs := sess.Refs
 	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved {
 		// Not resolved yet: show the placeholder now and resolve in the
-		// background so we never block the UI on gh/Jira network calls.
+		// background so we never block the UI on gh/Jira network calls. Record
+		// the target as pending too — this method is also reached from the render
+		// path (View), where the returned cmd would be discarded; handleTick
+		// flushes the pending target so the resolve always runs.
 		resolveCmd = a.resolveOneSessionRefsCmd(sess.ID, sess.FilePath)
+		a.sessRefsResolveID = sess.ID
+		a.sessRefsResolvePath = sess.FilePath
 	}
 	// Order refs (open PRs first) and stash them so the focused-pane key handler
 	// can map the cursor to a concrete URL to open.
@@ -5528,11 +5546,12 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	if a.sessRefsCursor >= len(a.sessPreviewRefs) {
 		a.sessRefsCursor = 0
 	}
-	cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t", sess.ID, len(refs), previewW, a.sessRefsCursor, a.sessSplit.Focus)
+	cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t:%t", sess.ID, len(refs), previewW, a.sessRefsCursor, a.sessSplit.Focus, sess.RefsResolved)
 	if a.sessRefsCacheKey != cacheKey {
-		a.sessRefsCache = a.renderSessionRefs(a.sessPreviewRefs, previewW, sess.HasRefs)
+		a.sessRefsCache = a.renderSessionRefs(a.sessPreviewRefs, previewW, sess.HasRefs, sess.RefsResolved)
 		a.sessRefsCacheKey = cacheKey
 	}
+	a.sessRefsResolved = sess.RefsResolved
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessRefsCache)
 	return resolveCmd
@@ -5574,8 +5593,11 @@ func orderRefs(refs []session.SessionRef) []session.SessionRef {
 
 // renderSessionRefs draws the PR/Jira reference list with status indicators.
 // The item at sessRefsCursor is highlighted when the preview pane is focused so
-// the user can pick a reference and open it in the browser.
-func (a *App) renderSessionRefs(ordered []session.SessionRef, width int, hasRefs bool) string {
+// the user can pick a reference and open it in the browser. resolved reports
+// whether a resolve pass has completed — when true but the list is empty, the
+// session's only links were unresolvable (e.g. compare-page URLs), so we say so
+// instead of leaving a permanent "Resolving…" spinner.
+func (a *App) renderSessionRefs(ordered []session.SessionRef, width int, hasRefs, resolved bool) string {
 	var sb strings.Builder
 	title := "── References ──"
 	if len(ordered) > 0 && a.sessSplit.Focus {
@@ -5583,10 +5605,13 @@ func (a *App) renderSessionRefs(ordered []session.SessionRef, width int, hasRefs
 	}
 	sb.WriteString(statTitleStyle.Render(title) + "\n\n")
 	if len(ordered) == 0 {
-		if hasRefs {
-			sb.WriteString(dimStyle.Render("Resolving PR/Jira status…"))
-		} else {
+		switch {
+		case !hasRefs:
 			sb.WriteString(dimStyle.Render("No PR or Jira links in this session."))
+		case resolved:
+			sb.WriteString(dimStyle.Render("No resolvable PR/Jira references."))
+		default:
+			sb.WriteString(dimStyle.Render("Resolving PR/Jira status…"))
 		}
 		return sb.String()
 	}
