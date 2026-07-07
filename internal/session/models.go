@@ -86,8 +86,9 @@ type Session struct {
 	HasWorkflows bool          // workflow runs recorded under {sessionID}/workflows/
 	Workflows    []WorkflowRun // populated lazily when HasWorkflows is true
 
-	HasRefs bool         // PR or Jira links present in the transcript
-	Refs    []SessionRef // populated lazily (extracted + status-resolved) when HasRefs is true
+	HasRefs      bool         // PR or Jira links present in the transcript
+	Refs         []SessionRef // populated lazily (extracted + status-resolved) when HasRefs is true
+	RefsResolved bool         // true once a resolve pass ran, even if it yielded no usable refs (prevents re-targeting every refresh)
 
 	CustomBadges []string // user-created badge tags
 

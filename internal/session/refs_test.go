@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExtractSessionRefs(t *testing.T) {
 	entries := []Entry{
@@ -22,6 +25,41 @@ func TestExtractSessionRefs(t *testing.T) {
 	}
 	if refs[1].Kind != RefJira || refs[1].Label != "CPLAT-1234" {
 		t.Errorf("ref[1] = %+v, want Jira CPLAT-1234", refs[1])
+	}
+}
+
+// TestExtractSessionRefsGlued guards the regression where two URLs separated by
+// a literal "\n" (raw JSON escape in the transcript) were concatenated into one
+// ref, and where prose glued onto a PR number / Jira key leaked into the label.
+func TestExtractSessionRefsGlued(t *testing.T) {
+	entries := []Entry{
+		{Content: []ContentBlock{
+			// Two URLs glued by a literal backslash-n (as stored in raw JSONL).
+			{Type: "text", Text: `https://github.com/sendbird/delight-ops-k8s/pull/431\nhttps://sendbird.atlassian.net/browse/CPLAT-10747`},
+			// PR number with trailing prose, and a Jira key with a suffix word.
+			{Type: "text", Text: "https://github.com/sendbird/delight-ops-k8s/pull/435CPLAT-10747 https://sendbird.atlassian.net/browse/CPLAT-10753Follow-up"},
+		}},
+	}
+	refs := ExtractSessionRefs(entries)
+	got := map[string]bool{}
+	for _, r := range refs {
+		got[r.Label] = true
+	}
+	for _, want := range []string{
+		"sendbird/delight-ops-k8s#431",
+		"sendbird/delight-ops-k8s#435",
+		"CPLAT-10747",
+		"CPLAT-10753",
+	} {
+		if !got[want] {
+			t.Errorf("missing ref label %q; got %+v", want, refs)
+		}
+	}
+	// The glued forms must NOT appear.
+	for label := range got {
+		if strings.Contains(label, "https:") || strings.Contains(label, "Follow-up") {
+			t.Errorf("label not trimmed: %q", label)
+		}
 	}
 }
 

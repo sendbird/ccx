@@ -132,7 +132,15 @@ func sortRefs(refs []SessionRef) {
 // ---- URL classification (kept local so the session package has no dependency
 // on internal/extract, which itself depends on this package).
 
-var refURLRegex = regexp.MustCompile(`https?://[^\s<>"'` + "`" + `\)\]]+`)
+var refURLRegex = regexp.MustCompile(`https?://[^\s<>"'` + "`" + `\)\]\\]+`)
+
+// jiraKeyRegex matches a canonical Jira issue key: uppercase project + number.
+// Used to trim trailing prose glued onto a browse URL (e.g. "CPLAT-10753Follow-up").
+var jiraKeyRegex = regexp.MustCompile(`^[A-Z][A-Z0-9]+-[0-9]+`)
+
+// prNumRegex matches the leading digits of a PR number segment, trimming any
+// prose glued onto it (e.g. "435CPLAT-10747" → "435").
+var prNumRegex = regexp.MustCompile(`^[0-9]+`)
 
 // classifyRef turns a raw URL into a SessionRef if it is a GitHub PR or a Jira
 // browse link. Returns ok=false otherwise.
@@ -147,24 +155,35 @@ func classifyRef(u string) (SessionRef, bool) {
 	return SessionRef{}, false
 }
 
-// prLabel builds "owner/repo#number" from a PR URL.
+// prLabel builds "owner/repo#number" from a PR URL. Any prose glued onto the
+// number segment (e.g. "435CPLAT-10747") is trimmed to the leading digits.
 func prLabel(u string) string {
 	// .../<owner>/<repo>/pull/<n>
 	parts := strings.Split(strings.Trim(pathOf(u), "/"), "/")
 	if len(parts) >= 4 && parts[2] == "pull" {
-		return parts[0] + "/" + parts[1] + "#" + trimQuery(parts[3])
+		num := prNumRegex.FindString(trimQuery(parts[3]))
+		if num == "" {
+			return u
+		}
+		return parts[0] + "/" + parts[1] + "#" + num
 	}
 	return u
 }
 
-// jiraKey extracts the issue key (e.g. CPLAT-1234) from a browse URL.
+// jiraKey extracts the issue key (e.g. CPLAT-1234) from a browse URL. Trailing
+// prose glued onto the segment (e.g. "CPLAT-10753Follow-up") is trimmed to the
+// canonical key.
 func jiraKey(u string) string {
 	p := pathOf(u)
 	idx := strings.Index(p, "/browse/")
 	if idx < 0 {
 		return u
 	}
-	return trimQuery(strings.Trim(p[idx+len("/browse/"):], "/"))
+	seg := trimQuery(strings.Trim(p[idx+len("/browse/"):], "/"))
+	if m := jiraKeyRegex.FindString(seg); m != "" {
+		return m
+	}
+	return seg
 }
 
 // ---- Status resolution.
@@ -373,9 +392,18 @@ func firstNonEmpty(vals ...string) string {
 
 // cleanRefURL strips JSON-escape artifacts and trailing punctuation, then
 // validates the URL. Returns "" if it is not a usable absolute URL.
+//
+// A literal escape sequence (backslash-n, -t, -r) or a literal backslash marks
+// the end of the URL: transcripts store text as raw JSON, so two URLs separated
+// by "\n" arrive glued as `...pull/431\nhttps://...`. We cut at the first such
+// marker instead of deleting it, otherwise the two URLs concatenate into one.
 func cleanRefURL(raw string) string {
-	raw = strings.NewReplacer(`\n`, "", `\t`, "", `\r`, "", `\/`, "/").Replace(raw)
-	raw = strings.TrimRight(raw, `\`)
+	// JSON may escape forward slashes as "\/"; restore them first.
+	raw = strings.ReplaceAll(raw, `\/`, "/")
+	// Cut at the first remaining literal escape marker or backslash.
+	if i := strings.IndexByte(raw, '\\'); i >= 0 {
+		raw = raw[:i]
+	}
 	raw = strings.TrimRightFunc(raw, func(r rune) bool {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
 			return false

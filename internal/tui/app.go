@@ -1122,20 +1122,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case refsEnrichedMsg:
-		if len(msg.refs) == 0 {
+		if len(msg.attempted) == 0 {
 			return a, nil
+		}
+		attempted := make(map[string]bool, len(msg.attempted))
+		for _, id := range msg.attempted {
+			attempted[id] = true
 		}
 		changed := false
 		for i := range a.sessions {
-			if refs, ok := msg.refs[a.sessions[i].ID]; ok {
+			id := a.sessions[i].ID
+			if !attempted[id] {
+				continue
+			}
+			// Mark resolved regardless of outcome so we stop re-targeting it.
+			a.sessions[i].RefsResolved = true
+			if refs, ok := msg.refs[id]; ok {
 				a.sessions[i].Refs = refs
 				changed = true
 			}
 		}
-		// Refs feed the open-PR badge and counts, so re-render the list (unless
-		// the user is mid-filter, where rebuild would disrupt their view).
+		// Only rebuild when a badge-affecting change actually landed. The row
+		// cache is keyed on the open-PR/Jira counts, so stale rows self-evict on
+		// re-render — no need to Clear() the whole cache (that reintroduced the
+		// navigation stutter on every background refresh).
 		if changed && a.state == viewSessions && !a.isFiltering() {
-			a.sessionRowCache.Clear()
 			a.rebuildSessionList()
 		}
 		return a, nil
@@ -4230,6 +4241,10 @@ func (a *App) doRefresh() tea.Cmd {
 				if !info.ModTime().Equal(a.sessions[i].ModTime) {
 					a.sessions[i].ModTime = info.ModTime()
 					needsSort = true
+					// New activity may have introduced fresh PR/Jira links, so
+					// allow one more resolve pass (the URL→status cache is still
+					// TTL-guarded, so this stays cheap when nothing changed).
+					a.sessions[i].RefsResolved = false
 				}
 			}
 			type liveState struct{ live, responding bool }
@@ -5431,15 +5446,17 @@ func (a *App) updateSessionRefsPreview(sess session.Session) {
 	contentH := max(a.height-3, 1)
 
 	refs := sess.Refs
-	if len(refs) == 0 && sess.HasRefs {
+	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		refs = session.LoadSessionRefs(ctx, sess.FilePath)
 		cancel()
 		// Cache the resolved refs back onto the in-memory session so the badge
-		// and future renders pick them up without re-fetching.
+		// and future renders pick them up without re-fetching. Mark resolved
+		// even on an empty result so we don't block for 6s again next visit.
 		for i := range a.sessions {
 			if a.sessions[i].ID == sess.ID {
 				a.sessions[i].Refs = refs
+				a.sessions[i].RefsResolved = true
 				break
 			}
 		}
@@ -7278,8 +7295,12 @@ func roleLabel(e session.Entry) string {
 }
 
 // refsEnrichedMsg carries resolved refs for sessions, keyed by session ID.
+// attempted lists every session ID a resolve pass ran for (even those that
+// yielded no usable refs) so the handler can mark them resolved and stop
+// re-targeting them on every refresh.
 type refsEnrichedMsg struct {
-	refs map[string][]session.SessionRef
+	refs      map[string][]session.SessionRef
+	attempted []string
 }
 
 // enrichRefsCmd resolves PR/Jira references for sessions flagged HasRefs. It
@@ -7295,7 +7316,10 @@ func (a *App) enrichRefsCmd() tea.Cmd {
 	var targets []target
 	for i := range a.sessions {
 		s := &a.sessions[i]
-		if s.HasRefs && len(s.Refs) == 0 && s.FilePath != "" {
+		// Only target sessions that have links and have never been through a
+		// resolve pass. RefsResolved stays true afterward even if the pass found
+		// nothing usable, so a broken/absent link does not re-run gh every tick.
+		if s.HasRefs && !s.RefsResolved && s.FilePath != "" {
 			targets = append(targets, target{id: s.ID, filePath: s.FilePath})
 		}
 	}
@@ -7311,8 +7335,10 @@ func (a *App) enrichRefsCmd() tea.Cmd {
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 		out := make(map[string][]session.SessionRef, len(targets))
+		attempted := make([]string, 0, len(targets))
 
 		for _, t := range targets {
+			attempted = append(attempted, t.id)
 			wg.Add(1)
 			sem <- struct{}{}
 			go func(t target) {
@@ -7328,6 +7354,6 @@ func (a *App) enrichRefsCmd() tea.Cmd {
 			}(t)
 		}
 		wg.Wait()
-		return refsEnrichedMsg{refs: out}
+		return refsEnrichedMsg{refs: out, attempted: attempted}
 	}
 }
