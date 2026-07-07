@@ -1,6 +1,8 @@
 package session
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -93,13 +95,74 @@ func LoadSessionRefs(ctx context.Context, filePath string) []SessionRef {
 // references WITHOUT resolving status. This is the cheap, offline half of
 // LoadSessionRefs — the preview uses it to render URLs/labels/timestamps
 // instantly, then resolves status asynchronously.
+//
+// It deliberately does NOT go through LoadMessages/ParseEntry: fully unmarshaling
+// every entry of a multi-megabyte transcript (hooks, tool blocks, content) just
+// to find a handful of URLs took ~150ms. Instead we scan raw lines, run the URL
+// regex over each, and only when a line contains a ref do we pull its timestamp
+// out with a cheap string scan (no JSON decode). Measured ~10x faster.
 func ExtractSessionRefsFromFile(filePath string) []SessionRef {
-	entries, err := LoadMessages(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
 		return nil
 	}
-	return ExtractSessionRefs(entries)
+	defer f.Close()
+
+	seen := make(map[string]bool) // by canonical Label
+	var refs []SessionRef
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		locs := refURLRegex.FindAll(line, -1)
+		if len(locs) == 0 {
+			continue
+		}
+		var ts time.Time
+		tsParsed := false
+		for _, raw := range locs {
+			u := cleanRefURL(string(raw))
+			if u == "" {
+				continue
+			}
+			ref, ok := classifyRef(u)
+			if !ok || seen[ref.Label] {
+				continue
+			}
+			if !tsParsed {
+				ts = lineTimestamp(line)
+				tsParsed = true
+			}
+			seen[ref.Label] = true
+			ref.FirstSeen = ts
+			refs = append(refs, ref)
+		}
+	}
+	sortRefs(refs)
+	return refs
 }
+
+// lineTimestamp pulls the "timestamp":"<RFC3339>" value out of a raw JSONL line
+// without a full JSON decode. Returns the zero time if absent/unparseable.
+func lineTimestamp(line []byte) time.Time {
+	i := bytes.Index(line, bTimestampKey)
+	if i < 0 {
+		return time.Time{}
+	}
+	rest := line[i+len(bTimestampKey):]
+	end := bytes.IndexByte(rest, '"')
+	if end < 0 {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, string(rest[:end]))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+var bTimestampKey = []byte(`"timestamp":"`)
 
 // ExtractSessionRefs scans a session's entries for PR and Jira URLs and returns
 // a deduplicated, ordered list (PRs first, then Jira). References are keyed by
@@ -152,6 +215,11 @@ func sortRefs(refs []SessionRef) {
 // ---- URL classification (kept local so the session package has no dependency
 // on internal/extract, which itself depends on this package).
 
+// refURLRegex matches URL candidates. A literal backslash terminates the match
+// so two URLs glued by a raw "\n" in a JSONL line (or any "\"-escape) do not
+// merge into one; cleanRefURL further restores "\/"→"/" and trims trailing
+// punctuation. Claude Code JSONL does not escape slashes, so normal URLs are
+// unaffected.
 var refURLRegex = regexp.MustCompile(`https?://[^\s<>"'` + "`" + `\)\]\\]+`)
 
 // jiraKeyRegex matches a canonical Jira issue key: uppercase project + number.

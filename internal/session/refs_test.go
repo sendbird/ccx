@@ -1,10 +1,51 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestExtractSessionRefsFromFile verifies the raw-line fast path: it parses
+// URLs and per-line timestamps out of real JSONL without a full JSON decode,
+// dedups by label, and orders most-recent-first.
+func TestExtractSessionRefsFromFile(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "s.jsonl")
+	// Two assistant lines with RFC3339 timestamps; #52 appears first (older),
+	// #99 later (newer). Claude Code JSONL does not escape slashes, so URLs
+	// appear in normal form.
+	lines := []string{
+		`{"type":"assistant","timestamp":"2026-07-01T10:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"PR https://github.com/sendbird/ccx/pull/52 and CPLAT-1 https://sendbird.atlassian.net/browse/CPLAT-1234"}]}}`,
+		`{"type":"assistant","timestamp":"2026-07-02T10:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"newer https://github.com/sendbird/ccx/pull/99"}]}}`,
+		`{"type":"assistant","timestamp":"2026-07-03T10:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"dup https://github.com/sendbird/ccx/pull/52#discussion_r1"}]}}`,
+	}
+	if err := os.WriteFile(fp, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refs := ExtractSessionRefsFromFile(fp)
+	// #52, #99 (deduped), CPLAT-1234 → 3 refs; PRs before Jira, newest PR first.
+	if len(refs) != 3 {
+		t.Fatalf("want 3 refs, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Label != "sendbird/ccx#99" || refs[1].Label != "sendbird/ccx#52" {
+		t.Errorf("PR order = [%s, %s], want [#99, #52]", refs[0].Label, refs[1].Label)
+	}
+	if refs[2].Kind != RefJira || refs[2].Label != "CPLAT-1234" {
+		t.Errorf("ref[2] = %+v, want Jira CPLAT-1234", refs[2])
+	}
+	// Timestamp parsed from the line, earliest kept on dedup for #52.
+	for _, r := range refs {
+		if r.FirstSeen.IsZero() {
+			t.Errorf("%s missing FirstSeen", r.Label)
+		}
+		if r.Label == "sendbird/ccx#52" && r.FirstSeen.Day() != 1 {
+			t.Errorf("#52 FirstSeen = %v, want Jul 1 (earliest)", r.FirstSeen)
+		}
+	}
+}
 
 func TestExtractSessionRefs(t *testing.T) {
 	entries := []Entry{
