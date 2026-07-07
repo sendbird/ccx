@@ -242,6 +242,24 @@ var (
 	jiraAvailable bool
 )
 
+// jiraAuthFailed is a process-wide circuit breaker: once a Jira request comes
+// back 401/403, the configured token is unusable, so we stop attempting further
+// Jira calls (each would otherwise cost a full network round-trip) for the rest
+// of the process. Guarded by refCacheMu.
+var jiraAuthFailed bool
+
+func jiraAuthIsFailed() bool {
+	refCacheMu.Lock()
+	defer refCacheMu.Unlock()
+	return jiraAuthFailed
+}
+
+func markJiraAuthFailed() {
+	refCacheMu.Lock()
+	jiraAuthFailed = true
+	refCacheMu.Unlock()
+}
+
 func initJiraAuth() {
 	jiraAuthOnce.Do(func() {
 		jiraToken = firstNonEmpty(os.Getenv("JIRA_API_TOKEN"), os.Getenv("JIRA_API_KEY"), os.Getenv("ATLASSIAN_TOKEN"))
@@ -258,21 +276,27 @@ func initJiraAuth() {
 func ResolveRefs(ctx context.Context, refs []SessionRef) []SessionRef {
 	out := make([]SessionRef, len(refs))
 	for i, r := range refs {
-		if cached, ok := getCachedRef(r.URL); ok {
-			// The cache is keyed by URL and stores only resolved status; keep this
-			// occurrence's FirstSeen/Label rather than the cached entry's.
-			cached.FirstSeen = r.FirstSeen
-			cached.Label = r.Label
-			out[i] = cached
-			continue
-		}
-		resolved := resolveOne(ctx, r)
-		resolved.Resolved = true
-		resolved.FetchedAt = time.Now()
-		setCachedRef(resolved)
-		out[i] = resolved
+		out[i] = ResolveRef(ctx, r)
 	}
 	return out
+}
+
+// ResolveRef fetches and fills status for a single ref, honoring the URL-keyed
+// TTL cache. Safe for concurrent use (the cache is mutex-guarded). Callers that
+// want to stream results as they land resolve refs individually via this.
+func ResolveRef(ctx context.Context, r SessionRef) SessionRef {
+	if cached, ok := getCachedRef(r.URL); ok {
+		// The cache is keyed by URL and stores only resolved status; keep this
+		// occurrence's FirstSeen/Label rather than the cached entry's.
+		cached.FirstSeen = r.FirstSeen
+		cached.Label = r.Label
+		return cached
+	}
+	resolved := resolveOne(ctx, r)
+	resolved.Resolved = true
+	resolved.FetchedAt = time.Now()
+	setCachedRef(resolved)
+	return resolved
 }
 
 func getCachedRef(url string) (SessionRef, bool) {
@@ -384,8 +408,8 @@ type jiraIssueView struct {
 
 func resolveJira(ctx context.Context, r SessionRef) SessionRef {
 	initJiraAuth()
-	if !jiraAvailable {
-		return r // no creds → link only
+	if !jiraAvailable || jiraAuthIsFailed() {
+		return r // no creds, or the token already 401'd → link only, no round-trip
 	}
 	key := r.Label
 	if key == "" {
@@ -398,8 +422,13 @@ func resolveJira(ctx context.Context, r SessionRef) SessionRef {
 	}
 	req.SetBasicAuth(jiraEmail, jiraToken)
 	req.Header.Set("Accept", "application/json")
-	body, ok := httpDoJSON(req)
+	body, status, ok := httpDoJSON(req)
 	if !ok {
+		// A bad token fails identically for every issue; trip the breaker so we
+		// don't pay a network round-trip per Jira ref for the rest of the process.
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			markJiraAuthFailed()
+		}
 		return r
 	}
 	var v jiraIssueView
@@ -481,21 +510,22 @@ func httpNewRequest(ctx context.Context, method, url string) (*http.Request, err
 
 var refHTTPClient = &http.Client{Timeout: 8 * time.Second}
 
-// httpDoJSON performs the request and returns the body if the status is 2xx.
-func httpDoJSON(req *http.Request) ([]byte, bool) {
+// httpDoJSON performs the request and returns the body and HTTP status. ok is
+// true only on a 2xx response with a readable body.
+func httpDoJSON(req *http.Request) (body []byte, status int, ok bool) {
 	resp, err := refHTTPClient.Do(req)
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, false
+		return nil, resp.StatusCode, false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, false
+		return nil, resp.StatusCode, false
 	}
-	return body, true
+	return b, resp.StatusCode, true
 }
 
 // OpenRefCounts returns how many of the session's resolved refs are open PRs

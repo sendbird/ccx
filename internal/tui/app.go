@@ -1155,6 +1155,36 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, statusCmd
 
+	case refStatusMsg:
+		// One ref's status landed: merge it into the session (matched by URL) and,
+		// if that session's refs preview is open, re-render so it fills in live.
+		// Mark RefsResolved once every ref in the session has a status.
+		for i := range a.sessions {
+			if a.sessions[i].ID != msg.id {
+				continue
+			}
+			allResolved := true
+			for j := range a.sessions[i].Refs {
+				if a.sessions[i].Refs[j].URL == msg.ref.URL {
+					a.sessions[i].Refs[j] = msg.ref
+				}
+				if !a.sessions[i].Refs[j].Resolved {
+					allResolved = false
+				}
+			}
+			if allResolved {
+				a.sessions[i].RefsResolved = true
+			}
+			break
+		}
+		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
+			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
+				a.sessRefsCacheKey = "" // force re-render with the newly-resolved ref
+				return a, a.updateSessionRefsPreview(sess)
+			}
+		}
+		return a, nil
+
 	case refsEnrichedMsg:
 		if len(msg.attempted) == 0 {
 			return a, nil
@@ -5600,18 +5630,24 @@ func (a *App) extractSessionRefsCmd(id, filePath string) tea.Cmd {
 }
 
 // resolveRefsStatusCmd resolves status (gh + Jira REST, TTL-cached) for an
-// already-extracted set of refs, off the UI thread, reporting via
-// refsEnrichedMsg. Used after refsExtractedMsg has rendered the link list.
+// already-extracted set of refs. Each ref resolves in its own command so
+// results stream back one at a time (refStatusMsg) as they land — a slow gh or
+// a timing-out Jira call no longer blocks the whole list. refs are expected in
+// display order (most-recent first) so the newest statuses fill in first.
 func (a *App) resolveRefsStatusCmd(id string, refs []session.SessionRef) tea.Cmd {
 	if id == "" || len(refs) == 0 {
 		return nil
 	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		resolved := session.ResolveRefs(ctx, refs)
-		return refsEnrichedMsg{refs: map[string][]session.SessionRef{id: resolved}, attempted: []string{id}}
+	cmds := make([]tea.Cmd, 0, len(refs))
+	for _, r := range refs {
+		ref := r
+		cmds = append(cmds, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return refStatusMsg{id: id, ref: session.ResolveRef(ctx, ref)}
+		})
 	}
+	return tea.Batch(cmds...)
 }
 
 // resolveOneSessionRefsCmd resolves a single session's PR/Jira refs off the UI
@@ -7488,6 +7524,14 @@ func roleLabel(e session.Entry) string {
 type refsExtractedMsg struct {
 	id   string
 	refs []session.SessionRef
+}
+
+// refStatusMsg carries the resolved status of a SINGLE ref (matched by URL)
+// within a session, so status streams into the preview one ref at a time as
+// each gh/Jira call returns instead of waiting for the whole batch.
+type refStatusMsg struct {
+	id  string
+	ref session.SessionRef
 }
 
 // refsEnrichedMsg carries resolved refs for sessions, keyed by session ID.
