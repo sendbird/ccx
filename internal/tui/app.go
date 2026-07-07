@@ -329,6 +329,7 @@ type App struct {
 	sessContextsCacheKey  string
 	sessRefsCache         string
 	sessRefsCacheKey      string
+	sessRefsCacheID       string // session ID the refs cursor currently tracks
 	sessWorkflowsCache    string
 	sessWorkflowsCacheKey string
 	sessWfRuns            []session.WorkflowRun // parsed runs for the selected session
@@ -336,6 +337,8 @@ type App struct {
 	sessWfCursor          int                   // cursor within the workflow agent list
 	sessPreviewAgents     []session.Subagent    // agents shown in Tasks/Plan preview
 	sessAgentCursor       int                   // cursor within agents list
+	sessPreviewRefs       []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
+	sessRefsCursor        int                   // cursor within the References preview list
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -2086,6 +2089,9 @@ func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, te
 	if a.sessPreviewMode == sessPreviewWorkflows && len(a.sessWfAgents) > 0 {
 		return a.handleWorkflowsPreviewKeys(sp, key)
 	}
+	if a.sessPreviewMode == sessPreviewRefs && len(a.sessPreviewRefs) > 0 {
+		return a.handleRefsPreviewKeys(sp, key)
+	}
 	switch key {
 	case "/":
 		sp.Focus = false
@@ -2188,6 +2194,52 @@ func (a *App) handleWorkflowsPreviewKeys(sp *SplitPane, key string) (tea.Model, 
 		return a, nil, true
 	}
 	return a, nil, false
+}
+
+// handleRefsPreviewKeys handles cursor navigation + open for the References
+// preview. Enter opens the reference under the cursor (PR or Jira) in the
+// browser.
+func (a *App) handleRefsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
+	case "enter", "o":
+		return a.openRefUnderCursor()
+	case "/":
+		sp.Focus = false
+		return a, startListSearch(&a.sessionList), true
+	}
+	switch HandleFlatCursorNav(&a.sessRefsCursor, len(a.sessPreviewRefs), key) {
+	case NavCursorMoved:
+		a.sessRefsCacheKey = "" // cursor moved → force re-render with new highlight
+		if sess, ok := a.selectedSession(); ok {
+			a.updateSessionRefsPreview(sess)
+		}
+		return a, nil, true
+	case NavBoundaryDown, NavBoundaryUp:
+		return a, nil, true
+	}
+	if scrollViewport(&sp.Preview, key) {
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// openRefUnderCursor opens the currently selected reference's URL in the
+// default browser.
+func (a *App) openRefUnderCursor() (tea.Model, tea.Cmd, bool) {
+	if a.sessRefsCursor < 0 || a.sessRefsCursor >= len(a.sessPreviewRefs) {
+		return a, nil, true
+	}
+	ref := a.sessPreviewRefs[a.sessRefsCursor]
+	if ref.URL == "" {
+		a.copiedMsg = "No URL for this reference"
+		return a, nil, true
+	}
+	if err := exec.Command("open", ref.URL).Start(); err != nil {
+		a.copiedMsg = "Error: " + err.Error()
+		return a, nil, true
+	}
+	a.copiedMsg = "Opened " + ref.Label
+	return a, nil, true
 }
 
 // drillIntoWorkflowAgent opens the conversation view for the current session and
@@ -5445,6 +5497,13 @@ func (a *App) updateSessionRefsPreview(sess session.Session) {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 
+	// Reset the cursor when the selected session changes so it never points past
+	// a different session's (possibly shorter) ref list.
+	if a.sessRefsCacheID != sess.ID {
+		a.sessRefsCursor = 0
+		a.sessRefsCacheID = sess.ID
+	}
+
 	refs := sess.Refs
 	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
@@ -5461,30 +5520,23 @@ func (a *App) updateSessionRefsPreview(sess session.Session) {
 			}
 		}
 	}
-	cacheKey := fmt.Sprintf("%s:%d:%d", sess.ID, len(refs), previewW)
+	// Order refs (open PRs first) and stash them so the focused-pane key handler
+	// can map the cursor to a concrete URL to open.
+	a.sessPreviewRefs = orderRefs(refs)
+	if a.sessRefsCursor >= len(a.sessPreviewRefs) {
+		a.sessRefsCursor = 0
+	}
+	cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t", sess.ID, len(refs), previewW, a.sessRefsCursor, a.sessSplit.Focus)
 	if a.sessRefsCacheKey != cacheKey {
-		a.sessRefsCache = renderSessionRefs(refs, previewW, sess.HasRefs)
+		a.sessRefsCache = a.renderSessionRefs(a.sessPreviewRefs, previewW, sess.HasRefs)
 		a.sessRefsCacheKey = cacheKey
 	}
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessRefsCache)
 }
 
-// renderSessionRefs draws the PR/Jira reference list with status indicators.
-func renderSessionRefs(refs []session.SessionRef, width int, hasRefs bool) string {
-	var sb strings.Builder
-	sb.WriteString(statTitleStyle.Render("── References ──") + "\n\n")
-	if len(refs) == 0 {
-		if hasRefs {
-			sb.WriteString(dimStyle.Render("Resolving PR/Jira status…"))
-		} else {
-			sb.WriteString(dimStyle.Render("No PR or Jira links in this session."))
-		}
-		return sb.String()
-	}
-
-	// PRs first (already sorted by ExtractSessionRefs), open ones on top within
-	// each kind so the actionable items lead.
+// orderRefs returns refs sorted PRs-first, open items leading within each kind.
+func orderRefs(refs []session.SessionRef) []session.SessionRef {
 	ordered := make([]session.SessionRef, len(refs))
 	copy(ordered, refs)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -5494,9 +5546,30 @@ func renderSessionRefs(refs []session.SessionRef, width int, hasRefs bool) strin
 		}
 		return ordered[i].IsOpen() && !ordered[j].IsOpen()
 	})
+	return ordered
+}
+
+// renderSessionRefs draws the PR/Jira reference list with status indicators.
+// The item at sessRefsCursor is highlighted when the preview pane is focused so
+// the user can pick a reference and open it in the browser.
+func (a *App) renderSessionRefs(ordered []session.SessionRef, width int, hasRefs bool) string {
+	var sb strings.Builder
+	title := "── References ──"
+	if len(ordered) > 0 && a.sessSplit.Focus {
+		title = "── References  ↵:open ──"
+	}
+	sb.WriteString(statTitleStyle.Render(title) + "\n\n")
+	if len(ordered) == 0 {
+		if hasRefs {
+			sb.WriteString(dimStyle.Render("Resolving PR/Jira status…"))
+		} else {
+			sb.WriteString(dimStyle.Render("No PR or Jira links in this session."))
+		}
+		return sb.String()
+	}
 
 	lastKind := session.RefKind("")
-	for _, r := range ordered {
+	for i, r := range ordered {
 		if r.Kind != lastKind {
 			title := "Pull Requests"
 			if r.Kind == session.RefJira {
@@ -5505,15 +5578,20 @@ func renderSessionRefs(refs []session.SessionRef, width int, hasRefs bool) strin
 			sb.WriteString("\n" + dimStyle.Bold(true).Render(title) + "\n")
 			lastKind = r.Kind
 		}
-		sb.WriteString(refLine(r, width) + "\n")
+		selected := i == a.sessRefsCursor && a.sessSplit.Focus
+		sb.WriteString(refLine(r, width, selected) + "\n")
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// refLine renders a single reference: state dot + label + status detail.
-func refLine(r session.SessionRef, width int) string {
+// refLine renders a single reference: cursor + state dot + label + status detail.
+func refLine(r session.SessionRef, width int, selected bool) string {
 	dot, label := refStateBadge(r)
-	line := "  " + dot + " " + label
+	cursor := "  "
+	if selected {
+		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true).Render("> ")
+	}
+	line := cursor + dot + " " + label
 
 	var detail string
 	switch r.Kind {
