@@ -339,7 +339,6 @@ type App struct {
 	sessPreviewRefs       []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
 	sessRefsCursor        int                   // cursor within the References preview list
 	sessRefsResolved      bool                  // whether the currently-previewed session's refs have been resolved
-	sessRefsPending       map[string]string     // session ID → transcript path awaiting on-demand extract (flushed in handleTick); a map so switching sessions before the tick fires never drops an earlier session's pending extract
 	refsInFlight          map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
 
 	// Conversation preview state
@@ -752,7 +751,6 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		selectedSet:         make(map[string]bool),
 		hiddenBadges:        make(map[string]bool),
 		refsInFlight:        make(map[string]bool),
-		sessRefsPending:     make(map[string]string),
 		notifyPrev:          make(map[string]session.LifecycleState),
 		sessionRowCache:     newSessionRowCache(1024),
 		convPreviewRowCache: newSessionRowCache(4096),
@@ -2592,21 +2590,21 @@ func (a *App) handleSessPageMenu(key string) (tea.Model, tea.Cmd) {
 	a.sessPageMenu = false
 	switch key {
 	case "v":
-		a.setSessPreviewMode(sessPreviewConversation)
+		return a, a.setSessPreviewMode(sessPreviewConversation)
 	case "s":
-		a.setSessPreviewMode(sessPreviewStats)
+		return a, a.setSessPreviewMode(sessPreviewStats)
 	case "m":
-		a.setSessPreviewMode(sessPreviewMemory)
+		return a, a.setSessPreviewMode(sessPreviewMemory)
 	case "t":
-		a.setSessPreviewMode(sessPreviewTasksPlan)
+		return a, a.setSessPreviewMode(sessPreviewTasksPlan)
 	case "a":
-		a.setSessPreviewMode(sessPreviewAgents)
+		return a, a.setSessPreviewMode(sessPreviewAgents)
 	case "w":
-		a.setSessPreviewMode(sessPreviewWorkflows)
+		return a, a.setSessPreviewMode(sessPreviewWorkflows)
 	case "c":
-		a.setSessPreviewMode(sessPreviewContexts)
+		return a, a.setSessPreviewMode(sessPreviewContexts)
 	case "r":
-		a.setSessPreviewMode(sessPreviewRefs)
+		return a, a.setSessPreviewMode(sessPreviewRefs)
 	case "l":
 		if sess, ok := a.selectedSession(); ok {
 			if sess.IsRemote {
@@ -3167,8 +3165,7 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	if a.sessionPreviewActionsActive() {
 		switch key {
 		case "c":
-			a.setSessPreviewMode(sessPreviewContexts)
-			return a, nil
+			return a, a.setSessPreviewMode(sessPreviewContexts)
 		case "f":
 			visible := a.convVisibleEntries()
 			return a.openSessionPreviewFullText(visible), nil
@@ -4271,20 +4268,6 @@ func (a *App) refreshRespondingState() {
 }
 
 func (a *App) handleTick() tea.Cmd {
-	// Flush any pending on-demand ref extracts first (set from the render path,
-	// where the returned cmd would otherwise be discarded). This guarantees the
-	// refs preview populates even when liveUpdate is off and no navigation
-	// follows. It is a map, not a single slot, so switching sessions before the
-	// tick fires never strands an earlier session on "Resolving…" forever.
-	var refsCmd tea.Cmd
-	if len(a.sessRefsPending) > 0 {
-		cmds := make([]tea.Cmd, 0, len(a.sessRefsPending))
-		for id, path := range a.sessRefsPending {
-			cmds = append(cmds, a.extractSessionRefsCmd(id, path))
-		}
-		a.sessRefsPending = make(map[string]string)
-		refsCmd = tea.Batch(cmds...)
-	}
 	// Always refresh conversation preview for live sessions (regardless of liveUpdate)
 	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
 		if sess, ok := a.selectedSession(); ok && sess.IsLive {
@@ -4306,9 +4289,9 @@ func (a *App) handleTick() tea.Cmd {
 	}
 
 	if !a.liveUpdate {
-		return tea.Batch(refsCmd, pollCmd)
+		return pollCmd
 	}
-	return tea.Batch(refsCmd, pollCmd, a.doRefresh())
+	return tea.Batch(pollCmd, a.doRefresh())
 }
 
 func (a *App) doRefresh() tea.Cmd {
@@ -4527,12 +4510,12 @@ func (a *App) renderSessionSplit() string {
 		a.sessionList.Select(idx)
 	}
 
-	// Don't call updateSessionPreview for live mode from the render path — the
-	// returned async cmd would be discarded. Live mode is initialized from Update
-	// paths (resizeAll, key handlers). Refs mode renders its content here (pure),
-	// but its resolve cmd is dispatched via the pending-flush in handleTick so it
-	// is never lost to the render path.
-	if a.sessPreviewMode != sessPreviewLive {
+	// Don't call updateSessionPreview from the render path for modes whose
+	// update returns an async cmd (live, refs) — View() cannot dispatch a cmd, so
+	// it would be lost. Those modes are initialized and their cmds dispatched from
+	// Update paths (setSessPreviewMode, the navigation debounce, resizeAll). View
+	// only re-renders their already-populated content (the resize block below).
+	if a.sessPreviewMode != sessPreviewLive && a.sessPreviewMode != sessPreviewRefs {
 		_ = a.updateSessionPreview()
 	}
 
@@ -5569,18 +5552,15 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	var resolveCmd tea.Cmd
 	refs := sess.Refs
 	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved && !a.refsInFlight[sess.ID] {
-		// Not extracted yet: show the placeholder now and extract offline (no
-		// network) so URLs/labels appear fast; status resolves in a second step.
-		// Record the target as pending too — this method is also reached from the
-		// render path (View), where the returned cmd would be discarded; handleTick
-		// flushes the pending target so the extract always runs. Guard on
-		// refsInFlight so repeated renders/ticks don't re-parse + re-resolve the
-		// same session while a pass is already running (that spiked CPU).
+		// Not extracted yet: render the placeholder now and kick off the offline
+		// extract (no network) so URLs/labels appear fast; status resolves in a
+		// second step. refsInFlight dedups so repeated navigation/renders don't
+		// re-parse the same session. The returned cmd is dispatched by the Update
+		// path that opened/navigated the preview (setSessPreviewMode and the
+		// navigation debounce both return it); this method is gated behind
+		// updateSessionPreview's session/mode cache key, so it fires once per
+		// (session, mode) rather than on every frame.
 		resolveCmd = a.extractSessionRefsCmd(sess.ID, sess.FilePath)
-		if a.sessRefsPending == nil {
-			a.sessRefsPending = make(map[string]string)
-		}
-		a.sessRefsPending[sess.ID] = sess.FilePath
 		a.refsInFlight[sess.ID] = true
 	}
 	// Order refs (open PRs first) and stash them so the focused-pane key handler
@@ -5595,7 +5575,9 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 		a.sessRefsCacheKey = cacheKey
 	}
 	a.sessRefsResolved = sess.RefsResolved
-	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	if a.sessSplit.Preview.Width != previewW || a.sessSplit.Preview.Height != contentH {
+		a.sessSplit.Preview = viewport.New(previewW, contentH)
+	}
 	a.sessSplit.Preview.SetContent(a.sessRefsCache)
 	return resolveCmd
 }
@@ -6849,6 +6831,13 @@ func (a *App) resizeAll() tea.Cmd {
 		a.sessionList.SetSize(sessW, contentH)
 		a.sessionList.Select(idx)
 		a.sessSplit.CacheKey = ""
+		// Refs preview is excluded from the View render path (it returns an async
+		// cmd View can't dispatch), so re-render it here on resize where we can.
+		if a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
+			if refsCmd := a.updateSessionPreview(); refsCmd != nil {
+				cmd = tea.Batch(cmd, refsCmd)
+			}
+		}
 	} else {
 		idx := a.sessionList.Index()
 		a.sessionList.SetSize(a.width, contentH)
