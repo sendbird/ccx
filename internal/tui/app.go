@@ -4304,6 +4304,13 @@ func (a *App) doRefresh() tea.Cmd {
 			tmux.MarkLiveSessions(fresh)
 			session.EnrichLiveSessions(fresh)
 
+			// ScanSessions only sets HasRefs; it does not re-resolve PR/Jira
+			// status (that is network-bound and done on demand). Carry the
+			// already-resolved Refs/RefsResolved from the current a.sessions
+			// into the fresh slice, or a manual refresh / new-session rescan
+			// would wipe them and flip an open preview back to "Resolving…".
+			a.carryOverRefState(fresh)
+
 			a.sessions = a.injectRemoteSessions(fresh)
 			a.globalStatsCache = nil // invalidate cached stats
 
@@ -5538,7 +5545,74 @@ func (a *App) updateSessionContextsPreview(sess session.Session) {
 // instead of blocking navigation — each ref's status streams back via
 // refStatusMsg and re-renders this preview if it is still open. Status is only
 // ever resolved for the session shown here, never swept across the fleet.
+// sessionByIDFromStore returns the authoritative session (by ID) from
+// a.sessions, the source of truth for lazily-resolved state like Refs. Unlike
+// selectedSession()/sessionByID(), which read the list widget's snapshot copies,
+// this reflects updates made by async message handlers that mutate a.sessions
+// without rebuilding the list.
+func (a *App) sessionByIDFromStore(id string) (session.Session, bool) {
+	for i := range a.sessions {
+		if a.sessions[i].ID == id {
+			return a.sessions[i], true
+		}
+	}
+	return session.Session{}, false
+}
+
+// carryOverRefState copies lazily-resolved PR/Jira ref state (the extracted Refs
+// list + RefsResolved) from the current a.sessions into a freshly-scanned slice,
+// in place. ScanSessions detects HasRefs but never resolves status (network-
+// bound, on-demand only), so without this a full rescan would blank every
+// already-extracted ref and flip an open References preview back to
+// "Resolving…" — or, if a resolve was mid-flight, strand it on a bogus
+// "No resolvable references".
+//
+// We carry the Refs list whenever the old session had one (even if status was
+// still resolving), so the preview keeps showing links across a rescan. When
+// the transcript changed since resolution we keep the cached refs but clear
+// RefsResolved so the next preview open re-resolves (picking up any new links);
+// the URL→status cache is TTL-guarded, so that re-check stays cheap. A session
+// with a resolve currently in flight is left for that pass to finish.
+func (a *App) carryOverRefState(fresh []session.Session) {
+	if len(a.sessions) == 0 {
+		return
+	}
+	prev := make(map[string]*session.Session, len(a.sessions))
+	for i := range a.sessions {
+		prev[a.sessions[i].ID] = &a.sessions[i]
+	}
+	for i := range fresh {
+		old, ok := prev[fresh[i].ID]
+		if !ok {
+			continue
+		}
+		if len(old.Refs) == 0 && !old.RefsResolved {
+			continue // nothing extracted yet — let on-demand extract handle it
+		}
+		fresh[i].Refs = old.Refs
+		fresh[i].RefsResolved = old.RefsResolved
+		// Transcript grew since we resolved: keep the cached refs on screen but
+		// allow one re-resolve so newly-added links surface. Skip while a
+		// resolve is already in flight (resetting mid-pass re-triggers extract
+		// every tick — the CPU-spike footgun the earlier fixes fought).
+		if old.RefsResolved && !a.refsInFlight[fresh[i].ID] &&
+			!fresh[i].ModTime.Equal(old.ModTime) {
+			fresh[i].RefsResolved = false
+		}
+	}
+}
+
 func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
+	// Read the authoritative session from a.sessions, not the list-widget copy
+	// the caller passed in. selectedSession() returns sessionItem.sess, a copy
+	// snapshotted at the last rebuildSessionList — the async extract/resolve
+	// handlers update a.sessions[i].Refs but do NOT rebuild the list, so that
+	// copy's Refs/RefsResolved stay stale and the preview would render
+	// "Resolving…" forever. a.sessions is the source of truth for ref status.
+	if fresh, ok := a.sessionByIDFromStore(sess.ID); ok {
+		sess = fresh
+	}
+
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 
