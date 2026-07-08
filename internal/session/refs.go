@@ -1,6 +1,8 @@
 package session
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -46,6 +48,8 @@ type SessionRef struct {
 	URL   string
 	Label string // e.g. "sendbird/ccx#52" or "CPLAT-1234"
 
+	FirstSeen time.Time // timestamp of the entry where this ref first appeared
+
 	State RefState // resolved lifecycle state (RefStateUnknown until fetched)
 
 	// PR-only detail.
@@ -80,24 +84,97 @@ func (r SessionRef) IsOpen() bool {
 // has no such references. Intended for lazy enrichment when a session preview
 // or badge needs ref detail.
 func LoadSessionRefs(ctx context.Context, filePath string) []SessionRef {
-	entries, err := LoadMessages(filePath)
-	if err != nil {
-		return nil
-	}
-	refs := ExtractSessionRefs(entries)
+	refs := ExtractSessionRefsFromFile(filePath)
 	if len(refs) == 0 {
 		return nil
 	}
 	return ResolveRefs(ctx, refs)
 }
 
+// ExtractSessionRefsFromFile reads a session's JSONL and extracts its PR/Jira
+// references WITHOUT resolving status. This is the cheap, offline half of
+// LoadSessionRefs — the preview uses it to render URLs/labels/timestamps
+// instantly, then resolves status asynchronously.
+//
+// It deliberately does NOT go through LoadMessages/ParseEntry: fully unmarshaling
+// every entry of a multi-megabyte transcript (hooks, tool blocks, content) just
+// to find a handful of URLs took ~150ms. Instead we scan raw lines, run the URL
+// regex over each, and only when a line contains a ref do we pull its timestamp
+// out with a cheap string scan (no JSON decode). Measured ~10x faster.
+func ExtractSessionRefsFromFile(filePath string) []SessionRef {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	seen := make(map[string]bool) // by canonical Label
+	var refs []SessionRef
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		locs := refURLRegex.FindAll(line, -1)
+		if len(locs) == 0 {
+			continue
+		}
+		var ts time.Time
+		tsParsed := false
+		for _, raw := range locs {
+			u := cleanRefURL(string(raw))
+			if u == "" {
+				continue
+			}
+			ref, ok := classifyRef(u)
+			if !ok || seen[ref.Label] {
+				continue
+			}
+			if !tsParsed {
+				ts = lineTimestamp(line)
+				tsParsed = true
+			}
+			seen[ref.Label] = true
+			ref.FirstSeen = ts
+			refs = append(refs, ref)
+		}
+	}
+	sortRefs(refs)
+	return refs
+}
+
+// lineTimestamp pulls the "timestamp":"<RFC3339>" value out of a raw JSONL line
+// without a full JSON decode. Returns the zero time if absent/unparseable.
+func lineTimestamp(line []byte) time.Time {
+	i := bytes.Index(line, bTimestampKey)
+	if i < 0 {
+		return time.Time{}
+	}
+	rest := line[i+len(bTimestampKey):]
+	end := bytes.IndexByte(rest, '"')
+	if end < 0 {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, string(rest[:end]))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+var bTimestampKey = []byte(`"timestamp":"`)
+
 // ExtractSessionRefs scans a session's entries for PR and Jira URLs and returns
-// a deduplicated, ordered list (PRs first, then Jira). Status is NOT resolved
-// here — callers use ResolveRefs for that (it is network-bound and cached).
+// a deduplicated, ordered list (PRs first, then Jira). References are keyed by
+// their canonical Label (e.g. "sendbird/ccx#52"), so the same PR referenced via
+// different URL forms (#discussion anchors, query strings) collapses into one
+// entry, keeping the earliest appearance's timestamp in FirstSeen. Status is
+// NOT resolved here — callers use ResolveRefs for that (network-bound, cached).
 func ExtractSessionRefs(entries []Entry) []SessionRef {
-	seen := make(map[string]bool)
+	seen := make(map[string]bool) // by canonical Label
 	var refs []SessionRef
 	for i := range entries {
+		ts := entries[i].Timestamp
 		for _, b := range entries[i].Content {
 			for _, text := range [2]string{b.Text, b.ToolInput} {
 				if text == "" {
@@ -105,14 +182,15 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 				}
 				for _, raw := range refURLRegex.FindAllString(text, -1) {
 					u := cleanRefURL(raw)
-					if u == "" || seen[u] {
+					if u == "" {
 						continue
 					}
 					ref, ok := classifyRef(u)
-					if !ok {
+					if !ok || seen[ref.Label] {
 						continue
 					}
-					seen[u] = true
+					seen[ref.Label] = true
+					ref.FirstSeen = ts
 					refs = append(refs, ref)
 				}
 			}
@@ -122,16 +200,26 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 	return refs
 }
 
+// sortRefs orders PRs before Jira, then most-recent-first within each kind by
+// first appearance so the newest work surfaces at the top of the preview.
 func sortRefs(refs []SessionRef) {
 	order := map[RefKind]int{RefPR: 0, RefJira: 1}
 	sort.SliceStable(refs, func(i, j int) bool {
-		return order[refs[i].Kind] < order[refs[j].Kind]
+		if order[refs[i].Kind] != order[refs[j].Kind] {
+			return order[refs[i].Kind] < order[refs[j].Kind]
+		}
+		return refs[i].FirstSeen.After(refs[j].FirstSeen)
 	})
 }
 
 // ---- URL classification (kept local so the session package has no dependency
 // on internal/extract, which itself depends on this package).
 
+// refURLRegex matches URL candidates. A literal backslash terminates the match
+// so two URLs glued by a raw "\n" in a JSONL line (or any "\"-escape) do not
+// merge into one; cleanRefURL further restores "\/"→"/" and trims trailing
+// punctuation. Claude Code JSONL does not escape slashes, so normal URLs are
+// unaffected.
 var refURLRegex = regexp.MustCompile(`https?://[^\s<>"'` + "`" + `\)\]\\]+`)
 
 // jiraKeyRegex matches a canonical Jira issue key: uppercase project + number.
@@ -222,6 +310,24 @@ var (
 	jiraAvailable bool
 )
 
+// jiraAuthFailed is a process-wide circuit breaker: once a Jira request comes
+// back 401/403, the configured token is unusable, so we stop attempting further
+// Jira calls (each would otherwise cost a full network round-trip) for the rest
+// of the process. Guarded by refCacheMu.
+var jiraAuthFailed bool
+
+func jiraAuthIsFailed() bool {
+	refCacheMu.Lock()
+	defer refCacheMu.Unlock()
+	return jiraAuthFailed
+}
+
+func markJiraAuthFailed() {
+	refCacheMu.Lock()
+	jiraAuthFailed = true
+	refCacheMu.Unlock()
+}
+
 func initJiraAuth() {
 	jiraAuthOnce.Do(func() {
 		jiraToken = firstNonEmpty(os.Getenv("JIRA_API_TOKEN"), os.Getenv("JIRA_API_KEY"), os.Getenv("ATLASSIAN_TOKEN"))
@@ -238,18 +344,50 @@ func initJiraAuth() {
 func ResolveRefs(ctx context.Context, refs []SessionRef) []SessionRef {
 	out := make([]SessionRef, len(refs))
 	for i, r := range refs {
-		if cached, ok := getCachedRef(r.URL); ok {
-			out[i] = cached
-			continue
-		}
-		resolved := resolveOne(ctx, r)
-		resolved.Resolved = true
-		resolved.FetchedAt = time.Now()
-		setCachedRef(resolved)
-		out[i] = resolved
+		out[i] = ResolveRef(ctx, r)
 	}
 	return out
 }
+
+// ResolveRef fetches and fills status for a single ref, honoring the URL-keyed
+// TTL cache. Safe for concurrent use (the cache is mutex-guarded). Callers that
+// want to stream results as they land resolve refs individually via this.
+//
+// Cache hits return immediately. Cache misses acquire a slot from a small
+// process-wide semaphore before spawning gh / making a Jira call, so a preview
+// with many refs (plus the background enrich sweep) cannot fan out dozens of gh
+// subprocesses at once — that spiked CPU and starved the UI event loop.
+func ResolveRef(ctx context.Context, r SessionRef) SessionRef {
+	if cached, ok := getCachedRef(r.URL); ok {
+		// The cache is keyed by URL and stores only resolved status; keep this
+		// occurrence's FirstSeen/Label rather than the cached entry's.
+		cached.FirstSeen = r.FirstSeen
+		cached.Label = r.Label
+		return cached
+	}
+	// Bound concurrent network work. Respect ctx cancellation while waiting.
+	select {
+	case resolveSem <- struct{}{}:
+		defer func() { <-resolveSem }()
+	case <-ctx.Done():
+		return r // leave unresolved; a later pass retries
+	}
+	// Another goroutine may have resolved this URL while we waited for a slot.
+	if cached, ok := getCachedRef(r.URL); ok {
+		cached.FirstSeen = r.FirstSeen
+		cached.Label = r.Label
+		return cached
+	}
+	resolved := resolveOne(ctx, r)
+	resolved.Resolved = true
+	resolved.FetchedAt = time.Now()
+	setCachedRef(resolved)
+	return resolved
+}
+
+// resolveSem caps concurrent PR/Jira status resolutions process-wide. gh spawns
+// a subprocess per call, so this is deliberately small to protect the UI.
+var resolveSem = make(chan struct{}, 4)
 
 func getCachedRef(url string) (SessionRef, bool) {
 	refCacheMu.Lock()
@@ -360,8 +498,8 @@ type jiraIssueView struct {
 
 func resolveJira(ctx context.Context, r SessionRef) SessionRef {
 	initJiraAuth()
-	if !jiraAvailable {
-		return r // no creds → link only
+	if !jiraAvailable || jiraAuthIsFailed() {
+		return r // no creds, or the token already 401'd → link only, no round-trip
 	}
 	key := r.Label
 	if key == "" {
@@ -374,8 +512,13 @@ func resolveJira(ctx context.Context, r SessionRef) SessionRef {
 	}
 	req.SetBasicAuth(jiraEmail, jiraToken)
 	req.Header.Set("Accept", "application/json")
-	body, ok := httpDoJSON(req)
+	body, status, ok := httpDoJSON(req)
 	if !ok {
+		// A bad token fails identically for every issue; trip the breaker so we
+		// don't pay a network round-trip per Jira ref for the rest of the process.
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			markJiraAuthFailed()
+		}
 		return r
 	}
 	var v jiraIssueView
@@ -457,21 +600,22 @@ func httpNewRequest(ctx context.Context, method, url string) (*http.Request, err
 
 var refHTTPClient = &http.Client{Timeout: 8 * time.Second}
 
-// httpDoJSON performs the request and returns the body if the status is 2xx.
-func httpDoJSON(req *http.Request) ([]byte, bool) {
+// httpDoJSON performs the request and returns the body and HTTP status. ok is
+// true only on a 2xx response with a readable body.
+func httpDoJSON(req *http.Request) (body []byte, status int, ok bool) {
 	resp, err := refHTTPClient.Do(req)
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, false
+		return nil, resp.StatusCode, false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, false
+		return nil, resp.StatusCode, false
 	}
-	return body, true
+	return b, resp.StatusCode, true
 }
 
 // OpenRefCounts returns how many of the session's resolved refs are open PRs
