@@ -339,8 +339,7 @@ type App struct {
 	sessPreviewRefs       []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
 	sessRefsCursor        int                   // cursor within the References preview list
 	sessRefsResolved      bool                  // whether the currently-previewed session's refs have been resolved
-	sessRefsResolveID     string                // session ID awaiting on-demand ref resolution (flushed to a cmd in handleTick)
-	sessRefsResolvePath   string                // transcript path for the pending on-demand resolve
+	sessRefsPending       map[string]string     // session ID → transcript path awaiting on-demand extract (flushed in handleTick); a map so switching sessions before the tick fires never drops an earlier session's pending extract
 	refsInFlight          map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
 
 	// Conversation preview state
@@ -753,6 +752,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		selectedSet:         make(map[string]bool),
 		hiddenBadges:        make(map[string]bool),
 		refsInFlight:        make(map[string]bool),
+		sessRefsPending:     make(map[string]string),
 		notifyPrev:          make(map[string]session.LifecycleState),
 		sessionRowCache:     newSessionRowCache(1024),
 		convPreviewRowCache: newSessionRowCache(4096),
@@ -4271,14 +4271,19 @@ func (a *App) refreshRespondingState() {
 }
 
 func (a *App) handleTick() tea.Cmd {
-	// Flush any pending on-demand ref extract first (set from the render path,
-	// where the cmd would otherwise be discarded). This guarantees the refs
-	// preview populates even when liveUpdate is off and no navigation follows.
+	// Flush any pending on-demand ref extracts first (set from the render path,
+	// where the returned cmd would otherwise be discarded). This guarantees the
+	// refs preview populates even when liveUpdate is off and no navigation
+	// follows. It is a map, not a single slot, so switching sessions before the
+	// tick fires never strands an earlier session on "Resolving…" forever.
 	var refsCmd tea.Cmd
-	if a.sessRefsResolveID != "" {
-		refsCmd = a.extractSessionRefsCmd(a.sessRefsResolveID, a.sessRefsResolvePath)
-		a.sessRefsResolveID = ""
-		a.sessRefsResolvePath = ""
+	if len(a.sessRefsPending) > 0 {
+		cmds := make([]tea.Cmd, 0, len(a.sessRefsPending))
+		for id, path := range a.sessRefsPending {
+			cmds = append(cmds, a.extractSessionRefsCmd(id, path))
+		}
+		a.sessRefsPending = make(map[string]string)
+		refsCmd = tea.Batch(cmds...)
 	}
 	// Always refresh conversation preview for live sessions (regardless of liveUpdate)
 	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
@@ -5572,8 +5577,10 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 		// refsInFlight so repeated renders/ticks don't re-parse + re-resolve the
 		// same session while a pass is already running (that spiked CPU).
 		resolveCmd = a.extractSessionRefsCmd(sess.ID, sess.FilePath)
-		a.sessRefsResolveID = sess.ID
-		a.sessRefsResolvePath = sess.FilePath
+		if a.sessRefsPending == nil {
+			a.sessRefsPending = make(map[string]string)
+		}
+		a.sessRefsPending[sess.ID] = sess.FilePath
 		a.refsInFlight[sess.ID] = true
 	}
 	// Order refs (open PRs first) and stash them so the focused-pane key handler

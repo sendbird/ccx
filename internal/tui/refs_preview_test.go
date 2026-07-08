@@ -4,8 +4,61 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/sendbird/ccx/internal/session"
 )
+
+// TestRefsPendingFlushDoesNotDropSessions guards the "stuck on Resolving…" bug:
+// the on-demand extract is queued in a map (sessRefsPending), not a single slot,
+// so switching sessions before the 3s tick fires can no longer strand an earlier
+// session with refsInFlight=true but no extract ever dispatched. handleTick must
+// flush ALL pending entries and clear the queue.
+func TestRefsPendingFlushDoesNotDropSessions(t *testing.T) {
+	a := newTestApp(fakeSessions())
+	a.liveUpdate = false // so handleTick returns only the pending-flush batch
+
+	// Two sessions queued their extract via the render path (cmd discarded there).
+	a.sessRefsPending["aaa"] = "/tmp/proj-a/aaa.jsonl"
+	a.sessRefsPending["bbb"] = "/tmp/proj-b/bbb.jsonl"
+	a.refsInFlight["aaa"] = true
+	a.refsInFlight["bbb"] = true
+
+	cmd := a.handleTick()
+
+	if len(a.sessRefsPending) != 0 {
+		t.Errorf("pending not fully flushed: %v", a.sessRefsPending)
+	}
+	if cmd == nil {
+		t.Fatal("handleTick returned nil cmd despite pending extracts")
+	}
+	// Draining the batch must yield a refsExtractedMsg for BOTH queued sessions,
+	// proving neither was dropped.
+	got := map[string]bool{}
+	collectExtractedIDs(cmd, got)
+	for _, id := range []string{"aaa", "bbb"} {
+		if !got[id] {
+			t.Errorf("no refsExtractedMsg dispatched for session %q (would stay stuck on Resolving…)", id)
+		}
+	}
+}
+
+// collectExtractedIDs runs a (possibly batched) tea.Cmd and records the session
+// IDs of any refsExtractedMsg it produces.
+func collectExtractedIDs(cmd tea.Cmd, out map[string]bool) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	switch m := msg.(type) {
+	case refsExtractedMsg:
+		out[m.id] = true
+	case tea.BatchMsg:
+		for _, c := range m {
+			collectExtractedIDs(c, out)
+		}
+	}
+}
 
 func TestRenderSessionRefs(t *testing.T) {
 	a := &App{}
