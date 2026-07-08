@@ -115,7 +115,9 @@ func (a *App) runDebouncedPreview() tea.Cmd {
 	case viewConversation:
 		a.updateConvPreview()
 	case viewSessions:
-		return a.updateSessionPreview()
+		// Resolve refs for rows scrolled into view so their PR/Jira badge fills
+		// in, alongside the selected session's preview update.
+		return tea.Batch(a.updateSessionPreview(), a.resolveVisibleRefsCmd())
 	case viewConfig:
 		a.updateConfigPreview()
 	case viewPlugins:
@@ -1179,6 +1181,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			break
 		}
+		// Reflect the newly-resolved status onto the list row so the open-PR/Jira
+		// badge fills in live, whether or not the References preview is open.
+		a.syncSessionRefsToList(msg.id)
 		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessRefsCacheKey = "" // force re-render with the newly-resolved ref
@@ -4288,10 +4293,15 @@ func (a *App) handleTick() tea.Cmd {
 		pollCmd = pollRemotePhasesCmd()
 	}
 
+	// Fill in open-PR/Jira badges for the sessions currently on screen. Scoped to
+	// the visible page (not the fleet) so this cannot regress into the CPU sweep
+	// removed in #60; refsInFlight dedups so a row is only worked once.
+	refsCmd := a.resolveVisibleRefsCmd()
+
 	if !a.liveUpdate {
-		return pollCmd
+		return tea.Batch(pollCmd, refsCmd)
 	}
-	return tea.Batch(pollCmd, a.doRefresh())
+	return tea.Batch(pollCmd, refsCmd, a.doRefresh())
 }
 
 func (a *App) doRefresh() tea.Cmd {
@@ -5600,6 +5610,73 @@ func (a *App) carryOverRefState(fresh []session.Session) {
 			fresh[i].RefsResolved = false
 		}
 	}
+}
+
+// syncSessionRefsToList copies a session's resolved ref state from a.sessions
+// (source of truth) into the list widget's sessionItem.sess copy, in place, so
+// the open-PR/Jira badge reflects it. The async extract/resolve handlers mutate
+// a.sessions but the list holds snapshot copies from the last rebuild, so the
+// badge (which reads si.sess.OpenRefCounts) would otherwise never update. This
+// avoids a full rebuildSessionList (which resets scroll/cursor) on every ref
+// that lands. Returns true if the row was found and updated.
+func (a *App) syncSessionRefsToList(id string) bool {
+	fresh, ok := a.sessionByIDFromStore(id)
+	if !ok {
+		return false
+	}
+	items := a.sessionList.Items()
+	for i, item := range items {
+		si, ok := item.(sessionItem)
+		if !ok || si.sess.ID != id {
+			continue
+		}
+		si.sess.Refs = fresh.Refs
+		si.sess.RefsResolved = fresh.RefsResolved
+		items[i] = si
+		a.sessionList.SetItems(items)
+		return true
+	}
+	return false
+}
+
+// resolveVisibleRefsCmd kicks off offline ref extraction for the sessions
+// currently ON SCREEN (the visible page slice) that have links but have not
+// been extracted/resolved yet. This is what makes the open-PR/Jira badge fill
+// in asynchronously without the user opening each References preview.
+//
+// It is deliberately scoped to the visible page — NOT the whole fleet. A
+// tick-driven sweep across every HasRefs session is what pegged CPU for minutes
+// (each `gh pr view` ~1.6s; hundreds of them) and was ripped out in #60. Bounding
+// work to what the user can actually see keeps the fan-out tiny: extract is a
+// ~10ms offline line scan, and the follow-on status resolve is already capped by
+// resolveSem (4 concurrent). refsInFlight dedups so a row in view across many
+// ticks is only worked once.
+func (a *App) resolveVisibleRefsCmd() tea.Cmd {
+	if a.state != viewSessions {
+		return nil
+	}
+	items := a.sessionList.VisibleItems()
+	if len(items) == 0 {
+		return nil
+	}
+	start, end := a.sessionList.Paginator.GetSliceBounds(len(items))
+	var cmds []tea.Cmd
+	for _, item := range items[start:end] {
+		si, ok := item.(sessionItem)
+		if !ok {
+			continue
+		}
+		s, ok := a.sessionByIDFromStore(si.sess.ID)
+		if !ok || !s.HasRefs || s.RefsResolved || a.refsInFlight[s.ID] || len(s.Refs) > 0 {
+			continue
+		}
+		a.refsInFlight[s.ID] = true
+		cmds = append(cmds, a.extractSessionRefsCmd(s.ID, s.FilePath))
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {

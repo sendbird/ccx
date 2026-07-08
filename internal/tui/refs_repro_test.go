@@ -120,3 +120,86 @@ func TestCarryOverRefStateKeepsMidFlight(t *testing.T) {
 		t.Errorf("mid-flight refs dropped across rescan, got %d", len(fresh[0].Refs))
 	}
 }
+
+// TestResolveVisibleRefsCmdOnlyVisibleUnresolved verifies async badge fill-in is
+// scoped correctly: resolveVisibleRefsCmd dispatches an extract for on-screen
+// sessions that have links but aren't resolved yet, and skips sessions that are
+// already resolved, have no links, or have a resolve in flight. This is the
+// guard against regressing into the fleet-wide sweep removed in #60.
+func TestResolveVisibleRefsCmdOnlyVisibleUnresolved(t *testing.T) {
+	sessions := []session.Session{
+		{ID: "needs", ShortID: "needs", ProjectPath: "/tmp/a", ProjectName: "a",
+			ModTime: time.Now(), HasRefs: true, FilePath: "/tmp/a/needs.jsonl"},
+		{ID: "done", ShortID: "done", ProjectPath: "/tmp/b", ProjectName: "b",
+			ModTime: time.Now().Add(-time.Minute), HasRefs: true, RefsResolved: true,
+			FilePath: "/tmp/b/done.jsonl"},
+		{ID: "norefs", ShortID: "norefs", ProjectPath: "/tmp/c", ProjectName: "c",
+			ModTime: time.Now().Add(-2 * time.Minute), FilePath: "/tmp/c/norefs.jsonl"},
+	}
+	a := newTestApp(sessions)
+
+	cmd := a.resolveVisibleRefsCmd()
+	if cmd == nil {
+		t.Fatal("expected an extract cmd for the unresolved visible session")
+	}
+	got := map[string]bool{}
+	collectExtractedIDs(cmd, got)
+	if !got["needs"] {
+		t.Error("did not dispatch extract for the unresolved session with links")
+	}
+	if got["done"] {
+		t.Error("re-extracted an already-resolved session")
+	}
+	if got["norefs"] {
+		t.Error("extracted a session that has no links")
+	}
+	if !a.refsInFlight["needs"] {
+		t.Error("refsInFlight guard not armed for the dispatched session")
+	}
+
+	// Second call must be a no-op: refsInFlight dedups so a row visible across
+	// many ticks is only worked once (no fan-out storm).
+	if cmd2 := a.resolveVisibleRefsCmd(); cmd2 != nil {
+		got2 := map[string]bool{}
+		collectExtractedIDs(cmd2, got2)
+		if got2["needs"] {
+			t.Error("re-dispatched extract for an in-flight session")
+		}
+	}
+}
+
+// TestSyncSessionRefsToListUpdatesBadge verifies that once a ref resolves in
+// a.sessions, syncing it to the list row makes the open-PR badge count reflect
+// it — without a full list rebuild.
+func TestSyncSessionRefsToListUpdatesBadge(t *testing.T) {
+	sessions := []session.Session{
+		{ID: "aaa", ShortID: "aaa", ProjectPath: "/tmp/a", ProjectName: "a",
+			ModTime: time.Now(), HasRefs: true, FilePath: "/tmp/a/aaa.jsonl"},
+	}
+	a := newTestApp(sessions)
+
+	// Before resolve: the list row shows no open PRs.
+	if row, ok := a.sessionByID("aaa"); ok {
+		if prs, _ := row.sess.OpenRefCounts(); prs != 0 {
+			t.Fatalf("precondition: expected 0 open PRs, got %d", prs)
+		}
+	}
+
+	// Resolve an open PR into the source of truth, then sync to the list.
+	a.sessions[0].Refs = []session.SessionRef{
+		{Kind: session.RefPR, URL: "https://github.com/sendbird/ccx/pull/52",
+			Label: "sendbird/ccx#52", State: session.RefStateOpen, Resolved: true},
+	}
+	a.sessions[0].RefsResolved = true
+	if !a.syncSessionRefsToList("aaa") {
+		t.Fatal("syncSessionRefsToList did not find the row")
+	}
+
+	row, ok := a.sessionByID("aaa")
+	if !ok {
+		t.Fatal("row missing after sync")
+	}
+	if prs, _ := row.sess.OpenRefCounts(); prs != 1 {
+		t.Errorf("badge count not updated: expected 1 open PR, got %d", prs)
+	}
+}
