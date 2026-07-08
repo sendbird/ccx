@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -1133,7 +1132,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Offline extract landed: store the link list (status still unresolved)
 		// and, if this session's refs preview is open, render it immediately so
 		// URLs/labels/timestamps appear without waiting on the network. Then kick
-		// off the status resolve, which comes back as refsEnrichedMsg.
+		// off the status resolve, which streams back as refStatusMsg per ref.
 		var statusCmd tea.Cmd
 		for i := range a.sessions {
 			if a.sessions[i].ID != msg.id {
@@ -1185,48 +1184,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessRefsCacheKey = "" // force re-render with the newly-resolved ref
-				return a, a.updateSessionRefsPreview(sess)
-			}
-		}
-		return a, nil
-
-	case refsEnrichedMsg:
-		if len(msg.attempted) == 0 {
-			return a, nil
-		}
-		attempted := make(map[string]bool, len(msg.attempted))
-		for _, id := range msg.attempted {
-			attempted[id] = true
-			delete(a.refsInFlight, id) // resolve pass finished; allow future re-targeting
-		}
-		changed := false
-		for i := range a.sessions {
-			id := a.sessions[i].ID
-			if !attempted[id] {
-				continue
-			}
-			// Mark resolved regardless of outcome so we stop re-targeting it.
-			a.sessions[i].RefsResolved = true
-			if refs, ok := msg.refs[id]; ok {
-				a.sessions[i].Refs = refs
-				changed = true
-			}
-		}
-		// Only rebuild when a badge-affecting change actually landed. The row
-		// cache is keyed on the open-PR/Jira counts, so stale rows self-evict on
-		// re-render — no need to Clear() the whole cache (that reintroduced the
-		// navigation stutter on every background refresh).
-		if changed && a.state == viewSessions && !a.isFiltering() {
-			a.rebuildSessionList()
-		}
-		// If the References preview is open on a session whose refs just resolved,
-		// re-render it live so the "Resolving…" placeholder (or stale ○ badges)
-		// updates to the fetched status without the user having to re-navigate.
-		// This fires even when no refs landed (all links unresolvable) so the
-		// placeholder flips to "No resolvable…" instead of spinning forever.
-		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
-			if sess, ok := a.selectedSession(); ok && attempted[sess.ID] {
-				a.sessRefsCacheKey = "" // force re-render with the new refs / resolved flag
 				return a, a.updateSessionRefsPreview(sess)
 			}
 		}
@@ -4435,8 +4392,13 @@ func (a *App) doRefresh() tea.Cmd {
 				}
 			}
 		}
-		// Re-resolve PR/Jira refs (TTL-cached, so this is cheap when warm).
-		return a.enrichRefsCmd()
+		// PR/Jira status is resolved on demand for the session whose References
+		// preview is open (updateSessionRefsPreview → resolveRefsStatusCmd), NOT
+		// swept across the whole fleet here. A background sweep meant resolving
+		// every HasRefs session's refs via `gh pr view` (~1.6s each) — hundreds of
+		// subprocesses that spiked CPU and froze the UI for minutes on large
+		// session dirs, while resolving statuses the user never looked at.
+		return nil
 	}
 
 	return nil
@@ -5582,11 +5544,12 @@ func (a *App) updateSessionContextsPreview(sess session.Session) {
 }
 
 // updateSessionRefsPreview renders the PR/Jira references for a session with
-// their resolved status. Refs are normally pre-resolved in the background
-// (enrichRefsCmd). If a session has links but has not been through a resolve
-// pass yet, we render a "Resolving…" placeholder and kick off an async resolve
-// (returned as a tea.Cmd) instead of blocking navigation — the result merges
-// back via refsEnrichedMsg and re-renders this preview if it is still open.
+// their resolved status. When a session has links that have not been through a
+// resolve pass yet, we extract them offline (fast), render a "Resolving…"
+// placeholder, and kick off an async status resolve (returned as a tea.Cmd)
+// instead of blocking navigation — each ref's status streams back via
+// refStatusMsg and re-renders this preview if it is still open. Status is only
+// ever resolved for the session shown here, never swept across the fleet.
 func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
@@ -5663,26 +5626,6 @@ func (a *App) resolveRefsStatusCmd(id string, refs []session.SessionRef) tea.Cmd
 		})
 	}
 	return tea.Batch(cmds...)
-}
-
-// resolveOneSessionRefsCmd resolves a single session's PR/Jira refs off the UI
-// thread (extract + status in one pass) and reports the result via
-// refsEnrichedMsg. Used by the background enrich sweep for sessions that have
-// not been touched yet.
-func (a *App) resolveOneSessionRefsCmd(id, filePath string) tea.Cmd {
-	if id == "" || filePath == "" {
-		return nil
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		refs := session.LoadSessionRefs(ctx, filePath)
-		out := map[string][]session.SessionRef{}
-		if len(refs) > 0 {
-			out[id] = refs
-		}
-		return refsEnrichedMsg{refs: out, attempted: []string{id}}
-	}
 }
 
 // orderRefs returns refs sorted PRs-first, then most-recently-seen first within
@@ -7549,72 +7492,9 @@ type refStatusMsg struct {
 	ref session.SessionRef
 }
 
-// refsEnrichedMsg carries resolved refs for sessions, keyed by session ID.
-// attempted lists every session ID a resolve pass ran for (even those that
-// yielded no usable refs) so the handler can mark them resolved and stop
-// re-targeting them on every refresh.
-type refsEnrichedMsg struct {
-	refs      map[string][]session.SessionRef
-	attempted []string
-}
+// PR/Jira status is resolved on demand only for the session whose References
+// preview is open (updateSessionRefsPreview → resolveRefsStatusCmd, streaming
+// back as refStatusMsg). An earlier fleet-wide background sweep ran `gh pr view`
+// (~1.6s each) across every HasRefs session — hundreds of subprocesses that
+// spiked CPU and froze the UI for minutes, resolving statuses no one viewed.
 
-// enrichRefsCmd resolves PR/Jira references for sessions flagged HasRefs. It
-// runs in the background (network-bound: gh CLI + Jira REST) and returns a
-// refsEnrichedMsg to merge into the session list. A concurrency cap keeps the
-// gh subprocess fan-out bounded; a shared deadline stops a slow refresh from
-// hanging the UI's merge indefinitely.
-func (a *App) enrichRefsCmd() tea.Cmd {
-	type target struct {
-		id       string
-		filePath string
-	}
-	var targets []target
-	for i := range a.sessions {
-		s := &a.sessions[i]
-		// Only target sessions that have links, have never been through a resolve
-		// pass, and are not already being resolved. RefsResolved stays true
-		// afterward even if the pass found nothing usable, so a broken/absent link
-		// does not re-run gh every tick; refsInFlight prevents re-targeting a
-		// session whose (slow) resolve is still running, which otherwise spawned
-		// duplicate gh fan-outs every 3s tick and spiked CPU.
-		if s.HasRefs && !s.RefsResolved && s.FilePath != "" && !a.refsInFlight[s.ID] {
-			targets = append(targets, target{id: s.ID, filePath: s.FilePath})
-		}
-	}
-	if len(targets) == 0 {
-		return nil
-	}
-	for _, t := range targets {
-		a.refsInFlight[t.id] = true
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		const maxConcurrent = 4
-		sem := make(chan struct{}, maxConcurrent)
-		var wg sync.WaitGroup
-		var mu sync.Mutex
-		out := make(map[string][]session.SessionRef, len(targets))
-		attempted := make([]string, 0, len(targets))
-
-		for _, t := range targets {
-			attempted = append(attempted, t.id)
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(t target) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				refs := session.LoadSessionRefs(ctx, t.filePath)
-				if len(refs) == 0 {
-					return
-				}
-				mu.Lock()
-				out[t.id] = refs
-				mu.Unlock()
-			}(t)
-		}
-		wg.Wait()
-		return refsEnrichedMsg{refs: out, attempted: attempted}
-	}
-}
