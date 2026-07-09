@@ -7027,10 +7027,17 @@ func (a *App) resizeAll() tea.Cmd {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
 			}
 			cmd = a.autoSelectSession()
-			// Trigger live preview lookup if restored from preferences
-			if a.sessSplit.Show && a.sessPreviewMode == sessPreviewLive {
-				if liveCmd := a.updateSessionPreview(); liveCmd != nil {
-					cmd = tea.Batch(cmd, liveCmd)
+			// Trigger preview lookup for modes restored from preferences whose
+			// update returns an async cmd. View() cannot dispatch a cmd, and this
+			// startup branch is the first (and only) place the restored preview is
+			// initialized, so both live and refs must fire here — otherwise a
+			// persisted "refs" mode sticks on "Resolving…" forever (the extract is
+			// never dispatched: setSessPreviewMode, the usual trigger, is not on
+			// the startup-restore path).
+			if a.sessSplit.Show &&
+				(a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRefs) {
+				if previewCmd := a.updateSessionPreview(); previewCmd != nil {
+					cmd = tea.Batch(cmd, previewCmd)
 				}
 			}
 		}

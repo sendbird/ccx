@@ -28,6 +28,12 @@ func newTestApp(sessions []session.Session) *App {
 	// developer's current browser state.
 	a.config.SearchQuery = ""
 	a.sessionList.ResetFilter()
+	// A persisted "refs" preview mode (preview_mode: refs in the dev's config)
+	// makes startup arm refsInFlight for on-screen sessions; clear it (and the
+	// split visibility) so ref tests start from a clean slate regardless of
+	// local prefs.
+	a.refsInFlight = make(map[string]bool)
+	a.sessSplit.Show = false
 	// Default to flat grouping for tests so existing index/visible-item
 	// assertions keep holding regardless of the production default.
 	a.sessGroupMode = groupFlat
