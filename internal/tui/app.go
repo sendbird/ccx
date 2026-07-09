@@ -1081,6 +1081,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selectedID = sess.ID
 		}
 
+		// Carry lazily-resolved ref state from the phase-1 slice into the freshly
+		// scanned one BEFORE replacing a.sessions. Phase-2 scan sets HasRefs but
+		// never resolves status, so without this it wipes refs the user already
+		// extracted (e.g. by opening a preview during phase-1) and the preview
+		// reverts to a permanent "Resolving…".
+		a.carryOverRefState(msg.sessions)
 		a.sessions = a.injectRemoteSessions(msg.sessions)
 		// PR/Jira ref resolution (network-bound: gh + Jira REST) is deferred to
 		// the first background refresh tick rather than fired here, so the initial
@@ -4641,6 +4647,21 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		return nil
 	}
 	if pi, ok := a.selectedProject(); ok {
+		// In refs mode a project head row previews its representative session's
+		// refs (selectedSession returns pi.sessions[0] for a projectItem). The
+		// project-summary preview has no refs, so route refs mode through the
+		// session path instead — otherwise the extract is never dispatched and
+		// the preview sticks on "Resolving…" (projectCentric is the default group
+		// mode, so this is the common case, not an edge case).
+		if a.sessPreviewMode == sessPreviewRefs && len(pi.sessions) > 0 {
+			cacheKey := fmt.Sprintf("%d:%s", a.sessPreviewMode, pi.sessions[0].ID)
+			if cacheKey == a.sessSplit.CacheKey {
+				return nil
+			}
+			a.sessSplit.CacheKey = cacheKey
+			a.sessPreviewPinned = false
+			return a.updateSessionRefsPreview(pi.sessions[0])
+		}
 		cacheKey := fmt.Sprintf("project:%d:%s", a.sessPreviewMode, pi.basePath)
 		if cacheKey == a.sessSplit.CacheKey {
 			return nil
@@ -5626,15 +5647,42 @@ func (a *App) syncSessionRefsToList(id string) bool {
 	}
 	items := a.sessionList.Items()
 	for i, item := range items {
-		si, ok := item.(sessionItem)
-		if !ok || si.sess.ID != id {
-			continue
+		switch v := item.(type) {
+		case sessionItem:
+			if v.sess.ID != id {
+				continue
+			}
+			v.sess.Refs = fresh.Refs
+			v.sess.RefsResolved = fresh.RefsResolved
+			items[i] = v
+			a.sessionList.SetItems(items)
+			return true
+		case projectItem:
+			// In projectCentric mode the badge is on the project head row, which
+			// carries a pre-summed openPRs. Update the embedded session and
+			// re-sum so the row's PR badge reflects the resolve.
+			found := false
+			for j := range v.sessions {
+				if v.sessions[j].ID == id {
+					v.sessions[j].Refs = fresh.Refs
+					v.sessions[j].RefsResolved = fresh.RefsResolved
+					found = true
+				}
+			}
+			if !found {
+				continue
+			}
+			openPRs := 0
+			for j := range v.sessions {
+				if n, _ := v.sessions[j].OpenRefCounts(); n > 0 {
+					openPRs += n
+				}
+			}
+			v.openPRs = openPRs
+			items[i] = v
+			a.sessionList.SetItems(items)
+			return true
 		}
-		si.sess.Refs = fresh.Refs
-		si.sess.RefsResolved = fresh.RefsResolved
-		items[i] = si
-		a.sessionList.SetItems(items)
-		return true
 	}
 	return false
 }
@@ -5670,8 +5718,12 @@ func (a *App) resolveVisibleRefsCmd() tea.Cmd {
 		if !ok || !s.HasRefs || s.RefsResolved || a.refsInFlight[s.ID] || len(s.Refs) > 0 {
 			continue
 		}
-		a.refsInFlight[s.ID] = true
-		cmds = append(cmds, a.extractSessionRefsCmd(s.ID, s.FilePath))
+		// Arm the dedup guard only if an extract is actually dispatched (empty
+		// FilePath → nil cmd); latching it otherwise strands the row forever.
+		if cmd := a.extractSessionRefsCmd(s.ID, s.FilePath); cmd != nil {
+			a.refsInFlight[s.ID] = true
+			cmds = append(cmds, cmd)
+		}
 	}
 	if len(cmds) == 0 {
 		return nil
@@ -5711,8 +5763,13 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 		// navigation debounce both return it); this method is gated behind
 		// updateSessionPreview's session/mode cache key, so it fires once per
 		// (session, mode) rather than on every frame.
-		resolveCmd = a.extractSessionRefsCmd(sess.ID, sess.FilePath)
-		a.refsInFlight[sess.ID] = true
+		// Arm the dedup guard ONLY if we actually dispatched an extract. If the
+		// session has no FilePath, extractSessionRefsCmd returns nil — arming
+		// anyway would latch refsInFlight with nothing to clear it, stranding the
+		// preview on "Resolving…" forever.
+		if resolveCmd = a.extractSessionRefsCmd(sess.ID, sess.FilePath); resolveCmd != nil {
+			a.refsInFlight[sess.ID] = true
+		}
 	}
 	// Order refs (open PRs first) and stash them so the focused-pane key handler
 	// can map the cursor to a concrete URL to open.
