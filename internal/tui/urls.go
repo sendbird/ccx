@@ -83,9 +83,10 @@ func changeItemsFromSlice(changes []extract.ChangeItem) ([]extract.Item, map[str
 	for _, ch := range changes {
 		cmap[ch.Item.URL] = ch
 		items = append(items, extract.Item{
-			URL:      ch.Item.URL,
-			Label:    changeItemLabel(ch),
-			Category: "change",
+			URL:       ch.Item.URL,
+			Label:     changeItemLabel(ch),
+			Category:  "change",
+			Timestamp: ch.Timestamp,
 		})
 	}
 	return items, cmap
@@ -512,13 +513,16 @@ func (a *App) filterURLItems() {
 		a.urlCursor = 0
 		return
 	}
+	// Fuzzy: every whitespace-separated term must fuzzy-match the row text (its
+	// chars appear in order), so "grui" matches "internal/gui" and space-joined
+	// terms narrow further. Matches the project's project-picker search feel.
 	terms := strings.Fields(term)
 	var filtered []extract.Item
 	for _, item := range a.urlAllItems {
 		text := strings.ToLower(item.URL + " " + item.Label + " " + item.Category)
 		match := true
 		for _, t := range terms {
-			if !strings.Contains(text, t) {
+			if !fuzzyMatch(text, t) {
 				match = false
 				break
 			}
@@ -649,10 +653,16 @@ func (a *App) renderURLMenu() string {
 			check = sel.Render("* ")
 		}
 		status := a.urlRefStatusText(item.URL)
+		// Change rows already carry a timeAgo suffix in their label; for URL and
+		// file rows, append it here so every scope reads newest-first with time.
+		ts := ""
+		if item.Category != "change" && !item.Timestamp.IsZero() {
+			ts = "  " + dimStyle.Render(timeAgo(item.Timestamp))
+		}
 		if i == cursor {
-			lines = append(lines, sel.Render(">")+check+badge+" "+sel.Render(label)+status)
+			lines = append(lines, sel.Render(">")+check+badge+" "+sel.Render(label)+status+ts)
 		} else {
-			lines = append(lines, " "+check+badge+" "+hl.Render(label)+status)
+			lines = append(lines, " "+check+badge+" "+hl.Render(label)+status+ts)
 		}
 	}
 
