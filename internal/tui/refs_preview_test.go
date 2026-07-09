@@ -9,37 +9,30 @@ import (
 	"github.com/sendbird/ccx/internal/session"
 )
 
-// TestRefsPendingFlushDoesNotDropSessions guards the "stuck on Resolving…" bug:
-// the on-demand extract is queued in a map (sessRefsPending), not a single slot,
-// so switching sessions before the 3s tick fires can no longer strand an earlier
-// session with refsInFlight=true but no extract ever dispatched. handleTick must
-// flush ALL pending entries and clear the queue.
-func TestRefsPendingFlushDoesNotDropSessions(t *testing.T) {
-	a := newTestApp(fakeSessions())
-	a.liveUpdate = false // so handleTick returns only the pending-flush batch
+// TestSetRefsPreviewModeDispatchesExtract guards the "stuck on Resolving…" bug:
+// entering References mode must return a tea.Cmd that actually runs the offline
+// extract for the selected session. Previously setSessPreviewMode returned no
+// cmd and relied on the View render path (which discards cmds) plus a tick
+// flush, so a session could sit on "Resolving…" indefinitely.
+func TestSetRefsPreviewModeDispatchesExtract(t *testing.T) {
+	sessions := fakeSessions()
+	sessions[0].HasRefs = true                       // selected session has links to extract
+	sessions[0].FilePath = "/tmp/proj-a/aaa.jsonl"   // non-empty so the extract cmd is created (file need not exist)
+	a := newTestApp(sessions)
+	a.sessionList.Select(0)
 
-	// Two sessions queued their extract via the render path (cmd discarded there).
-	a.sessRefsPending["aaa"] = "/tmp/proj-a/aaa.jsonl"
-	a.sessRefsPending["bbb"] = "/tmp/proj-b/bbb.jsonl"
-	a.refsInFlight["aaa"] = true
-	a.refsInFlight["bbb"] = true
-
-	cmd := a.handleTick()
-
-	if len(a.sessRefsPending) != 0 {
-		t.Errorf("pending not fully flushed: %v", a.sessRefsPending)
-	}
+	cmd := a.setSessPreviewMode(sessPreviewRefs)
 	if cmd == nil {
-		t.Fatal("handleTick returned nil cmd despite pending extracts")
+		t.Fatal("setSessPreviewMode(refs) returned nil cmd — extract never dispatched, pane stays on Resolving…")
 	}
-	// Draining the batch must yield a refsExtractedMsg for BOTH queued sessions,
-	// proving neither was dropped.
 	got := map[string]bool{}
 	collectExtractedIDs(cmd, got)
-	for _, id := range []string{"aaa", "bbb"} {
-		if !got[id] {
-			t.Errorf("no refsExtractedMsg dispatched for session %q (would stay stuck on Resolving…)", id)
-		}
+	if !got[sessions[0].ID] {
+		t.Errorf("no refsExtractedMsg dispatched for selected session %q", sessions[0].ID)
+	}
+	// The dedup guard must be armed so repeated renders don't re-parse.
+	if !a.refsInFlight[sessions[0].ID] {
+		t.Errorf("refsInFlight not set for %q after dispatching extract", sessions[0].ID)
 	}
 }
 

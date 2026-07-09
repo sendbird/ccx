@@ -115,7 +115,9 @@ func (a *App) runDebouncedPreview() tea.Cmd {
 	case viewConversation:
 		a.updateConvPreview()
 	case viewSessions:
-		return a.updateSessionPreview()
+		// Resolve refs for rows scrolled into view so their PR/Jira badge fills
+		// in, alongside the selected session's preview update.
+		return tea.Batch(a.updateSessionPreview(), a.resolveVisibleRefsCmd())
 	case viewConfig:
 		a.updateConfigPreview()
 	case viewPlugins:
@@ -339,7 +341,6 @@ type App struct {
 	sessPreviewRefs       []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
 	sessRefsCursor        int                   // cursor within the References preview list
 	sessRefsResolved      bool                  // whether the currently-previewed session's refs have been resolved
-	sessRefsPending       map[string]string     // session ID → transcript path awaiting on-demand extract (flushed in handleTick); a map so switching sessions before the tick fires never drops an earlier session's pending extract
 	refsInFlight          map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
 
 	// Conversation preview state
@@ -752,7 +753,6 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		selectedSet:         make(map[string]bool),
 		hiddenBadges:        make(map[string]bool),
 		refsInFlight:        make(map[string]bool),
-		sessRefsPending:     make(map[string]string),
 		notifyPrev:          make(map[string]session.LifecycleState),
 		sessionRowCache:     newSessionRowCache(1024),
 		convPreviewRowCache: newSessionRowCache(4096),
@@ -1081,6 +1081,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selectedID = sess.ID
 		}
 
+		// Carry lazily-resolved ref state from the phase-1 slice into the freshly
+		// scanned one BEFORE replacing a.sessions. Phase-2 scan sets HasRefs but
+		// never resolves status, so without this it wipes refs the user already
+		// extracted (e.g. by opening a preview during phase-1) and the preview
+		// reverts to a permanent "Resolving…".
+		a.carryOverRefState(msg.sessions)
 		a.sessions = a.injectRemoteSessions(msg.sessions)
 		// PR/Jira ref resolution (network-bound: gh + Jira REST) is deferred to
 		// the first background refresh tick rather than fired here, so the initial
@@ -1181,6 +1187,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			break
 		}
+		// Reflect the newly-resolved status onto the list row so the open-PR/Jira
+		// badge fills in live, whether or not the References preview is open.
+		a.syncSessionRefsToList(msg.id)
 		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessRefsCacheKey = "" // force re-render with the newly-resolved ref
@@ -2592,21 +2601,21 @@ func (a *App) handleSessPageMenu(key string) (tea.Model, tea.Cmd) {
 	a.sessPageMenu = false
 	switch key {
 	case "v":
-		a.setSessPreviewMode(sessPreviewConversation)
+		return a, a.setSessPreviewMode(sessPreviewConversation)
 	case "s":
-		a.setSessPreviewMode(sessPreviewStats)
+		return a, a.setSessPreviewMode(sessPreviewStats)
 	case "m":
-		a.setSessPreviewMode(sessPreviewMemory)
+		return a, a.setSessPreviewMode(sessPreviewMemory)
 	case "t":
-		a.setSessPreviewMode(sessPreviewTasksPlan)
+		return a, a.setSessPreviewMode(sessPreviewTasksPlan)
 	case "a":
-		a.setSessPreviewMode(sessPreviewAgents)
+		return a, a.setSessPreviewMode(sessPreviewAgents)
 	case "w":
-		a.setSessPreviewMode(sessPreviewWorkflows)
+		return a, a.setSessPreviewMode(sessPreviewWorkflows)
 	case "c":
-		a.setSessPreviewMode(sessPreviewContexts)
+		return a, a.setSessPreviewMode(sessPreviewContexts)
 	case "r":
-		a.setSessPreviewMode(sessPreviewRefs)
+		return a, a.setSessPreviewMode(sessPreviewRefs)
 	case "l":
 		if sess, ok := a.selectedSession(); ok {
 			if sess.IsRemote {
@@ -3167,8 +3176,7 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	if a.sessionPreviewActionsActive() {
 		switch key {
 		case "c":
-			a.setSessPreviewMode(sessPreviewContexts)
-			return a, nil
+			return a, a.setSessPreviewMode(sessPreviewContexts)
 		case "f":
 			visible := a.convVisibleEntries()
 			return a.openSessionPreviewFullText(visible), nil
@@ -4271,20 +4279,6 @@ func (a *App) refreshRespondingState() {
 }
 
 func (a *App) handleTick() tea.Cmd {
-	// Flush any pending on-demand ref extracts first (set from the render path,
-	// where the returned cmd would otherwise be discarded). This guarantees the
-	// refs preview populates even when liveUpdate is off and no navigation
-	// follows. It is a map, not a single slot, so switching sessions before the
-	// tick fires never strands an earlier session on "Resolving…" forever.
-	var refsCmd tea.Cmd
-	if len(a.sessRefsPending) > 0 {
-		cmds := make([]tea.Cmd, 0, len(a.sessRefsPending))
-		for id, path := range a.sessRefsPending {
-			cmds = append(cmds, a.extractSessionRefsCmd(id, path))
-		}
-		a.sessRefsPending = make(map[string]string)
-		refsCmd = tea.Batch(cmds...)
-	}
 	// Always refresh conversation preview for live sessions (regardless of liveUpdate)
 	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
 		if sess, ok := a.selectedSession(); ok && sess.IsLive {
@@ -4305,10 +4299,15 @@ func (a *App) handleTick() tea.Cmd {
 		pollCmd = pollRemotePhasesCmd()
 	}
 
+	// Fill in open-PR/Jira badges for the sessions currently on screen. Scoped to
+	// the visible page (not the fleet) so this cannot regress into the CPU sweep
+	// removed in #60; refsInFlight dedups so a row is only worked once.
+	refsCmd := a.resolveVisibleRefsCmd()
+
 	if !a.liveUpdate {
-		return tea.Batch(refsCmd, pollCmd)
+		return tea.Batch(pollCmd, refsCmd)
 	}
-	return tea.Batch(refsCmd, pollCmd, a.doRefresh())
+	return tea.Batch(pollCmd, refsCmd, a.doRefresh())
 }
 
 func (a *App) doRefresh() tea.Cmd {
@@ -4320,6 +4319,13 @@ func (a *App) doRefresh() tea.Cmd {
 			// Preserve live state detection
 			tmux.MarkLiveSessions(fresh)
 			session.EnrichLiveSessions(fresh)
+
+			// ScanSessions only sets HasRefs; it does not re-resolve PR/Jira
+			// status (that is network-bound and done on demand). Carry the
+			// already-resolved Refs/RefsResolved from the current a.sessions
+			// into the fresh slice, or a manual refresh / new-session rescan
+			// would wipe them and flip an open preview back to "Resolving…".
+			a.carryOverRefState(fresh)
 
 			a.sessions = a.injectRemoteSessions(fresh)
 			a.globalStatsCache = nil // invalidate cached stats
@@ -4527,12 +4533,12 @@ func (a *App) renderSessionSplit() string {
 		a.sessionList.Select(idx)
 	}
 
-	// Don't call updateSessionPreview for live mode from the render path — the
-	// returned async cmd would be discarded. Live mode is initialized from Update
-	// paths (resizeAll, key handlers). Refs mode renders its content here (pure),
-	// but its resolve cmd is dispatched via the pending-flush in handleTick so it
-	// is never lost to the render path.
-	if a.sessPreviewMode != sessPreviewLive {
+	// Don't call updateSessionPreview from the render path for modes whose
+	// update returns an async cmd (live, refs) — View() cannot dispatch a cmd, so
+	// it would be lost. Those modes are initialized and their cmds dispatched from
+	// Update paths (setSessPreviewMode, the navigation debounce, resizeAll). View
+	// only re-renders their already-populated content (the resize block below).
+	if a.sessPreviewMode != sessPreviewLive && a.sessPreviewMode != sessPreviewRefs {
 		_ = a.updateSessionPreview()
 	}
 
@@ -4641,6 +4647,21 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		return nil
 	}
 	if pi, ok := a.selectedProject(); ok {
+		// In refs mode a project head row previews its representative session's
+		// refs (selectedSession returns pi.sessions[0] for a projectItem). The
+		// project-summary preview has no refs, so route refs mode through the
+		// session path instead — otherwise the extract is never dispatched and
+		// the preview sticks on "Resolving…" (projectCentric is the default group
+		// mode, so this is the common case, not an edge case).
+		if a.sessPreviewMode == sessPreviewRefs && len(pi.sessions) > 0 {
+			cacheKey := fmt.Sprintf("%d:%s", a.sessPreviewMode, pi.sessions[0].ID)
+			if cacheKey == a.sessSplit.CacheKey {
+				return nil
+			}
+			a.sessSplit.CacheKey = cacheKey
+			a.sessPreviewPinned = false
+			return a.updateSessionRefsPreview(pi.sessions[0])
+		}
 		cacheKey := fmt.Sprintf("project:%d:%s", a.sessPreviewMode, pi.basePath)
 		if cacheKey == a.sessSplit.CacheKey {
 			return nil
@@ -5555,7 +5576,172 @@ func (a *App) updateSessionContextsPreview(sess session.Session) {
 // instead of blocking navigation — each ref's status streams back via
 // refStatusMsg and re-renders this preview if it is still open. Status is only
 // ever resolved for the session shown here, never swept across the fleet.
+// sessionByIDFromStore returns the authoritative session (by ID) from
+// a.sessions, the source of truth for lazily-resolved state like Refs. Unlike
+// selectedSession()/sessionByID(), which read the list widget's snapshot copies,
+// this reflects updates made by async message handlers that mutate a.sessions
+// without rebuilding the list.
+func (a *App) sessionByIDFromStore(id string) (session.Session, bool) {
+	for i := range a.sessions {
+		if a.sessions[i].ID == id {
+			return a.sessions[i], true
+		}
+	}
+	return session.Session{}, false
+}
+
+// carryOverRefState copies lazily-resolved PR/Jira ref state (the extracted Refs
+// list + RefsResolved) from the current a.sessions into a freshly-scanned slice,
+// in place. ScanSessions detects HasRefs but never resolves status (network-
+// bound, on-demand only), so without this a full rescan would blank every
+// already-extracted ref and flip an open References preview back to
+// "Resolving…" — or, if a resolve was mid-flight, strand it on a bogus
+// "No resolvable references".
+//
+// We carry the Refs list whenever the old session had one (even if status was
+// still resolving), so the preview keeps showing links across a rescan. When
+// the transcript changed since resolution we keep the cached refs but clear
+// RefsResolved so the next preview open re-resolves (picking up any new links);
+// the URL→status cache is TTL-guarded, so that re-check stays cheap. A session
+// with a resolve currently in flight is left for that pass to finish.
+func (a *App) carryOverRefState(fresh []session.Session) {
+	if len(a.sessions) == 0 {
+		return
+	}
+	prev := make(map[string]*session.Session, len(a.sessions))
+	for i := range a.sessions {
+		prev[a.sessions[i].ID] = &a.sessions[i]
+	}
+	for i := range fresh {
+		old, ok := prev[fresh[i].ID]
+		if !ok {
+			continue
+		}
+		if len(old.Refs) == 0 && !old.RefsResolved {
+			continue // nothing extracted yet — let on-demand extract handle it
+		}
+		fresh[i].Refs = old.Refs
+		fresh[i].RefsResolved = old.RefsResolved
+		// Transcript grew since we resolved: keep the cached refs on screen but
+		// allow one re-resolve so newly-added links surface. Skip while a
+		// resolve is already in flight (resetting mid-pass re-triggers extract
+		// every tick — the CPU-spike footgun the earlier fixes fought).
+		if old.RefsResolved && !a.refsInFlight[fresh[i].ID] &&
+			!fresh[i].ModTime.Equal(old.ModTime) {
+			fresh[i].RefsResolved = false
+		}
+	}
+}
+
+// syncSessionRefsToList copies a session's resolved ref state from a.sessions
+// (source of truth) into the list widget's sessionItem.sess copy, in place, so
+// the open-PR/Jira badge reflects it. The async extract/resolve handlers mutate
+// a.sessions but the list holds snapshot copies from the last rebuild, so the
+// badge (which reads si.sess.OpenRefCounts) would otherwise never update. This
+// avoids a full rebuildSessionList (which resets scroll/cursor) on every ref
+// that lands. Returns true if the row was found and updated.
+func (a *App) syncSessionRefsToList(id string) bool {
+	fresh, ok := a.sessionByIDFromStore(id)
+	if !ok {
+		return false
+	}
+	items := a.sessionList.Items()
+	for i, item := range items {
+		switch v := item.(type) {
+		case sessionItem:
+			if v.sess.ID != id {
+				continue
+			}
+			v.sess.Refs = fresh.Refs
+			v.sess.RefsResolved = fresh.RefsResolved
+			items[i] = v
+			a.sessionList.SetItems(items)
+			return true
+		case projectItem:
+			// In projectCentric mode the badge is on the project head row, which
+			// carries a pre-summed openPRs. Update the embedded session and
+			// re-sum so the row's PR badge reflects the resolve.
+			found := false
+			for j := range v.sessions {
+				if v.sessions[j].ID == id {
+					v.sessions[j].Refs = fresh.Refs
+					v.sessions[j].RefsResolved = fresh.RefsResolved
+					found = true
+				}
+			}
+			if !found {
+				continue
+			}
+			openPRs := 0
+			for j := range v.sessions {
+				if n, _ := v.sessions[j].OpenRefCounts(); n > 0 {
+					openPRs += n
+				}
+			}
+			v.openPRs = openPRs
+			items[i] = v
+			a.sessionList.SetItems(items)
+			return true
+		}
+	}
+	return false
+}
+
+// resolveVisibleRefsCmd kicks off offline ref extraction for the sessions
+// currently ON SCREEN (the visible page slice) that have links but have not
+// been extracted/resolved yet. This is what makes the open-PR/Jira badge fill
+// in asynchronously without the user opening each References preview.
+//
+// It is deliberately scoped to the visible page — NOT the whole fleet. A
+// tick-driven sweep across every HasRefs session is what pegged CPU for minutes
+// (each `gh pr view` ~1.6s; hundreds of them) and was ripped out in #60. Bounding
+// work to what the user can actually see keeps the fan-out tiny: extract is a
+// ~10ms offline line scan, and the follow-on status resolve is already capped by
+// resolveSem (4 concurrent). refsInFlight dedups so a row in view across many
+// ticks is only worked once.
+func (a *App) resolveVisibleRefsCmd() tea.Cmd {
+	if a.state != viewSessions {
+		return nil
+	}
+	items := a.sessionList.VisibleItems()
+	if len(items) == 0 {
+		return nil
+	}
+	start, end := a.sessionList.Paginator.GetSliceBounds(len(items))
+	var cmds []tea.Cmd
+	for _, item := range items[start:end] {
+		si, ok := item.(sessionItem)
+		if !ok {
+			continue
+		}
+		s, ok := a.sessionByIDFromStore(si.sess.ID)
+		if !ok || !s.HasRefs || s.RefsResolved || a.refsInFlight[s.ID] || len(s.Refs) > 0 {
+			continue
+		}
+		// Arm the dedup guard only if an extract is actually dispatched (empty
+		// FilePath → nil cmd); latching it otherwise strands the row forever.
+		if cmd := a.extractSessionRefsCmd(s.ID, s.FilePath); cmd != nil {
+			a.refsInFlight[s.ID] = true
+			cmds = append(cmds, cmd)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
 func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
+	// Read the authoritative session from a.sessions, not the list-widget copy
+	// the caller passed in. selectedSession() returns sessionItem.sess, a copy
+	// snapshotted at the last rebuildSessionList — the async extract/resolve
+	// handlers update a.sessions[i].Refs but do NOT rebuild the list, so that
+	// copy's Refs/RefsResolved stay stale and the preview would render
+	// "Resolving…" forever. a.sessions is the source of truth for ref status.
+	if fresh, ok := a.sessionByIDFromStore(sess.ID); ok {
+		sess = fresh
+	}
+
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 
@@ -5569,19 +5755,21 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	var resolveCmd tea.Cmd
 	refs := sess.Refs
 	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved && !a.refsInFlight[sess.ID] {
-		// Not extracted yet: show the placeholder now and extract offline (no
-		// network) so URLs/labels appear fast; status resolves in a second step.
-		// Record the target as pending too — this method is also reached from the
-		// render path (View), where the returned cmd would be discarded; handleTick
-		// flushes the pending target so the extract always runs. Guard on
-		// refsInFlight so repeated renders/ticks don't re-parse + re-resolve the
-		// same session while a pass is already running (that spiked CPU).
-		resolveCmd = a.extractSessionRefsCmd(sess.ID, sess.FilePath)
-		if a.sessRefsPending == nil {
-			a.sessRefsPending = make(map[string]string)
+		// Not extracted yet: render the placeholder now and kick off the offline
+		// extract (no network) so URLs/labels appear fast; status resolves in a
+		// second step. refsInFlight dedups so repeated navigation/renders don't
+		// re-parse the same session. The returned cmd is dispatched by the Update
+		// path that opened/navigated the preview (setSessPreviewMode and the
+		// navigation debounce both return it); this method is gated behind
+		// updateSessionPreview's session/mode cache key, so it fires once per
+		// (session, mode) rather than on every frame.
+		// Arm the dedup guard ONLY if we actually dispatched an extract. If the
+		// session has no FilePath, extractSessionRefsCmd returns nil — arming
+		// anyway would latch refsInFlight with nothing to clear it, stranding the
+		// preview on "Resolving…" forever.
+		if resolveCmd = a.extractSessionRefsCmd(sess.ID, sess.FilePath); resolveCmd != nil {
+			a.refsInFlight[sess.ID] = true
 		}
-		a.sessRefsPending[sess.ID] = sess.FilePath
-		a.refsInFlight[sess.ID] = true
 	}
 	// Order refs (open PRs first) and stash them so the focused-pane key handler
 	// can map the cursor to a concrete URL to open.
@@ -5595,7 +5783,9 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 		a.sessRefsCacheKey = cacheKey
 	}
 	a.sessRefsResolved = sess.RefsResolved
-	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	if a.sessSplit.Preview.Width != previewW || a.sessSplit.Preview.Height != contentH {
+		a.sessSplit.Preview = viewport.New(previewW, contentH)
+	}
 	a.sessSplit.Preview.SetContent(a.sessRefsCache)
 	return resolveCmd
 }
@@ -6837,10 +7027,17 @@ func (a *App) resizeAll() tea.Cmd {
 				applyListFilter(&a.sessionList, a.config.SearchQuery)
 			}
 			cmd = a.autoSelectSession()
-			// Trigger live preview lookup if restored from preferences
-			if a.sessSplit.Show && a.sessPreviewMode == sessPreviewLive {
-				if liveCmd := a.updateSessionPreview(); liveCmd != nil {
-					cmd = tea.Batch(cmd, liveCmd)
+			// Trigger preview lookup for modes restored from preferences whose
+			// update returns an async cmd. View() cannot dispatch a cmd, and this
+			// startup branch is the first (and only) place the restored preview is
+			// initialized, so both live and refs must fire here — otherwise a
+			// persisted "refs" mode sticks on "Resolving…" forever (the extract is
+			// never dispatched: setSessPreviewMode, the usual trigger, is not on
+			// the startup-restore path).
+			if a.sessSplit.Show &&
+				(a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRefs) {
+				if previewCmd := a.updateSessionPreview(); previewCmd != nil {
+					cmd = tea.Batch(cmd, previewCmd)
 				}
 			}
 		}
@@ -6849,6 +7046,13 @@ func (a *App) resizeAll() tea.Cmd {
 		a.sessionList.SetSize(sessW, contentH)
 		a.sessionList.Select(idx)
 		a.sessSplit.CacheKey = ""
+		// Refs preview is excluded from the View render path (it returns an async
+		// cmd View can't dispatch), so re-render it here on resize where we can.
+		if a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
+			if refsCmd := a.updateSessionPreview(); refsCmd != nil {
+				cmd = tea.Batch(cmd, refsCmd)
+			}
+		}
 	} else {
 		idx := a.sessionList.Index()
 		a.sessionList.SetSize(a.width, contentH)

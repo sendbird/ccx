@@ -85,21 +85,21 @@ func buildCmdRegistry() []cmdEntry {
 
 		// Preview modes (sessions only)
 		{name: "preview:conv", aliases: []string{"p:conv"}, desc: "conversation preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewConversation); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewConversation) }},
 		{name: "preview:stats", aliases: []string{"p:stats"}, desc: "stats preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewStats); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewStats) }},
 		{name: "preview:mem", aliases: []string{"p:mem"}, desc: "memory preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewMemory); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewMemory) }},
 		{name: "preview:tasks", aliases: []string{"p:tasks"}, desc: "tasks/plan preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewTasksPlan); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewTasksPlan) }},
 		{name: "preview:agents", aliases: []string{"p:agents"}, desc: "agents preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewAgents); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewAgents) }},
 		{name: "preview:wf", aliases: []string{"p:wf", "preview:workflows", "p:workflows"}, desc: "workflow preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewWorkflows); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewWorkflows) }},
 		{name: "preview:contexts", aliases: []string{"p:contexts", "p:ctx", "contexts", "page:contexts"}, desc: "context tree preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewContexts); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewContexts) }},
 		{name: "preview:refs", aliases: []string{"p:refs", "refs", "preview:pr", "p:pr"}, desc: "PR/Jira references preview", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setSessPreviewMode(sessPreviewRefs); return a, nil }},
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewRefs) }},
 		{name: "preview:live", aliases: []string{"p:live"}, desc: "live preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				sess, ok := a.selectedSession()
@@ -398,8 +398,11 @@ func buildCmdRegistry() []cmdEntry {
 }
 
 // setSessPreviewMode switches the session preview to the given mode,
-// opening the split pane if needed.
-func (a *App) setSessPreviewMode(mode sessPreview) {
+// opening the split pane if needed. It returns a tea.Cmd that must be
+// dispatched by the caller (Update path) — for the References mode this is the
+// offline extract + status resolve; discarding it would leave the pane stuck on
+// "Resolving…" until the next tick (or forever, if navigation intervenes).
+func (a *App) setSessPreviewMode(mode sessPreview) tea.Cmd {
 	a.closePaneProxy()
 	a.sessPreviewMode = mode
 	a.sessSplit.CacheKey = ""
@@ -410,6 +413,7 @@ func (a *App) setSessPreviewMode(mode sessPreview) {
 		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
 		a.sessionList.Select(idx)
 	}
+	return a.updateSessionPreview()
 }
 
 // setConvDetailLevel sets the conversation preview detail level and re-renders.
