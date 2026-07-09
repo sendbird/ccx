@@ -251,6 +251,78 @@ func classifyRef(u string) (SessionRef, bool) {
 	return SessionRef{}, false
 }
 
+// ClassifyURLRef turns a raw URL into a SessionRef if it is a GitHub PR or a
+// Jira browse link, returning ok=false otherwise. Exported so URL menus (which
+// classify URLs by host on their own) can reuse the same PR/Jira detection the
+// References preview uses, then resolve status via ResolveRef.
+func ClassifyURLRef(u string) (SessionRef, bool) {
+	return classifyRef(u)
+}
+
+// RefStatusText returns a compact, plain-text (no ANSI) status summary for a
+// resolved ref, suitable for URL-menu rows and `--plain` output. Returns "" when
+// nothing is known yet (unresolved and no state), or "…" while a resolve is in
+// flight. Examples: "OPEN · approved · checks ✓", "MERGED", "In Progress".
+func RefStatusText(r SessionRef) string {
+	switch r.Kind {
+	case RefPR:
+		var parts []string
+		if r.State != RefStateUnknown {
+			parts = append(parts, string(r.State))
+		}
+		if r.ReviewDecision != "" {
+			parts = append(parts, reviewText(r.ReviewDecision))
+		}
+		if r.ChecksState != "" {
+			parts = append(parts, checksText(r.ChecksState))
+		}
+		if len(parts) == 0 {
+			if r.Resolved {
+				return ""
+			}
+			return "…"
+		}
+		return strings.Join(parts, " · ")
+	case RefJira:
+		if r.JiraStatus != "" {
+			return r.JiraStatus
+		}
+		if r.Resolved {
+			return ""
+		}
+		return "…"
+	}
+	return ""
+}
+
+// reviewText renders a PR review decision as plain text.
+func reviewText(d string) string {
+	switch d {
+	case "APPROVED":
+		return "approved"
+	case "CHANGES_REQUESTED":
+		return "changes requested"
+	case "REVIEW_REQUIRED":
+		return "review required"
+	default:
+		return strings.ToLower(d)
+	}
+}
+
+// checksText renders a rolled-up PR checks state as plain text.
+func checksText(s string) string {
+	switch s {
+	case "SUCCESS":
+		return "checks ✓"
+	case "FAILURE", "ERROR":
+		return "checks ✗"
+	case "PENDING":
+		return "checks …"
+	default:
+		return "checks " + strings.ToLower(s)
+	}
+}
+
 // prNumber returns the leading digits of a PR URL's number segment, or "" if the
 // segment is not numeric (e.g. "new" in a "/pull/new/<branch>" compare URL).
 func prNumber(u string) string {

@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -279,7 +281,39 @@ func (a *App) openURLMenuFromItems(items []extract.Item, scope string) (tea.Mode
 	a.urlSearching = false
 	a.urlSearchTerm = ""
 	a.urlScope = scope
-	return a, nil
+	a.urlRefStatus = make(map[string]session.SessionRef)
+	return a, a.resolveURLRefsCmd(items)
+}
+
+// resolveURLRefsCmd asynchronously resolves PR/Jira status for every GitHub-PR
+// or Jira URL in the menu, streaming each result back as a urlRefStatusMsg. It
+// reuses session.ResolveRef, so results are TTL-cached and share the same
+// bounded concurrency as the References preview. File/changes scopes contain no
+// PR/Jira links, so this is a no-op for them.
+func (a *App) resolveURLRefsCmd(items []extract.Item) tea.Cmd {
+	if a.isFileScope() {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, it := range items {
+		if it.Category != "pr" && it.Category != "jira" {
+			continue
+		}
+		ref, ok := session.ClassifyURLRef(it.URL)
+		if !ok {
+			continue
+		}
+		r := ref
+		cmds = append(cmds, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return urlRefStatusMsg{ref: session.ResolveRef(ctx, r)}
+		})
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleURLMenu processes key events while the URL menu is open.
@@ -439,6 +473,25 @@ func (a *App) closeURLMenu() {
 	a.worktreeAlignActive = false
 	a.urlChangeMap = nil
 	a.urlDiffReady = false
+	a.urlRefStatus = nil
+}
+
+// urlRefStatusText returns the styled, right-hand PR/Jira status suffix for a
+// URL-menu row (leading with two spaces), or "" when the URL is not a resolved
+// PR/Jira link. A resolve in flight renders a dim "…".
+func (a *App) urlRefStatusText(url string) string {
+	if a.urlRefStatus == nil {
+		return ""
+	}
+	ref, ok := a.urlRefStatus[url]
+	if !ok {
+		return ""
+	}
+	txt := session.RefStatusText(ref)
+	if txt == "" {
+		return ""
+	}
+	return "  " + dimStyle.Render(txt)
 }
 
 // isFileScope returns true when the URL menu is showing file-like paths, not URLs.
@@ -595,10 +648,11 @@ func (a *App) renderURLMenu() string {
 		if a.urlSelected[item.URL] {
 			check = sel.Render("* ")
 		}
+		status := a.urlRefStatusText(item.URL)
 		if i == cursor {
-			lines = append(lines, sel.Render(">")+check+badge+" "+sel.Render(label))
+			lines = append(lines, sel.Render(">")+check+badge+" "+sel.Render(label)+status)
 		} else {
-			lines = append(lines, " "+check+badge+" "+hl.Render(label))
+			lines = append(lines, " "+check+badge+" "+hl.Render(label)+status)
 		}
 	}
 

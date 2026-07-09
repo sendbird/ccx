@@ -188,6 +188,43 @@ func TestClassifyRef(t *testing.T) {
 	}
 }
 
+// TestClassifyURLRef guards the exported wrapper URL menus use to detect PR/Jira
+// links; it must agree with the internal classifyRef.
+func TestClassifyURLRef(t *testing.T) {
+	if ref, ok := ClassifyURLRef("https://github.com/sendbird/ccx/pull/52"); !ok || ref.Kind != RefPR || ref.Label != "sendbird/ccx#52" {
+		t.Errorf("PR: got %+v ok=%v", ref, ok)
+	}
+	if ref, ok := ClassifyURLRef("https://sendbird.atlassian.net/browse/CPLAT-9497"); !ok || ref.Kind != RefJira || ref.Label != "CPLAT-9497" {
+		t.Errorf("Jira: got %+v ok=%v", ref, ok)
+	}
+	if _, ok := ClassifyURLRef("https://example.com/foo"); ok {
+		t.Error("non-PR/Jira URL should not classify")
+	}
+}
+
+// TestRefStatusText covers the plain-text status summary shown in URL-menu rows.
+func TestRefStatusText(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  SessionRef
+		want string
+	}{
+		{"pr unresolved", SessionRef{Kind: RefPR}, "…"},
+		{"pr resolved no-status", SessionRef{Kind: RefPR, Resolved: true}, ""},
+		{"pr open approved success", SessionRef{Kind: RefPR, State: RefStateOpen, ReviewDecision: "APPROVED", ChecksState: "SUCCESS", Resolved: true}, "OPEN · approved · checks ✓"},
+		{"pr merged", SessionRef{Kind: RefPR, State: RefStateMerged, Resolved: true}, "MERGED"},
+		{"pr changes failing", SessionRef{Kind: RefPR, State: RefStateOpen, ReviewDecision: "CHANGES_REQUESTED", ChecksState: "FAILURE", Resolved: true}, "OPEN · changes requested · checks ✗"},
+		{"jira unresolved", SessionRef{Kind: RefJira}, "…"},
+		{"jira in progress", SessionRef{Kind: RefJira, JiraStatus: "In Progress", Resolved: true}, "In Progress"},
+		{"jira resolved no-status", SessionRef{Kind: RefJira, Resolved: true}, ""},
+	}
+	for _, c := range cases {
+		if got := RefStatusText(c.ref); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestSessionRefIsOpen(t *testing.T) {
 	cases := []struct {
 		ref  SessionRef
