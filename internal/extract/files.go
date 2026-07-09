@@ -2,6 +2,7 @@ package extract
 
 import (
 	"strings"
+	"time"
 
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -41,9 +42,15 @@ func BlockModifiedFiles(blocks []session.ContentBlock) []Item {
 }
 
 func extractFilePaths(blocks []session.ContentBlock, tools map[string]string, skipImages bool) []Item {
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	var items []Item
+	extractFilePathsInto(blocks, time.Time{}, tools, skipImages, seen, &items)
+	return items
+}
 
+// extractFilePathsInto appends unique file paths from blocks to items, stamping
+// each with ts (keep latest occurrence). seen maps a path to its index in items.
+func extractFilePathsInto(blocks []session.ContentBlock, ts time.Time, tools map[string]string, skipImages bool, seen map[string]int, items *[]Item) {
 	for _, block := range blocks {
 		if block.Type != "tool_use" || block.ToolInput == "" {
 			continue
@@ -53,7 +60,13 @@ func extractFilePaths(blocks []session.ContentBlock, tools map[string]string, sk
 			continue
 		}
 		path := JSONField(block.ToolInput, field)
-		if path == "" || seen[path] {
+		if path == "" {
+			continue
+		}
+		if idx, ok := seen[path]; ok {
+			if !ts.IsZero() {
+				(*items)[idx].Timestamp = ts // keep latest occurrence
+			}
 			continue
 		}
 		if skipImages {
@@ -69,25 +82,28 @@ func extractFilePaths(blocks []session.ContentBlock, tools map[string]string, sk
 				continue
 			}
 		}
-		seen[path] = true
-		items = append(items, Item{
-			URL:      path,
-			Label:    ShortenPath(path),
-			Category: block.ToolName,
+		seen[path] = len(*items)
+		*items = append(*items, Item{
+			URL:       path,
+			Label:     ShortenPath(path),
+			Category:  block.ToolName,
+			Timestamp: ts,
 		})
 	}
-	return items
 }
 
-// SessionFilePaths loads messages and extracts file paths.
+// SessionFilePaths loads messages and extracts file paths, stamping each with
+// the timestamp of the entry it last appeared in and ordering most-recent first.
 func SessionFilePaths(filePath string) []Item {
 	entries, err := session.LoadMessages(filePath)
 	if err != nil {
 		return nil
 	}
-	var blocks []session.ContentBlock
+	seen := make(map[string]int)
+	var items []Item
 	for _, entry := range entries {
-		blocks = append(blocks, entry.Content...)
+		extractFilePathsInto(entry.Content, entry.Timestamp, FilePathTools, false, seen, &items)
 	}
-	return BlockFilePaths(blocks)
+	sortItemsByTime(items)
+	return items
 }

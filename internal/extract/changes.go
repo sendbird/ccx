@@ -100,9 +100,10 @@ func EntryChanges(entries []session.Entry) []ChangeItem {
 			seen[filePath] = len(items)
 			items = append(items, ChangeItem{
 				Item: Item{
-					URL:      filePath,
-					Label:    ShortenPath(filePath),
-					Category: block.ToolName,
+					URL:       filePath,
+					Label:     ShortenPath(filePath),
+					Category:  block.ToolName,
+					Timestamp: entry.Timestamp,
 				},
 				ToolNames:   []string{block.ToolName},
 				ToolInputs:  []string{block.ToolInput},
@@ -112,8 +113,20 @@ func EntryChanges(entries []session.Entry) []ChangeItem {
 			})
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Item.URL < items[j].Item.URL })
+	sortChangesByTime(items)
 	return items
+}
+
+// sortChangesByTime orders change items most-recent first, falling back to path
+// order when timestamps are equal or absent so the list stays stable.
+func sortChangesByTime(items []ChangeItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		ti, tj := items[i].Timestamp, items[j].Timestamp
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return items[i].Item.URL < items[j].Item.URL
+	})
 }
 
 func SessionChanges(filePath string) []ChangeItem {

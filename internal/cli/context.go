@@ -351,6 +351,7 @@ func extractURLsWithContext(entries []session.Entry, sessID string) []PickerItem
 				items[idx].Refs = append(items[idx].Refs, ref)
 			} else {
 				index[item.URL] = len(items)
+				item.Timestamp = e.Timestamp
 				items = append(items, PickerItem{
 					Item:      item,
 					SessionID: sessID,
@@ -359,6 +360,7 @@ func extractURLsWithContext(entries []session.Entry, sessID string) []PickerItem
 			}
 		}
 	}
+	sortAndStampItems(items)
 	return items
 }
 
@@ -378,6 +380,7 @@ func extractFilesWithContext(entries []session.Entry, sessID string) []PickerIte
 				items[idx].Refs = append(items[idx].Refs, ref)
 			} else {
 				index[item.URL] = len(items)
+				item.Timestamp = e.Timestamp
 				items = append(items, PickerItem{
 					Item:      item,
 					SessionID: sessID,
@@ -386,7 +389,37 @@ func extractFilesWithContext(entries []session.Entry, sessID string) []PickerIte
 			}
 		}
 	}
+	sortAndStampItems(items)
 	return items
+}
+
+// sortAndStampItems orders URL/file picker items most-recent first (by the
+// timestamp of the entry each last appeared in) and appends a short timeAgo
+// suffix to each label, matching the changes picker's newest-first layout.
+func sortAndStampItems(items []PickerItem) {
+	// Keep each item stamped with its latest occurrence, not its first, so the
+	// ordering reflects the most recent mention.
+	for i := range items {
+		latest := items[i].Item.Timestamp
+		for _, r := range items[i].Refs {
+			if r.Timestamp.After(latest) {
+				latest = r.Timestamp
+			}
+		}
+		items[i].Item.Timestamp = latest
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		ti, tj := items[i].Item.Timestamp, items[j].Item.Timestamp
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return items[i].Item.URL < items[j].Item.URL
+	})
+	for i := range items {
+		if !items[i].Item.Timestamp.IsZero() {
+			items[i].Item.Label += "  " + shortTimeAgo(items[i].Item.Timestamp)
+		}
+	}
 }
 
 func extractChangesWithContext(entries []session.Entry, sessID string) []PickerItem {
