@@ -342,6 +342,7 @@ type App struct {
 	sessRefsCursor        int                   // cursor within the References preview list
 	sessRefsResolved      bool                  // whether the currently-previewed session's refs have been resolved
 	refsInFlight          map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
+	openURL               func(string) error    // opens a URL in the browser; overridable in tests (defaults to `open`)
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -1807,6 +1808,13 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m, cmd, _ := a.drillIntoWorkflowAgent()
 			return m, cmd
 		}
+		// If References preview is focused, open the PR/Jira URL under the cursor
+		// in the browser (mirrors `o`; without this Enter would fall through to
+		// openConversation).
+		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewRefs && len(a.sessPreviewRefs) > 0 {
+			m, cmd, _ := a.openRefUnderCursor()
+			return m, cmd
+		}
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
@@ -2278,12 +2286,21 @@ func (a *App) openRefUnderCursor() (tea.Model, tea.Cmd, bool) {
 		a.copiedMsg = "No URL for this reference"
 		return a, nil, true
 	}
-	if err := exec.Command("open", ref.URL).Start(); err != nil {
+	if err := a.openInBrowser(ref.URL); err != nil {
 		a.copiedMsg = "Error: " + err.Error()
 		return a, nil, true
 	}
 	a.copiedMsg = "Opened " + ref.Label
 	return a, nil, true
+}
+
+// openInBrowser opens a URL in the default browser. The opener is overridable
+// (a.openURL) so tests can intercept it instead of spawning `open`.
+func (a *App) openInBrowser(url string) error {
+	if a.openURL != nil {
+		return a.openURL(url)
+	}
+	return exec.Command("open", url).Start()
 }
 
 // drillIntoWorkflowAgent opens the conversation view for the current session and

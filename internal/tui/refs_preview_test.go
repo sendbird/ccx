@@ -90,3 +90,42 @@ func TestRenderSessionRefs(t *testing.T) {
 		t.Error("focused render missing open hint")
 	}
 }
+
+// TestRefsPreviewEnterOpensURL guards the reported bug: with the References
+// preview focused, Enter on a PR/Jira entry must open its URL in the browser —
+// NOT fall through to km.Session.Open and open the conversation. `o` already
+// worked; Enter was intercepted by the Session.Open case, which had no refs
+// branch. Both Enter and `o` must open the URL and leave the view unchanged.
+func TestRefsPreviewEnterOpensURL(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEnter},
+		{Type: tea.KeyRunes, Runes: []rune{'o'}},
+	} {
+		sessions := fakeSessions()
+		a := newTestApp(sessions)
+		a.sessionList.Select(0)
+
+		// Simulate a focused, populated References preview.
+		a.sessPreviewMode = sessPreviewRefs
+		a.sessSplit.Show = true
+		a.sessSplit.Focus = true
+		a.sessPreviewRefs = []session.SessionRef{
+			{Kind: session.RefPR, URL: "https://github.com/sendbird/ccx/pull/62",
+				Label: "sendbird/ccx#62", State: session.RefStateOpen, Resolved: true},
+		}
+		a.sessRefsCursor = 0
+
+		var opened string
+		a.openURL = func(u string) error { opened = u; return nil }
+
+		m, _ := a.Update(key)
+		got := m.(*App)
+
+		if opened != "https://github.com/sendbird/ccx/pull/62" {
+			t.Errorf("key %v: expected the ref URL to be opened, got %q", key, opened)
+		}
+		if got.state != viewSessions {
+			t.Errorf("key %v: view changed to %v — Enter leaked to openConversation", key, got.state)
+		}
+	}
+}
