@@ -393,6 +393,11 @@ type App struct {
 	urlSearchTerm  string
 	urlScope       string // context label: "session", "message", "block"
 
+	// PR/Jira status for URL-menu rows, keyed by URL. Filled asynchronously
+	// when the menu opens (same gh/Jira resolve + TTL cache the References
+	// preview uses) so PR/Jira links show OPEN/MERGED/review/checks inline.
+	urlRefStatus map[string]session.SessionRef
+
 	// Changes-specific state for diff preview
 	urlChangeMap map[string]extract.ChangeItem // file path → ChangeItem (for diff rendering)
 	urlDiffVP    viewport.Model                // scrollable diff viewport
@@ -1196,6 +1201,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.sessRefsCacheKey = "" // force re-render with the newly-resolved ref
 				return a, a.updateSessionRefsPreview(sess)
 			}
+		}
+		return a, nil
+
+	case urlRefStatusMsg:
+		// One PR/Jira URL's status landed; store it so the URL menu row renders
+		// the state inline. Ignore if the menu was closed in the meantime.
+		if a.urlRefStatus != nil {
+			a.urlRefStatus[msg.ref.URL] = msg.ref
 		}
 		return a, nil
 
@@ -7717,6 +7730,13 @@ type refsExtractedMsg struct {
 // each gh/Jira call returns instead of waiting for the whole batch.
 type refStatusMsg struct {
 	id  string
+	ref session.SessionRef
+}
+
+// urlRefStatusMsg carries the resolved status of a single PR/Jira URL shown in
+// the URL menu, keyed by URL rather than session so it streams into the menu
+// (which is not scoped to a session) one ref at a time.
+type urlRefStatusMsg struct {
 	ref session.SessionRef
 }
 

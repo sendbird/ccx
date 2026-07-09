@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/kitty"
+	"github.com/sendbird/ccx/internal/session"
 )
 
 var pickerDiffStyles = extract.DiffStyles{
@@ -70,6 +72,11 @@ type pickerModel struct {
 	// events, so we only ask once per session.
 	focusReportingEnabled bool
 
+	// refStatus holds resolved PR/Jira status keyed by URL, filled
+	// asynchronously after the picker opens (urls kind only) so PR/Jira rows
+	// show OPEN/MERGED/review/checks inline.
+	refStatus map[string]session.SessionRef
+
 	result *PickerResult
 	quit   bool
 }
@@ -83,10 +90,48 @@ func newPickerModel(kind string, items []PickerItem) pickerModel {
 		artifactSelected: make(map[int]bool),
 		previewMode:      pickerPreviewConversation,
 		termFocused:      true,
+		refStatus:        make(map[string]session.SessionRef),
 	}
 }
 
-func (m pickerModel) Init() tea.Cmd { return nil }
+// pickerRefStatusMsg carries one resolved PR/Jira status back into the picker.
+type pickerRefStatusMsg struct {
+	ref session.SessionRef
+}
+
+func (m pickerModel) Init() tea.Cmd {
+	return m.resolveRefsCmd()
+}
+
+// resolveRefsCmd asynchronously resolves PR/Jira status for every GitHub-PR or
+// Jira URL in the list, streaming each result back as a pickerRefStatusMsg. It
+// reuses session.ResolveRef so results are TTL-cached and share the bounded
+// concurrency used elsewhere. Non-urls kinds have no PR/Jira links → no-op.
+func (m pickerModel) resolveRefsCmd() tea.Cmd {
+	if m.kind != "urls" {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, it := range m.allItems {
+		if it.Item.Category != "pr" && it.Item.Category != "jira" {
+			continue
+		}
+		ref, ok := session.ClassifyURLRef(it.Item.URL)
+		if !ok {
+			continue
+		}
+		r := ref
+		cmds = append(cmds, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return pickerRefStatusMsg{ref: session.ResolveRef(ctx, r)}
+		})
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
 
 // kittyPickerTickMsg fires every 250ms when Kitty is supported so we can
 // poll tmux pane visibility — tmux does NOT forward focus-out events on
@@ -101,6 +146,11 @@ func kittyPickerTickCmd() tea.Cmd {
 
 func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case pickerRefStatusMsg:
+		if m.refStatus != nil {
+			m.refStatus[msg.ref.URL] = msg.ref
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -706,10 +756,11 @@ func (m pickerModel) View() string {
 		if len(item.Refs) > 1 {
 			refBadge = dim.Render(fmt.Sprintf(" ×%d", len(item.Refs)))
 		}
+		statusBadge := m.refStatusText(item.Item.URL, dim)
 		if i == m.cursor {
-			listLines = append(listLines, sel.Render(">")+check+badge+" "+sel.Render(label)+refBadge)
+			listLines = append(listLines, sel.Render(">")+check+badge+" "+sel.Render(label)+refBadge+statusBadge)
 		} else {
-			listLines = append(listLines, " "+check+badge+" "+dim.Render(label)+refBadge)
+			listLines = append(listLines, " "+check+badge+" "+dim.Render(label)+refBadge+statusBadge)
 		}
 	}
 
@@ -899,6 +950,23 @@ func (m pickerModel) selectedURLs() []string {
 		return []string{m.items[m.cursor].Item.URL}
 	}
 	return nil
+}
+
+// refStatusText returns the styled PR/Jira status suffix (leading two spaces)
+// for a URL row, or "" when the URL has no resolved PR/Jira status.
+func (m pickerModel) refStatusText(url string, dim lipgloss.Style) string {
+	if m.refStatus == nil {
+		return ""
+	}
+	ref, ok := m.refStatus[url]
+	if !ok {
+		return ""
+	}
+	txt := session.RefStatusText(ref)
+	if txt == "" {
+		return ""
+	}
+	return "  " + dim.Render(txt)
 }
 
 func (m pickerModel) openItems(urls []string) {
