@@ -182,7 +182,13 @@ func printItems(items []extract.Item, kind string) error {
 		if len(cat) < 5 {
 			cat += strings.Repeat(" ", 5-len(cat))
 		}
-		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", cat, item.Label, item.URL)
+		// Items arrive newest-first; append the timestamp as a trailing tab
+		// column so existing 3-column parsers keep working.
+		if !item.Timestamp.IsZero() {
+			fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", cat, item.Label, item.URL, item.Timestamp.Format("2006-01-02 15:04:05"))
+		} else {
+			fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", cat, item.Label, item.URL)
+		}
 	}
 	return nil
 }

@@ -10,15 +10,17 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sendbird/ccx/internal/session"
 )
 
 // Item represents a URL or file path extracted from a session.
 type Item struct {
-	URL      string
-	Label    string // short display label
-	Category string // github, jira, slack, pr, other
+	URL       string
+	Label     string    // short display label
+	Category  string    // github, jira, slack, pr, other
+	Timestamp time.Time // latest entry timestamp this item appeared in (zero if unknown)
 }
 
 // urlRegex matches http/https URLs in text.
@@ -49,28 +51,32 @@ func SessionURLs(filePath string) []Item {
 	return EntryURLs(entries)
 }
 
-// EntryURLs extracts unique URLs from a set of entries.
+// EntryURLs extracts unique URLs from a set of entries, stamping each with the
+// timestamp of the entry it last appeared in and ordering most-recent first.
 func EntryURLs(entries []session.Entry) []Item {
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	var items []Item
 	for _, entry := range entries {
-		extractURLsFromBlocks(entry.Content, seen, &items)
+		extractURLsFromBlocks(entry.Content, entry.Timestamp, seen, &items)
 	}
-	sortItems(items)
+	sortItemsByTime(items)
 	return items
 }
 
-// BlockURLs extracts unique URLs from content blocks.
+// BlockURLs extracts unique URLs from content blocks (single-message scope, so
+// no timestamp is available). Ordered by category.
 func BlockURLs(blocks []session.ContentBlock) []Item {
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	var items []Item
-	extractURLsFromBlocks(blocks, seen, &items)
+	extractURLsFromBlocks(blocks, time.Time{}, seen, &items)
 	sortItems(items)
 	return items
 }
 
-// extractURLsFromBlocks appends unique URLs from blocks to items.
-func extractURLsFromBlocks(blocks []session.ContentBlock, seen map[string]bool, items *[]Item) {
+// extractURLsFromBlocks appends unique URLs from blocks to items. seen maps a
+// URL to its index in items so a later, more-recent occurrence can refresh the
+// stored timestamp (keep latest).
+func extractURLsFromBlocks(blocks []session.ContentBlock, ts time.Time, seen map[string]int, items *[]Item) {
 	for _, block := range blocks {
 		for _, text := range [2]string{block.Text, block.ToolInput} {
 			if text == "" {
@@ -78,11 +84,19 @@ func extractURLsFromBlocks(blocks []session.ContentBlock, seen map[string]bool, 
 			}
 			for _, raw := range urlRegex.FindAllString(text, -1) {
 				u := CleanURL(raw)
-				if u == "" || seen[u] {
+				if u == "" {
 					continue
 				}
-				seen[u] = true
-				*items = append(*items, CategorizeURL(u))
+				if idx, ok := seen[u]; ok {
+					if !ts.IsZero() {
+						(*items)[idx].Timestamp = ts // keep latest occurrence
+					}
+					continue
+				}
+				seen[u] = len(*items)
+				item := CategorizeURL(u)
+				item.Timestamp = ts
+				*items = append(*items, item)
 			}
 		}
 	}
@@ -90,6 +104,18 @@ func extractURLsFromBlocks(blocks []session.ContentBlock, seen map[string]bool, 
 
 func sortItems(items []Item) {
 	sort.SliceStable(items, func(i, j int) bool {
+		return categoryOrder[items[i].Category] < categoryOrder[items[j].Category]
+	})
+}
+
+// sortItemsByTime orders items most-recent first, falling back to category order
+// when timestamps are equal or absent so the list stays stable and grouped.
+func sortItemsByTime(items []Item) {
+	sort.SliceStable(items, func(i, j int) bool {
+		ti, tj := items[i].Timestamp, items[j].Timestamp
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
 		return categoryOrder[items[i].Category] < categoryOrder[items[j].Category]
 	})
 }
