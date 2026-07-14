@@ -129,3 +129,146 @@ func TestRefsPreviewEnterOpensURL(t *testing.T) {
 		}
 	}
 }
+
+// refsForMultiSelectTest returns three distinct refs (2 PRs, 1 Jira) for
+// exercising multi-selection over the References preview.
+func refsForMultiSelectTest() []session.SessionRef {
+	return []session.SessionRef{
+		{Kind: session.RefPR, URL: "https://github.com/sendbird/ccx/pull/62",
+			Label: "sendbird/ccx#62", State: session.RefStateOpen, Resolved: true},
+		{Kind: session.RefPR, URL: "https://github.com/sendbird/ccx/pull/40",
+			Label: "sendbird/ccx#40", State: session.RefStateMerged, Resolved: true},
+		{Kind: session.RefJira, URL: "https://sendbird.atlassian.net/browse/CPLAT-1234",
+			Label: "CPLAT-1234", JiraStatus: "In Progress", Resolved: true},
+	}
+}
+
+// setupFocusedRefsPreview builds an App with a focused, populated References
+// preview ready for key-handling tests. The refs are set on both
+// sessPreviewRefs (what the key handlers read) and the backing session's
+// Refs field (what updateSessionRefsPreview reloads from on every toggle —
+// see sessionByIDFromStore), so a space/enter/y keypress that re-derives
+// sessPreviewRefs from the session store doesn't wipe them out.
+func setupFocusedRefsPreview(t *testing.T) *App {
+	t.Helper()
+	sessions := fakeSessions()
+	refs := refsForMultiSelectTest()
+	sessions[0].Refs = refs
+	sessions[0].HasRefs = true
+	sessions[0].RefsResolved = true
+	a := newTestApp(sessions)
+	a.sessionList.Select(0)
+	a.sessPreviewMode = sessPreviewRefs
+	a.sessSplit.Show = true
+	a.sessSplit.Focus = true
+	a.sessPreviewRefs = refs
+	a.sessRefsCursor = 0
+	// updateSessionRefsPreview clears sessRefsSelected whenever
+	// sessRefsCacheID != the session it's rendering — mirror the real
+	// startup flow (setSessPreviewMode calls this once already) so the
+	// cache ID is primed before a test's first space/enter/y keypress.
+	a.sessRefsCacheID = sessions[0].ID
+	return a
+}
+
+// TestRefsPreviewSpaceTogglesSelection guards multi-selection in the
+// References preview: space must toggle the current item into
+// sessRefsSelected and advance the cursor, mirroring the URL menu's
+// space-to-select behavior.
+func TestRefsPreviewSpaceTogglesSelection(t *testing.T) {
+	a := setupFocusedRefsPreview(t)
+
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	got := m.(*App)
+
+	if !got.sessRefsSelected[a.sessPreviewRefs[0].URL] {
+		t.Fatalf("expected ref 0 selected after space, selected=%v", got.sessRefsSelected)
+	}
+	if got.sessRefsCursor != 1 {
+		t.Errorf("expected cursor to advance to 1 after toggle, got %d", got.sessRefsCursor)
+	}
+
+	// Toggle it back off.
+	got.sessRefsCursor = 0
+	m2, _ := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	got2 := m2.(*App)
+	if got2.sessRefsSelected[a.sessPreviewRefs[0].URL] {
+		t.Errorf("expected ref 0 deselected after second space toggle, selected=%v", got2.sessRefsSelected)
+	}
+}
+
+// TestRefsPreviewEnterOpensAllSelected guards that Enter opens every
+// multi-selected reference (not just the one under the cursor) when a
+// selection exists.
+func TestRefsPreviewEnterOpensAllSelected(t *testing.T) {
+	a := setupFocusedRefsPreview(t)
+	refs := a.sessPreviewRefs
+
+	var opened []string
+	a.openURL = func(u string) error { opened = append(opened, u); return nil }
+
+	// Select refs 0 and 2, leave cursor on 1 (unselected) to prove selection
+	// wins over cursor position.
+	a.sessRefsSelected[refs[0].URL] = true
+	a.sessRefsSelected[refs[2].URL] = true
+	a.sessRefsCursor = 1
+
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := m.(*App)
+
+	if len(opened) != 2 {
+		t.Fatalf("expected 2 URLs opened, got %d: %v", len(opened), opened)
+	}
+	wantSet := map[string]bool{refs[0].URL: true, refs[2].URL: true}
+	for _, u := range opened {
+		if !wantSet[u] {
+			t.Errorf("unexpected URL opened: %q", u)
+		}
+	}
+	if got.state != viewSessions {
+		t.Errorf("view changed to %v — Enter should stay in sessions view", got.state)
+	}
+}
+
+// TestRefsPreviewYCopiesSelected guards that `y` copies every multi-selected
+// reference URL (newline-joined) to the clipboard, falling back to the
+// cursor item when nothing is selected.
+func TestRefsPreviewYCopiesSelected(t *testing.T) {
+	a := setupFocusedRefsPreview(t)
+	refs := a.sessPreviewRefs
+
+	a.sessRefsSelected[refs[0].URL] = true
+	a.sessRefsSelected[refs[1].URL] = true
+
+	m, _, _ := a.copySelectedRefs()
+	got := m.(*App)
+	if !strings.Contains(got.copiedMsg, "2") {
+		t.Errorf("expected copiedMsg to mention 2 refs, got %q", got.copiedMsg)
+	}
+
+	// No selection: falls back to the cursor item.
+	clear(a.sessRefsSelected)
+	a.sessRefsCursor = 1
+	m2, _, _ := a.copySelectedRefs()
+	got2 := m2.(*App)
+	if !strings.Contains(got2.copiedMsg, refs[1].Label) {
+		t.Errorf("expected copiedMsg to mention cursor ref %q, got %q", refs[1].Label, got2.copiedMsg)
+	}
+}
+
+// TestRefsPreviewSelectionClearedOnModeSwitch guards that leaving the
+// References preview (esc back to the conversation preview) clears any
+// leftover multi-selection so it doesn't leak into a later refs-preview
+// session.
+func TestRefsPreviewSelectionClearedOnModeSwitch(t *testing.T) {
+	a := setupFocusedRefsPreview(t)
+	a.sessRefsSelected[a.sessPreviewRefs[0].URL] = true
+
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	got := m.(*App)
+
+	if len(got.sessRefsSelected) != 0 {
+		t.Errorf("expected selection cleared after leaving refs preview, got %v", got.sessRefsSelected)
+	}
+}
+
