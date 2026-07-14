@@ -86,7 +86,7 @@ func (a *App) sessHelpLine() string {
 		case sessPreviewWorkflows:
 			h += " ↑↓:agent ↵:transcript ←:unfocus tab:mode"
 		case sessPreviewRefs:
-			h += " ↑↓:nav ↵:open ←:unfocus tab:mode"
+			h += " ↑↓:nav ↵:open sp:select y:copy ←:unfocus tab:mode"
 		default:
 			h += " ↑↓:scroll ←:unfocus tab:mode"
 		}

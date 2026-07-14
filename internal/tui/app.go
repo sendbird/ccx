@@ -340,6 +340,7 @@ type App struct {
 	sessAgentCursor       int                   // cursor within agents list
 	sessPreviewRefs       []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
 	sessRefsCursor        int                   // cursor within the References preview list
+	sessRefsSelected      map[string]bool       // selected ref URLs for multi-open/copy (keyed by SessionRef.URL)
 	sessRefsResolved      bool                  // whether the currently-previewed session's refs have been resolved
 	refsInFlight          map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
 	openURL               func(string) error    // opens a URL in the browser; overridable in tests (defaults to `open`)
@@ -759,6 +760,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		selectedSet:         make(map[string]bool),
 		hiddenBadges:        make(map[string]bool),
 		refsInFlight:        make(map[string]bool),
+		sessRefsSelected:    make(map[string]bool),
 		notifyPrev:          make(map[string]session.LifecycleState),
 		sessionRowCache:     newSessionRowCache(1024),
 		convPreviewRowCache: newSessionRowCache(4096),
@@ -1783,6 +1785,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// If in a non-default preview mode, go back to messages first
 			if a.sessPreviewMode != sessPreviewConversation {
 				a.closePaneProxy()
+				if a.sessPreviewMode == sessPreviewRefs {
+					clear(a.sessRefsSelected)
+				}
 				a.sessPreviewMode = sessPreviewConversation
 				sp.CacheKey = ""
 				sp.Focus = false
@@ -1821,11 +1826,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m, cmd, _ := a.drillIntoWorkflowAgent()
 			return m, cmd
 		}
-		// If References preview is focused, open the PR/Jira URL under the cursor
-		// in the browser (mirrors `o`; without this Enter would fall through to
-		// openConversation).
+		// If References preview is focused, open the selected PR/Jira URL(s)
+		// under the cursor in the browser (mirrors `o`; without this Enter
+		// would fall through to openConversation).
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewRefs && len(a.sessPreviewRefs) > 0 {
-			m, cmd, _ := a.openRefUnderCursor()
+			m, cmd, _ := a.openSelectedRefs()
 			return m, cmd
 		}
 		sess, ok := a.selectedSession()
@@ -1836,6 +1841,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.openConversation(sess)
 	case km.Session.Select:
 		if sp.Focus && sp.Show {
+			// References preview: space multi-selects the ref under the
+			// cursor instead of a no-op (mirrors the URL menu's space-select).
+			if a.sessPreviewMode == sessPreviewRefs && len(a.sessPreviewRefs) > 0 {
+				return a, a.toggleRefSelection()
+			}
 			return a, nil
 		}
 		if pi, ok := a.selectedProject(); ok {
@@ -2262,12 +2272,17 @@ func (a *App) handleWorkflowsPreviewKeys(sp *SplitPane, key string) (tea.Model, 
 }
 
 // handleRefsPreviewKeys handles cursor navigation + open for the References
-// preview. Enter opens the reference under the cursor (PR or Jira) in the
-// browser.
+// preview. Enter opens the selected references (or the one under the cursor,
+// if nothing is multi-selected) in the browser. Space toggles multi-selection
+// on the current item; y copies the selected (or current) reference URL(s).
 func (a *App) handleRefsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
 	switch key {
 	case "enter", "o":
-		return a.openRefUnderCursor()
+		return a.openSelectedRefs()
+	case " ":
+		return a, a.toggleRefSelection(), true
+	case "y":
+		return a.copySelectedRefs()
 	case "/":
 		sp.Focus = false
 		return a, startListSearch(&a.sessionList), true
@@ -2288,22 +2303,102 @@ func (a *App) handleRefsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 	return a, nil, false
 }
 
-// openRefUnderCursor opens the currently selected reference's URL in the
-// default browser.
-func (a *App) openRefUnderCursor() (tea.Model, tea.Cmd, bool) {
+// toggleRefSelection toggles multi-selection on the reference under the
+// cursor and advances the cursor, mirroring the URL menu's space-to-select.
+// Returns the cmd that must be dispatched by the caller to actually
+// re-render the preview viewport (clearing sessRefsCacheKey alone only
+// invalidates the cache — updateSessionRefsPreview is what repopulates
+// sessSplit.Preview's content).
+func (a *App) toggleRefSelection() tea.Cmd {
 	if a.sessRefsCursor < 0 || a.sessRefsCursor >= len(a.sessPreviewRefs) {
+		return nil
+	}
+	u := a.sessPreviewRefs[a.sessRefsCursor].URL
+	if u == "" {
+		return nil
+	}
+	if a.sessRefsSelected[u] {
+		delete(a.sessRefsSelected, u)
+	} else {
+		a.sessRefsSelected[u] = true
+	}
+	a.sessRefsCacheKey = "" // selection changed → force re-render
+	if a.sessRefsCursor < len(a.sessPreviewRefs)-1 {
+		a.sessRefsCursor++
+	}
+	if sess, ok := a.selectedSession(); ok {
+		return a.updateSessionRefsPreview(sess)
+	}
+	return nil
+}
+
+// selectedRefs returns the refs to act on: the multi-selected set (in display
+// order) if any, otherwise just the one under the cursor.
+func (a *App) selectedRefs() []session.SessionRef {
+	if len(a.sessRefsSelected) > 0 {
+		var refs []session.SessionRef
+		for _, r := range a.sessPreviewRefs {
+			if a.sessRefsSelected[r.URL] {
+				refs = append(refs, r)
+			}
+		}
+		return refs
+	}
+	if a.sessRefsCursor >= 0 && a.sessRefsCursor < len(a.sessPreviewRefs) {
+		return []session.SessionRef{a.sessPreviewRefs[a.sessRefsCursor]}
+	}
+	return nil
+}
+
+// openSelectedRefs opens every selected reference's URL (or just the one
+// under the cursor when nothing is multi-selected) in the default browser.
+func (a *App) openSelectedRefs() (tea.Model, tea.Cmd, bool) {
+	refs := a.selectedRefs()
+	if len(refs) == 0 {
 		return a, nil, true
 	}
-	ref := a.sessPreviewRefs[a.sessRefsCursor]
-	if ref.URL == "" {
+	opened := 0
+	for _, ref := range refs {
+		if ref.URL == "" {
+			continue
+		}
+		if err := a.openInBrowser(ref.URL); err == nil {
+			opened++
+		}
+	}
+	if opened == 0 {
+		a.copiedMsg = "No URL for this reference"
+	} else if len(refs) == 1 {
+		a.copiedMsg = "Opened " + refs[0].Label
+	} else {
+		a.copiedMsg = fmt.Sprintf("Opened %d reference(s)", opened)
+	}
+	return a, nil, true
+}
+
+// copySelectedRefs copies every selected reference's URL (or just the one
+// under the cursor) to the clipboard, newline-joined.
+func (a *App) copySelectedRefs() (tea.Model, tea.Cmd, bool) {
+	refs := a.selectedRefs()
+	if len(refs) == 0 {
+		return a, nil, true
+	}
+	var urls []string
+	for _, ref := range refs {
+		if ref.URL != "" {
+			urls = append(urls, ref.URL)
+		}
+	}
+	if len(urls) == 0 {
 		a.copiedMsg = "No URL for this reference"
 		return a, nil, true
 	}
-	if err := a.openInBrowser(ref.URL); err != nil {
-		a.copiedMsg = "Error: " + err.Error()
-		return a, nil, true
+	copyToClipboard(strings.Join(urls, "\n"))
+	if len(urls) == 1 {
+		a.copiedMsg = "Copied " + refs[0].Label
+	} else {
+		a.copiedMsg = fmt.Sprintf("Copied %d reference(s)", len(urls))
 	}
-	a.copiedMsg = "Opened " + ref.Label
 	return a, nil, true
 }
 
@@ -4635,8 +4730,14 @@ func (a *App) toggleSessionPreviewMode(mode sessPreview) {
 		a.sessionList.Select(idx)
 	}
 	if a.sessPreviewMode == mode {
+		if mode == sessPreviewRefs {
+			clear(a.sessRefsSelected)
+		}
 		a.sessPreviewMode = sessPreviewConversation
 	} else {
+		if a.sessPreviewMode == sessPreviewRefs {
+			clear(a.sessRefsSelected)
+		}
 		a.sessPreviewMode = mode
 	}
 	a.sessSplit.CacheKey = "" // force re-render
@@ -4645,6 +4746,9 @@ func (a *App) toggleSessionPreviewMode(mode sessPreview) {
 // cycleSessionPreviewMode advances to the next preview tab.
 // Skips sessPreviewLive — it's only entered via the L key.
 func (a *App) cycleSessionPreviewMode() {
+	if a.sessPreviewMode == sessPreviewRefs {
+		clear(a.sessRefsSelected)
+	}
 	a.sessPreviewMode = (a.sessPreviewMode + 1) % numSessPreviewModes
 	// Skip live and remote — they're entered via dedicated keys
 	for a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRemote {
@@ -4657,6 +4761,9 @@ func (a *App) cycleSessionPreviewMode() {
 // cycleSessionPreviewModeReverse goes to the previous preview tab.
 // Skips sessPreviewLive and sessPreviewRemote.
 func (a *App) cycleSessionPreviewModeReverse() {
+	if a.sessPreviewMode == sessPreviewRefs {
+		clear(a.sessRefsSelected)
+	}
 	a.sessPreviewMode = (a.sessPreviewMode + numSessPreviewModes - 1) % numSessPreviewModes
 	for a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRemote {
 		a.sessPreviewMode = (a.sessPreviewMode + numSessPreviewModes - 1) % numSessPreviewModes
@@ -5779,6 +5886,7 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	// a different session's (possibly shorter) ref list.
 	if a.sessRefsCacheID != sess.ID {
 		a.sessRefsCursor = 0
+		clear(a.sessRefsSelected)
 		a.sessRefsCacheID = sess.ID
 	}
 
@@ -5807,7 +5915,7 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	if a.sessRefsCursor >= len(a.sessPreviewRefs) {
 		a.sessRefsCursor = 0
 	}
-	cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t:%t", sess.ID, len(refs), previewW, a.sessRefsCursor, a.sessSplit.Focus, sess.RefsResolved)
+	cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t:%t:%s", sess.ID, len(refs), previewW, a.sessRefsCursor, a.sessSplit.Focus, sess.RefsResolved, refsSelectionSignature(a.sessPreviewRefs, a.sessRefsSelected))
 	if a.sessRefsCacheKey != cacheKey {
 		a.sessRefsCache = a.renderSessionRefs(a.sessPreviewRefs, previewW, sess.HasRefs, sess.RefsResolved)
 		a.sessRefsCacheKey = cacheKey
@@ -5870,6 +5978,23 @@ func orderRefs(refs []session.SessionRef) []session.SessionRef {
 	return ordered
 }
 
+// refsSelectionSignature builds a stable, order-preserving string of which refs
+// (by index into ordered) are currently selected, so the preview render cache
+// invalidates whenever the selection set changes shape (not just its size —
+// toggling one ref off and a different one on leaves the count unchanged).
+func refsSelectionSignature(ordered []session.SessionRef, selected map[string]bool) string {
+	if len(selected) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for i, r := range ordered {
+		if selected[r.URL] {
+			fmt.Fprintf(&sb, "%d,", i)
+		}
+	}
+	return sb.String()
+}
+
 // renderSessionRefs draws the PR/Jira reference list with status indicators.
 // The item at sessRefsCursor is highlighted when the preview pane is focused so
 // the user can pick a reference and open it in the browser. resolved reports
@@ -5880,7 +6005,7 @@ func (a *App) renderSessionRefs(ordered []session.SessionRef, width int, hasRefs
 	var sb strings.Builder
 	title := "── References ──"
 	if len(ordered) > 0 && a.sessSplit.Focus {
-		title = "── References  ↵:open ──"
+		title = "── References  ↵:open  sp:select  y:copy ──"
 	}
 	sb.WriteString(statTitleStyle.Render(title) + "\n\n")
 	if len(ordered) == 0 {
@@ -5906,19 +6031,28 @@ func (a *App) renderSessionRefs(ordered []session.SessionRef, width int, hasRefs
 			lastKind = r.Kind
 		}
 		selected := i == a.sessRefsCursor && a.sessSplit.Focus
-		sb.WriteString(refLine(r, width, selected) + "\n")
+		checked := a.sessRefsSelected[r.URL]
+		sb.WriteString(refLine(r, width, selected, checked) + "\n")
+	}
+	if selCount := len(a.sessRefsSelected); selCount > 0 {
+		sb.WriteString("\n" + dimStyle.Render(fmt.Sprintf("%d selected", selCount)))
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// refLine renders a single reference: cursor + state dot + label + status detail.
-func refLine(r session.SessionRef, width int, selected bool) string {
+// refLine renders a single reference: cursor + selection mark + state dot +
+// label + status detail.
+func refLine(r session.SessionRef, width int, selected, checked bool) string {
 	dot, label := refStateBadge(r)
 	cursor := "  "
 	if selected {
 		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true).Render("> ")
 	}
-	line := cursor + dot + " " + label
+	mark := "  "
+	if checked {
+		mark = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true).Render("* ")
+	}
+	line := cursor + mark + dot + " " + label
 
 	var detail string
 	switch r.Kind {
