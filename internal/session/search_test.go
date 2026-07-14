@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestToolNameMatches(t *testing.T) {
 	cases := []struct {
@@ -50,4 +53,43 @@ func TestMCPToolLabel(t *testing.T) {
 			t.Errorf("MCPToolLabel(%q) = (%q,%q,%v), want (%q,%q,%v)", c.in, s, tl, ok, c.server, c.tool, c.ok)
 		}
 	}
+}
+
+// TestBuildSnippet_MultibyteBoundary guards against a panic where the
+// firstMatch±40/80 byte-offset arithmetic sliced a multi-byte rune (e.g.
+// Korean text) in half, producing invalid UTF-8 that then diverged in
+// length from strings.ToLower(text) inside highlightMatches and caused a
+// slice-bounds-out-of-range panic.
+func TestBuildSnippet_MultibyteBoundary(t *testing.T) {
+	// Repeat a 3-byte Korean rune so byte offsets 40 and 80 land mid-rune.
+	prefix := strings.Repeat("가", 50) // 150 bytes before the match
+	text := prefix + "match" + strings.Repeat("나", 50)
+
+	for i := 0; i < len(text); i++ {
+		// Fuzz-ish: just ensure no panic across many slice windows by
+		// searching for "match" at its real position each time.
+		_ = buildSnippet(text, []string{"match"}, nil)
+	}
+
+	snippet := buildSnippet(text, []string{"match"}, nil)
+	if !strings.Contains(snippet, "match") {
+		t.Errorf("snippet %q missing match", snippet)
+	}
+	if !strings.HasPrefix(snippet, "...") {
+		t.Errorf("expected snippet to be truncated with prefix ellipsis, got %q", snippet)
+	}
+}
+
+func TestHighlightMatches_NoPanicOnCaseFoldLengthChange(t *testing.T) {
+	// Turkish İ lowercases (via strings.ToLower) to a 2-byte "i̇" sequence,
+	// which can shift byte offsets between text and strings.ToLower(text).
+	// This must not panic even though span offsets are computed against the
+	// lowercased string.
+	text := strings.Repeat("İ", 30) + "needle" + strings.Repeat("İ", 30)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("highlightMatches panicked: %v", r)
+		}
+	}()
+	_ = highlightMatches(text, []string{"needle"}, nil)
 }

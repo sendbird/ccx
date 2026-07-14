@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 type SearchQuery struct {
@@ -319,6 +320,14 @@ func buildSnippet(text string, terms, phrases []string) string {
 		end = len(text)
 	}
 
+	// Snap to rune boundaries so we never slice a multi-byte char in half.
+	for start > 0 && !utf8.RuneStart(text[start]) {
+		start--
+	}
+	for end < len(text) && !utf8.RuneStart(text[end]) {
+		end++
+	}
+
 	snippet := text[start:end]
 	snippet = strings.ReplaceAll(snippet, "\n", " ")
 	snippet = strings.TrimSpace(snippet)
@@ -401,13 +410,30 @@ func highlightMatches(text string, terms, phrases []string) string {
 	var out strings.Builder
 	cursor := 0
 	for _, s := range merged {
-		if s.start > cursor {
-			out.WriteString(text[cursor:s.start])
+		// textLower and text can diverge in byte length for some Unicode
+		// case foldings (e.g. Turkish İ, German ẞ), so spans computed
+		// against textLower must be clamped before slicing text.
+		start := s.start
+		end := s.end
+		if start > len(text) {
+			start = len(text)
+		}
+		if end > len(text) {
+			end = len(text)
+		}
+		if start < cursor {
+			start = cursor
+		}
+		if end < start {
+			continue
+		}
+		if start > cursor {
+			out.WriteString(text[cursor:start])
 		}
 		out.WriteString(hlStart)
-		out.WriteString(text[s.start:s.end])
+		out.WriteString(text[start:end])
 		out.WriteString(hlEnd)
-		cursor = s.end
+		cursor = end
 	}
 	if cursor < len(text) {
 		out.WriteString(text[cursor:])
