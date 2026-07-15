@@ -444,9 +444,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, cmd
 			}
-			// Plain conv view (no drilldown, preview already closed): stay
-			// in the conv list. ESC never auto-exits to the session list;
-			// use `left` for that explicit navigation.
+			// Plain conv view (no drilldown, preview already closed): ESC
+			// exits back to the session list, matching `left`.
+			a.state = viewSessions
 			return a, nil
 		}
 	case "enter":

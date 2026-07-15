@@ -1512,19 +1512,19 @@ func TestEscFromTaskDrilldownReturnsToParentConv(t *testing.T) {
 		t.Fatalf("second ESC should close the preview in the parent conv view")
 	}
 
-	// Third ESC (parent conv, preview closed) stays in the conv list — ESC
-	// never auto-exits the conv view.
+	// Third ESC (parent conv, preview closed) exits to the session list —
+	// once the drilldown is popped and the preview is closed, ESC leaves the
+	// conv view just like `left`.
 	app = pressKey(app, "esc")
-	if app.state != viewConversation {
-		t.Fatalf("third ESC must NOT exit to session list; got state=%v", app.state)
+	if app.state != viewSessions {
+		t.Fatalf("third ESC should exit to session list; got state=%v", app.state)
 	}
 }
 
-func TestEscFromPlainConvStaysInConvList(t *testing.T) {
+func TestEscFromPlainConvExitsToConvList(t *testing.T) {
 	// In a plain session conv view (no drilldown):
 	//   - preview shown   → ESC closes it (stay in conv list)
-	//   - preview closed  → ESC stays in conv list (no auto-exit; `left`
-	//                       is the explicit exit key)
+	//   - preview closed  → ESC exits back to the session list (same as `left`)
 	app := setupConvApp(t, testEntries(), 160, 50)
 	app.state = viewConversation
 	app.conv.split.Show = true
@@ -1538,8 +1538,8 @@ func TestEscFromPlainConvStaysInConvList(t *testing.T) {
 	}
 
 	app = pressKey(app, "esc")
-	if app.state != viewConversation {
-		t.Fatalf("second ESC must NOT exit to session list; got state=%v", app.state)
+	if app.state != viewSessions {
+		t.Fatalf("second ESC should exit to session list; got state=%v", app.state)
 	}
 }
 
