@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/extract"
@@ -20,6 +22,7 @@ var Commands = []struct {
 	Desc string
 }{
 	{"urls", "List URLs from the Claude session (interactive on TTY)"},
+	{"refs", "List PR/Jira references with resolved status (interactive on TTY)"},
 	{"files", "List file paths touched by the session (interactive on TTY)"},
 	{"changes", "List file changes made by the session (interactive on TTY)"},
 	{"images", "List image paths from the session (interactive on TTY)"},
@@ -75,6 +78,8 @@ func runPlain(command, filePath, sessID, claudeDir string) error {
 	switch command {
 	case "urls":
 		return printItems(extract.SessionURLs(filePath), "urls")
+	case "refs":
+		return printRefs(filePath)
 	case "files":
 		return printItems(extract.SessionFilePaths(filePath), "files")
 	case "changes":
@@ -99,6 +104,8 @@ func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, er
 	switch command {
 	case "urls":
 		items = extractURLsWithContext(entries, sessID)
+	case "refs":
+		items = extractRefsWithContext(entries, sessID)
 	case "files":
 		items = extractFilesWithContext(entries, sessID)
 	case "changes":
@@ -145,6 +152,8 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "  ccx urls              Interactive URL picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx urls --plain      Plain tab-separated output\n")
 	fmt.Fprintf(os.Stderr, "  ccx urls | fzf        Pipe to fzf (auto plain)\n")
+	fmt.Fprintf(os.Stderr, "  ccx refs              Interactive PR/Jira reference picker\n")
+	fmt.Fprintf(os.Stderr, "  ccx refs --plain      PR/Jira refs with resolved status (tab-separated)\n")
 	fmt.Fprintf(os.Stderr, "  ccx files             Interactive file picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx changes           Interactive changed-files picker\n")
 	fmt.Fprintf(os.Stderr, "  ccx images            Interactive image picker\n")
@@ -189,6 +198,25 @@ func printItems(items []extract.Item, kind string) error {
 		} else {
 			fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", cat, item.Label, item.URL)
 		}
+	}
+	return nil
+}
+
+func printRefs(filePath string) error {
+	refs := session.ExtractSessionRefsFromFile(filePath)
+	if len(refs) == 0 {
+		return fmt.Errorf("no PR/Jira references found in session")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	refs = session.ResolveRefs(ctx, refs)
+	for _, r := range refs {
+		kind := strings.ToUpper(string(r.Kind))
+		if len(kind) < 4 {
+			kind += strings.Repeat(" ", 4-len(kind))
+		}
+		status := session.RefStatusText(r)
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", kind, r.Label, status, r.URL)
 	}
 	return nil
 }
