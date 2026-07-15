@@ -225,7 +225,7 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
-		case "urls", "files", "changes", "images", "conversation", "info", "help":
+		case "urls", "refs", "files", "changes", "images", "conversation", "info", "help":
 			subcmd := os.Args[1]
 			fs := flag.NewFlagSet(subcmd, flag.ExitOnError)
 			plain := fs.Bool("plain", false, "force plain text output (no interactive picker)")

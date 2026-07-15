@@ -364,6 +364,20 @@ func extractURLsWithContext(entries []session.Entry, sessID string) []PickerItem
 	return items
 }
 
+// extractRefsWithContext returns only the session's PR and Jira URL references,
+// reusing the URL extractor and filtering to the pr/jira categories. The refs
+// picker resolves their status inline the same way the urls picker does.
+func extractRefsWithContext(entries []session.Entry, sessID string) []PickerItem {
+	all := extractURLsWithContext(entries, sessID)
+	refs := make([]PickerItem, 0, len(all))
+	for _, it := range all {
+		if it.Item.Category == "pr" || it.Item.Category == "jira" {
+			refs = append(refs, it)
+		}
+	}
+	return refs
+}
+
 func extractFilesWithContext(entries []session.Entry, sessID string) []PickerItem {
 	index := make(map[string]int)
 	var items []PickerItem

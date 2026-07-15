@@ -108,7 +108,7 @@ func (m pickerModel) Init() tea.Cmd {
 // reuses session.ResolveRef so results are TTL-cached and share the bounded
 // concurrency used elsewhere. Non-urls kinds have no PR/Jira links → no-op.
 func (m pickerModel) resolveRefsCmd() tea.Cmd {
-	if m.kind != "urls" {
+	if m.kind != "urls" && m.kind != "refs" {
 		return nil
 	}
 	var cmds []tea.Cmd
@@ -807,6 +807,8 @@ func (m pickerModel) View() string {
 	switch m.kind {
 	case "urls":
 		actions = "↵:jump  o:open  e:$EDITOR"
+	case "refs":
+		actions = "↵:jump  o:open"
 	case "files":
 		actions = "↵:jump  e:$EDITOR"
 	case "changes":
@@ -824,6 +826,8 @@ func (m pickerModel) View() string {
 		switch m.kind {
 		case "urls":
 			filterHints = hint.Render("is:") + dim.Render("pr gh github jira slack other") + "  " + hint.Render("role:") + dim.Render("user asst")
+		case "refs":
+			filterHints = hint.Render("is:") + dim.Render("pr jira") + "  " + hint.Render("role:") + dim.Render("user asst")
 		case "files":
 			filterHints = hint.Render("is:") + dim.Render("read write edit glob grep tool") + "  " + hint.Render("role:") + dim.Render("user asst")
 		case "changes":
