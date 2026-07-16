@@ -19,7 +19,6 @@ import (
 	ansi "github.com/charmbracelet/x/ansi"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/kitty"
-	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -168,7 +167,7 @@ func (a *App) convPageOpenSelected() (tea.Model, tea.Cmd) {
 		}
 	case convPageURLs:
 		if item.URL != "" {
-			if err := opener.Open(a.config.Open, item.URL); err == nil {
+			if err := a.openInBrowser(item.URL); err == nil {
 				a.copiedMsg = "Opened URL"
 			}
 		}

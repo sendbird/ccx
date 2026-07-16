@@ -2407,13 +2407,14 @@ func (a *App) copySelectedRefs() (tea.Model, tea.Cmd, bool) {
 	return a, nil, true
 }
 
-// openInBrowser opens a URL in the default browser. The opener is overridable
-// (a.openURL) so tests can intercept it instead of spawning `open`.
+// openInBrowser opens a URL using the configured opener (open.command_template,
+// falling back to the OS default). a.openURL overrides it so tests can intercept
+// the call instead of spawning a real process.
 func (a *App) openInBrowser(url string) error {
 	if a.openURL != nil {
 		return a.openURL(url)
 	}
-	return exec.Command("open", url).Start()
+	return opener.Open(a.config.Open, url)
 }
 
 // drillIntoWorkflowAgent opens the conversation view for the current session and
