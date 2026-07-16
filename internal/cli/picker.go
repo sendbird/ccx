@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/kitty"
+	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -79,9 +79,14 @@ type pickerModel struct {
 
 	result *PickerResult
 	quit   bool
+
+	// opener configures how selected URLs are opened (open.command_template,
+	// falling back to the OS default). Shared with the TUI so both open paths
+	// honor the same config.
+	opener opener.Config
 }
 
-func newPickerModel(kind string, items []PickerItem) pickerModel {
+func newPickerModel(kind string, items []PickerItem, openerCfg opener.Config) pickerModel {
 	return pickerModel{
 		kind:             kind,
 		allItems:         items,
@@ -91,6 +96,7 @@ func newPickerModel(kind string, items []PickerItem) pickerModel {
 		previewMode:      pickerPreviewConversation,
 		termFocused:      true,
 		refStatus:        make(map[string]session.SessionRef),
+		opener:           openerCfg,
 	}
 }
 
@@ -975,16 +981,7 @@ func (m pickerModel) refStatusText(url string, dim lipgloss.Style) string {
 
 func (m pickerModel) openItems(urls []string) {
 	for _, u := range urls {
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			cmd = exec.Command("open", u)
-		case "linux":
-			cmd = exec.Command("xdg-open", u)
-		}
-		if cmd != nil {
-			cmd.Start()
-		}
+		_ = opener.Open(m.opener, u)
 	}
 }
 
@@ -1157,12 +1154,13 @@ func (m pickerModel) conversationPreview() string {
 	return sb.String()
 }
 
-// RunPicker launches the interactive picker and returns the result.
-func RunPicker(kind string, items []PickerItem) (*PickerResult, error) {
+// RunPicker launches the interactive picker and returns the result. openerCfg
+// controls how selected URLs open (shared with the TUI via open.command_template).
+func RunPicker(kind string, items []PickerItem, openerCfg opener.Config) (*PickerResult, error) {
 	if len(items) == 0 {
 		return nil, fmt.Errorf("no %s found in session", kind)
 	}
-	model := newPickerModel(kind, items)
+	model := newPickerModel(kind, items, openerCfg)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	// Clear any Kitty inline images before returning so they don't linger
