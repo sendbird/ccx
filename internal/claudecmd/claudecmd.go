@@ -23,7 +23,7 @@ func RenderArgv(cfg Config, args ...string) ([]string, error) {
 		template = DefaultTemplate
 	}
 
-	parts, err := splitTemplate(template)
+	parts, err := SplitTemplate(template)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,10 @@ func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-func splitTemplate(input string) ([]string, error) {
+// SplitTemplate tokenizes a command template into argv parts, honoring
+// single/double quotes and backslash escapes. Exported so other command
+// renderers (e.g. the URL opener) can reuse the same shell-like splitting.
+func SplitTemplate(input string) ([]string, error) {
 	var tokens []string
 	var b strings.Builder
 	inSingle := false

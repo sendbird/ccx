@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -395,7 +396,7 @@ func (a *App) handleURLMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		opened := 0
 		for _, u := range urls {
-			if err := extract.OpenInBrowser(u); err == nil {
+			if err := opener.Open(a.config.Open, u); err == nil {
 				opened++
 			}
 		}

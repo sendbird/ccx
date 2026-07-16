@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -202,20 +200,6 @@ func slackLabel(u *url.URL) string {
 		return "slack#" + parts[1]
 	}
 	return "slack"
-}
-
-// OpenInBrowser opens a URL in the default browser.
-func OpenInBrowser(u string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", u)
-	case "linux":
-		cmd = exec.Command("xdg-open", u)
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
-	}
-	return cmd.Start()
 }
 
 // ShortenPath creates a display label from a file path.

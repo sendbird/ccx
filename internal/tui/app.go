@@ -20,6 +20,7 @@ import (
 	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/kitty"
+	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/remote"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
@@ -716,6 +717,7 @@ type Config struct {
 	JumpUUID     string           // entry UUID to navigate to within the session
 	PickMode     bool             // true = running under `ccx pick session`: show "Pick" action, skip prefs save
 	Claude       claudecmd.Config // command template for local Claude launches
+	Open         opener.Config    // command template for opening URLs
 }
 
 func NewApp(sessions []session.Session, cfg Config) *App {
@@ -755,9 +757,12 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
-	_, prefs, sc, rc, cc := LoadCCXConfig(configPath())
+	_, prefs, sc, rc, cc, oc := LoadCCXConfig(configPath())
 	if a.config.Claude.CommandTemplate == "" {
 		a.config.Claude = cc
+	}
+	if a.config.Open.CommandTemplate == "" {
+		a.config.Open = oc
 	}
 	a.applyPreferences(prefs)
 	a.shortcuts = sc
