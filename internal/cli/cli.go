@@ -11,8 +11,10 @@ import (
 
 	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
+	"github.com/sendbird/ccx/internal/tui"
 	"golang.org/x/term"
 )
 
@@ -118,7 +120,10 @@ func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, er
 		return nil, fmt.Errorf("unknown command: %s", command)
 	}
 
-	result, err := RunPicker(command, items)
+	// Load the URL-opener config so the picker's open action honors
+	// open.command_template, exactly like the TUI's open paths.
+	openerCfg := loadOpenerConfig()
+	result, err := RunPicker(command, items, openerCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +138,15 @@ func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, er
 
 func isTerminal() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// loadOpenerConfig reads the URL-opener config from the unified config file so
+// the CLI picker opens URLs the same way the TUI does. Missing/unreadable
+// config yields the zero value, which opener treats as the OS default.
+func loadOpenerConfig() opener.Config {
+	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
+	_, _, _, _, _, oc := tui.LoadCCXConfig(configPath)
+	return oc
 }
 
 func printHelp() {

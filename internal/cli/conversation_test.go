@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sendbird/ccx/internal/extract"
+	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -141,7 +142,7 @@ func TestConversationPreviewModeCycle(t *testing.T) {
 	m := newPickerModel("conversation", []PickerItem{{
 		Item:             extract.Item{URL: "conversation:1", Label: "#1", Category: "conversation"},
 		ConversationText: "hello",
-	}})
+	}}, opener.Config{})
 	if m.previewMode != pickerPreviewConversation {
 		t.Fatalf("initial preview mode = %v, want conversation", m.previewMode)
 	}
