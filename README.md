@@ -485,6 +485,29 @@ claude:
   command_template: "claude --model opus {{args}}"
 ```
 
+### URL opener
+
+By default ccx opens URLs (from the conversation URL browser and the URL action
+menu) with the OS default handler — `open` on macOS, `xdg-open` on Linux.
+Configure a command template to route URLs somewhere else:
+
+```yaml
+open:
+  command_template: "tmux-chrome open {{url}}"
+```
+
+`{{url}}` expands to the URL. If `{{url}}` is omitted, ccx appends the URL as the
+final argument (e.g. `command_template: "firefox --new-tab"`). Leave the section
+empty to keep the OS default. Like the Claude template, it is parsed into argv
+and launched directly (not shell-evaluated), so quote paths with spaces:
+`'/opt/my browser/open' {{url}}`.
+
+Set it from the CLI too:
+
+```sh
+ccx config set open.command_template "tmux-chrome open {{url}}"
+```
+
 ### Number Key Shortcuts
 
 Number keys `1-9` trigger commands based on the active view and split focus side.

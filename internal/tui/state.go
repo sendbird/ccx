@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/claudecmd"
+	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/remote"
 	"gopkg.in/yaml.v3"
 )
@@ -41,6 +42,7 @@ type CCXConfig struct {
 	Shortcuts   Shortcuts        `yaml:"shortcuts,omitempty"`
 	Remote      remote.Config    `yaml:"remote,omitempty"`
 	Claude      claudecmd.Config `yaml:"claude,omitempty"`
+	Open        opener.Config    `yaml:"open,omitempty"`
 }
 
 // configPath returns the path to the unified config file.
@@ -50,22 +52,24 @@ func configPath() string {
 }
 
 // LoadCCXConfig reads the unified config file.
-// Returns keymap, preferences, shortcuts, remote config, and Claude command config.
-func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config, claudecmd.Config) {
+// Returns keymap, preferences, shortcuts, remote config, Claude command config,
+// and URL-opener config.
+func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config, claudecmd.Config, opener.Config) {
 	km := DefaultKeymap()
 	var prefs Preferences
 	sc := DefaultShortcuts()
 	var rc remote.Config
 	var cc claudecmd.Config
+	var oc opener.Config
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return &km, prefs, sc, rc, cc
+		return &km, prefs, sc, rc, cc, oc
 	}
 
 	var cfg CCXConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return &km, prefs, sc, rc, cc
+		return &km, prefs, sc, rc, cc, oc
 	}
 
 	// Merge keymap overrides from keymaps section
@@ -81,7 +85,7 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config,
 	mergeShortcuts(sc, cfg.Shortcuts)
 	cfg.Shortcuts = sc
 
-	return &km, cfg.Preferences, sc, cfg.Remote, cfg.Claude
+	return &km, cfg.Preferences, sc, cfg.Remote, cfg.Claude, cfg.Open
 }
 
 // SavePreferences updates the preferences section in the config file,
@@ -107,7 +111,7 @@ func SavePreferences(prefs Preferences) {
 		return
 	}
 
-	header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n\n"
+	header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Open: command_template controls how URLs open; {{url}} expands to the URL (empty = OS default open/xdg-open).\n\n"
 	os.WriteFile(path, []byte(header+string(data)), 0644)
 }
 

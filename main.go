@@ -20,7 +20,7 @@ import (
 var version = "dev"
 
 func defaultConfigHeader() string {
-	return "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n\n"
+	return "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Open: command_template controls how URLs open; {{url}} expands to the URL (empty = OS default open/xdg-open).\n\n"
 }
 
 func runConfigCommand(args []string) error {
@@ -288,7 +288,7 @@ func main() {
 	}
 
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
-	km, _, _, _, cc := tui.LoadCCXConfig(configPath)
+	km, _, _, _, cc, oc := tui.LoadCCXConfig(configPath)
 
 	initialSessions := session.LoadCachedSessions(claudeDir)
 	if len(initialSessions) == 0 {
@@ -329,6 +329,7 @@ func main() {
 		JumpSession:  jumpSession,
 		JumpUUID:     jumpUUID,
 		Claude:       cc,
+		Open:         oc,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
