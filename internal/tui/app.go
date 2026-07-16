@@ -5897,7 +5897,13 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 
 	var resolveCmd tea.Cmd
 	refs := sess.Refs
-	if len(refs) == 0 && sess.HasRefs && !sess.RefsResolved && !a.refsInFlight[sess.ID] {
+	// Live (in-progress) sessions grow after the last scan set HasRefs, so a PR
+	// URL written moments ago (e.g. the PR we just created) won't have flipped
+	// HasRefs yet — the flag is a stale snapshot. Treat live sessions as
+	// possibly-having-refs and run the cheap offline extract straight off the
+	// file so freshly-added links surface without waiting for a rescan/refresh.
+	mayHaveRefs := sess.HasRefs || sess.IsLive
+	if len(refs) == 0 && mayHaveRefs && !sess.RefsResolved && !a.refsInFlight[sess.ID] {
 		// Not extracted yet: render the placeholder now and kick off the offline
 		// extract (no network) so URLs/labels appear fast; status resolves in a
 		// second step. refsInFlight dedups so repeated navigation/renders don't
@@ -5922,7 +5928,10 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 	}
 	cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t:%t:%s", sess.ID, len(refs), previewW, a.sessRefsCursor, a.sessSplit.Focus, sess.RefsResolved, refsSelectionSignature(a.sessPreviewRefs, a.sessRefsSelected))
 	if a.sessRefsCacheKey != cacheKey {
-		a.sessRefsCache = a.renderSessionRefs(a.sessPreviewRefs, previewW, sess.HasRefs, sess.RefsResolved)
+		// Pass mayHaveRefs (not just HasRefs) so a live session with no extracted
+		// refs yet shows "Resolving…" rather than the misleading "No PR or Jira
+		// links" while the offline extract above is still in flight.
+		a.sessRefsCache = a.renderSessionRefs(a.sessPreviewRefs, previewW, mayHaveRefs, sess.RefsResolved)
 		a.sessRefsCacheKey = cacheKey
 	}
 	a.sessRefsResolved = sess.RefsResolved
