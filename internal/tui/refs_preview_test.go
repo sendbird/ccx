@@ -36,6 +36,43 @@ func TestSetRefsPreviewModeDispatchesExtract(t *testing.T) {
 	}
 }
 
+// TestLiveSessionDispatchesExtractWithoutHasRefs guards the stale-HasRefs bug:
+// a live (in-progress) session grows after the scan that set HasRefs, so a PR
+// URL written moments ago (e.g. a PR just created in that very session) hasn't
+// flipped HasRefs yet. Entering References mode must still dispatch the offline
+// extract for a live session even when HasRefs is false, so freshly-added links
+// surface without waiting for a rescan/refresh.
+func TestLiveSessionDispatchesExtractWithoutHasRefs(t *testing.T) {
+	sessions := fakeSessions()
+	a := newTestApp(sessions)
+	// Force the hermetic state the bug is about: selected session is live but its
+	// HasRefs snapshot is stale (false). Set on a.sessions (the store that
+	// updateSessionRefsPreview reads via sessionByIDFromStore), and pin the id.
+	a.sessions[0].HasRefs = false
+	a.sessions[0].IsLive = true
+	a.sessions[0].FilePath = "/tmp/proj-a/aaa.jsonl" // non-empty so extract cmd is created
+	a.sessions[0].RefsResolved = false
+	a.sessionList.Select(0)
+
+	cmd := a.setSessPreviewMode(sessPreviewRefs)
+	if cmd == nil {
+		t.Fatal("setSessPreviewMode(refs) returned nil cmd for live session with stale HasRefs — extract never dispatched")
+	}
+	got := map[string]bool{}
+	collectExtractedIDs(cmd, got)
+	if !got[sessions[0].ID] {
+		t.Errorf("no refsExtractedMsg dispatched for live session %q with HasRefs=false", sessions[0].ID)
+	}
+	if !a.refsInFlight[sessions[0].ID] {
+		t.Errorf("refsInFlight not set for %q after dispatching extract", sessions[0].ID)
+	}
+	// A live session with no extracted refs yet must show "Resolving…", not the
+	// misleading "No PR or Jira links".
+	if !strings.Contains(a.sessRefsCache, "Resolving") {
+		t.Errorf("live session with pending extract should render Resolving…, got:\n%s", a.sessRefsCache)
+	}
+}
+
 // collectExtractedIDs runs a (possibly batched) tea.Cmd and records the session
 // IDs of any refsExtractedMsg it produces.
 func collectExtractedIDs(cmd tea.Cmd, out map[string]bool) {
