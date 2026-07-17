@@ -144,7 +144,11 @@ func setupTreeConvApp(t *testing.T, entries []session.Entry, tasks []session.Tas
 	app.conv.sess.Tasks = tasks
 	app.conv.agents = agents
 	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, agents, tasks, nil)
-	app.conv.leftPaneMode = convPaneTree
+	for i := range app.conv.items {
+		if app.conv.items[i].groupTag == "tasks" {
+			app.conv.items[i].folded = false
+		}
+	}
 	app.rebuildConversationList(0)
 	app.updateConvPreview()
 	return app
@@ -219,12 +223,12 @@ func testEntries() []session.Entry {
 func TestBuildConvItemsAddsSessionMetaRows(t *testing.T) {
 	entries := testEntries()
 	sess := session.Session{
-		ID:        "test-sess",
-		ShortID:   "test",
+		ID:          "test-sess",
+		ShortID:     "test",
 		ProjectPath: "/tmp/test",
-		HasMemory: true,
-		HasPlan:   true,
-		Todos:     []session.TodoItem{{Content: "remember this", Status: "pending"}},
+		HasMemory:   true,
+		HasPlan:     true,
+		Todos:       []session.TodoItem{{Content: "remember this", Status: "pending"}},
 	}
 	merged := filterConversation(mergeConversationTurns(entries))
 	items := buildConvItems(sess, merged, nil, nil, nil)
@@ -262,7 +266,6 @@ func TestConvPreviewSessionMetaUsesSessionRenderers(t *testing.T) {
 		t.Fatalf("memory preview did not use session memory renderer: %q", got)
 	}
 }
-
 
 func TestConvPreviewUpdatesOnCursorMove(t *testing.T) {
 	app := setupConvApp(t, testEntries(), 160, 50)
@@ -792,35 +795,22 @@ func TestTabOpensPreviewWithoutFocus(t *testing.T) {
 	}
 }
 
-func TestLeftPaneTabTogglesTreeWithoutChangingRightMode(t *testing.T) {
+func TestTabMovesFocusBetweenFlowAndInspector(t *testing.T) {
 	app := setupConvApp(t, testEntries(), 160, 50)
-	app.conv.leftPaneMode = convPaneFlat
 	app.conv.rightPaneMode = previewHook
 	app.conv.split.Focus = false
 
 	app = pressKey(app, "tab")
-
-	if app.conv.leftPaneMode != convPaneTree {
-		t.Fatalf("left pane tab should switch to tree mode, got %d", app.conv.leftPaneMode)
+	if !app.conv.split.Focus {
+		t.Fatal("tab from flow should focus inspector")
 	}
 	if app.conv.rightPaneMode != previewHook {
-		t.Fatalf("left pane tab should not change right pane mode, got %d", app.conv.rightPaneMode)
+		t.Fatalf("tab should preserve detail level, got %d", app.conv.rightPaneMode)
 	}
-}
-
-func TestRightPaneTabCyclesDetailWithoutChangingLeftMode(t *testing.T) {
-	tasks := []session.TaskItem{{ID: "42", Subject: "Refactor preview", Status: "in_progress"}}
-	app := setupTreeConvApp(t, testEntries(), tasks, nil, 160, 50)
-	app.conv.split.Focus = true
-	app.conv.rightPaneMode = previewText
 
 	app = pressKey(app, "tab")
-
-	if app.conv.rightPaneMode != previewTool {
-		t.Fatalf("right pane tab should cycle to standard mode, got %d", app.conv.rightPaneMode)
-	}
-	if app.conv.leftPaneMode != convPaneTree {
-		t.Fatalf("right pane tab should not change left pane mode, got %d", app.conv.leftPaneMode)
+	if app.conv.split.Focus {
+		t.Fatal("second tab should return focus to flow")
 	}
 }
 
@@ -1202,52 +1192,27 @@ func TestVerboseToolToCompactFallsBackToPrecedingText(t *testing.T) {
 	}
 }
 
-func TestBuildEntityTreeUsesCompactLabels(t *testing.T) {
-	merged := []mergedMsg{{
-		entry: session.Entry{
-			Role: "assistant",
-			Content: []session.ContentBlock{
-				{Type: "tool_use", ID: "bash-1", ToolName: "Bash", ToolInput: `{"command":"npm test --watch --runInBand --color=always"}`},
-				{Type: "tool_result", ID: "bash-1", Text: "Command running in background with ID: bg-1."},
-			},
-		},
-	}}
-	agents := []session.Subagent{{
-		ID:          "agent-1",
-		ShortID:     "agent-1",
-		FirstPrompt: "This is a very long agent prompt that should not appear in the compact tree label",
-	}}
-	tasks := []session.TaskItem{{
-		ID:      "42",
-		Subject: "This is a very long task title that should be compacted in the tree",
-		Status:  "in_progress",
-	}}
+func TestUnifiedFlowUsesExactAgentOrigin(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	merged := []mergedMsg{
+		{entry: session.Entry{UUID: "user-1", Role: "user", Timestamp: base, Content: []session.ContentBlock{{Type: "text", Text: "start"}}}},
+		{entry: session.Entry{UUID: "assistant-1", Role: "assistant", Timestamp: base.Add(time.Second), Content: []session.ContentBlock{{Type: "tool_use", ID: "spawn-1", ToolName: "Agent"}}}},
+		{entry: session.Entry{UUID: "assistant-2", Role: "assistant", Timestamp: base.Add(2 * time.Second), Content: []session.ContentBlock{{Type: "text", Text: "later"}}}},
+	}
+	agents := []session.Subagent{{ID: "agent-1", ShortID: "agent-1", SpawnToolUseID: "spawn-1", OriginMessageUUID: "assistant-1", OriginEntryIndex: 1, Timestamp: base.Add(time.Hour)}}
+	items := buildConvItems(session.Session{}, merged, agents, nil, nil)
 
-	items := buildEntityTree(session.Session{}, merged, agents, tasks, nil, map[string]string{"agent-1": "running"})
-
-	var agentLabel, bgLabel, taskLabel string
-	for _, item := range items {
-		switch {
-		case item.kind == convAgent:
-			agentLabel = item.label
-		case item.bgTaskID != "":
-			bgLabel = item.label
-		case item.kind == convTask && item.task.ID == "42":
-			taskLabel = item.label
+	agentIdx, parentIdx := -1, -1
+	for i, item := range items {
+		if item.kind == convAgent {
+			agentIdx, parentIdx = i, item.parentIdx
 		}
 	}
-
-	if !strings.HasPrefix(agentLabel, "Agent: ") {
-		t.Fatalf("agent tree label = %q, want compact Agent prefix", agentLabel)
+	if agentIdx < 0 {
+		t.Fatal("expected agent lifecycle row")
 	}
-	if strings.Contains(agentLabel, "very long agent prompt") {
-		t.Fatalf("agent tree label should not include full prompt: %q", agentLabel)
-	}
-	if !strings.HasPrefix(bgLabel, "BG: ") {
-		t.Fatalf("background job tree label = %q, want compact BG prefix", bgLabel)
-	}
-	if !strings.HasPrefix(taskLabel, "Task: ") {
-		t.Fatalf("task tree label = %q, want compact Task prefix", taskLabel)
+	if parentIdx < 0 || items[parentIdx].merged.entry.UUID != "assistant-1" {
+		t.Fatalf("agent attached to wrong origin: parent=%d", parentIdx)
 	}
 }
 
@@ -1266,14 +1231,21 @@ func TestTreeAgentPreviewShowsConversationAndToolCalls(t *testing.T) {
 		},
 	})
 	agents := []session.Subagent{{
-		ID:          "agent-1",
-		ShortID:     "agent-1",
-		FilePath:    agentPath,
-		AgentType:   "planner",
-		FirstPrompt: "Investigate the failure",
+		ID:                "agent-1",
+		ShortID:           "agent-1",
+		FilePath:          agentPath,
+		AgentType:         "planner",
+		FirstPrompt:       "Investigate the failure",
+		SpawnToolUseID:    "spawn-1",
+		OriginMessageUUID: "parent-assistant",
+		OriginEntryIndex:  1,
 	}}
+	parentEntries := []session.Entry{
+		makeTextEntry("user", base, "parent"),
+		{UUID: "parent-assistant", Role: "assistant", Timestamp: base.Add(time.Millisecond), Content: []session.ContentBlock{{Type: "tool_use", ID: "spawn-1", ToolName: "Agent"}}},
+	}
 
-	app := setupTreeConvApp(t, []session.Entry{makeTextEntry("user", base, "parent")}, nil, agents, 160, 50)
+	app := setupTreeConvApp(t, parentEntries, nil, agents, 160, 50)
 	app.conv.rightPaneMode = previewTool
 	selectConvItemBy(t, app, func(ci convItem) bool { return ci.kind == convAgent })
 	app.updateConvPreview()

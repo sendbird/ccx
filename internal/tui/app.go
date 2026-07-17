@@ -56,14 +56,7 @@ const (
 	previewHook = 2 // verbose — text + tool blocks + hook details
 )
 
-// Conversation left-pane list modes.
-const (
-	convPaneFlat = 0 // flat conversation list
-	convPaneTree = 1 // entity tree (agents, bg jobs, tasks)
-)
-
 var previewModeLabels = [3]string{"compact", "standard", "verbose"}
-var convPaneModeLabels = [2]string{"flat", "tree"}
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -475,15 +468,13 @@ type App struct {
 		messages       []session.Entry
 		merged         []mergedMsg
 		agents         []session.Subagent
-		items          []convItem        // flat conversation items
-		treeItems      []convItem        // entity tree items (populated on demand)
+		items          []convItem
+		flow           *session.FlowIndex
 		toolUseToAgent map[string]string // tool_use_id → subagent ID (from toolUseResult.agentId)
 		split          SplitPane
 		agent          session.Subagent // non-zero when viewing agent conversation
 		task           session.TaskItem // non-zero when viewing task conversation
 		cron           session.CronItem // non-zero when viewing cron conversation
-		// Left pane mode: flat conversation list vs entity tree.
-		leftPaneMode int // 0=flat, 1=tree
 		// Right pane detail level: compact → standard → verbose.
 		rightPaneMode int // 0=text, 1=tool (no hooks), 2=hook (with hooks)
 
@@ -2229,8 +2220,6 @@ func (a *App) jumpToAgentConversation() (tea.Model, tea.Cmd, bool) {
 	a.currentSess = sess
 	cmd := a.openConversation(sess)
 
-	// Switch to tree view and find the agent
-	a.setConvLeftPaneMode(convPaneTree)
 	for i, item := range a.convList.Items() {
 		ci, ok := item.(convItem)
 		if !ok {
@@ -2432,7 +2421,6 @@ func (a *App) drillIntoWorkflowAgent() (tea.Model, tea.Cmd, bool) {
 	a.currentSess = sess
 	cmd := a.openConversation(sess)
 
-	a.setConvLeftPaneMode(convPaneTree)
 	for i, item := range a.convList.Items() {
 		ci, ok := item.(convItem)
 		if !ok {
@@ -7690,7 +7678,7 @@ func (a *App) breadcrumbRightStatus() string {
 	// Preview mode badge for conversation/message views
 	if a.state == viewConversation {
 		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
-		parts = append(parts, modeStyle.Render(strings.ToUpper(convPaneModeLabels[a.conv.leftPaneMode])))
+		parts = append(parts, modeStyle.Render("FLOW"))
 		parts = append(parts, modeStyle.Render(strings.ToUpper(previewModeLabels[a.conv.rightPaneMode])))
 	} else if a.state == viewMessageFull {
 		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)

@@ -19,10 +19,9 @@ type navFrame struct {
 	merged        []mergedMsg
 	agents        []session.Subagent
 	items         []convItem
-	treeItems     []convItem // tree-mode items (parallel to items; needed because list index is mode-specific)
-	leftPaneMode  int        // flat vs tree at push time — cursor index is meaningless without it
-	rightPaneMode int        // compact/standard/verbose at push time
-	listIdx       int        // cursor position to restore, indexes into items or treeItems per leftPaneMode
+	flow          *session.FlowIndex
+	rightPaneMode int // compact/standard/verbose at push time
+	listIdx       int // cursor position to restore, indexes into the unified flow items
 	agent         session.Subagent
 	task          session.TaskItem
 	cron          session.CronItem
@@ -376,7 +375,6 @@ func (a *App) refreshMsgFull() {
 	a.refreshMsgFullPreview()
 }
 
-
 func (a *App) refreshMsgFullPreview() {
 	fs := &a.msgFull.folds
 	ro := renderOpts{visible: fs.BlockVisible, hideHooks: fs.HideHooks, selected: fs.Selected}
@@ -490,8 +488,7 @@ func (a *App) pushNavFrame() {
 		merged:        a.conv.merged,
 		agents:        a.conv.agents,
 		items:         a.conv.items,
-		treeItems:     a.conv.treeItems,
-		leftPaneMode:  a.conv.leftPaneMode,
+		flow:          a.conv.flow,
 		rightPaneMode: a.conv.rightPaneMode,
 		listIdx:       a.convList.Index(),
 		agent:         a.conv.agent,
@@ -544,17 +541,14 @@ func (a *App) popNavFrame() (tea.Model, tea.Cmd) {
 		a.conv.merged = frame.merged
 		a.conv.agents = frame.agents
 		a.conv.items = frame.items
-		a.conv.treeItems = frame.treeItems
-		a.conv.leftPaneMode = frame.leftPaneMode
+		a.conv.flow = frame.flow
 		a.conv.rightPaneMode = frame.rightPaneMode
 		a.conv.agent = frame.agent
 		a.conv.task = frame.task
 		a.conv.cron = frame.cron
 		a.msgFull.allMessages = false
 
-		// rebuildConversationList respects leftPaneMode (flat vs tree) so the
-		// cursor index lands on the correct slice — frame.listIdx was captured
-		// from whichever pane mode was active at push time.
+		// Restore the cursor in the single unified flow list.
 		a.rebuildConversationList(frame.listIdx)
 		a.conv.split.CacheKey = ""
 		a.state = viewConversation

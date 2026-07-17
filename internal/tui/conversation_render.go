@@ -6,6 +6,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
@@ -15,6 +16,9 @@ import (
 func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lipgloss.Style, filterTerm string) {
 	e := ci.merged.entry
 	cursor := "  "
+	if ci.steering {
+		cursor = planBadge.Render("◆ ")
+	}
 	if selected {
 		cursor = convCursorStyle.Render("> ")
 	}
@@ -260,6 +264,148 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 	fmt.Fprint(w, clamp.Render(line))
 }
 
+func renderConvFlowNode(w io.Writer, ci convItem, selected bool, width int, clamp lipgloss.Style, filterTerm string) {
+	indent := strings.Repeat("  ", ci.indent+1)
+	cursor := " "
+	if selected {
+		cursor = convCursorStyle.Render(">")
+	}
+	style := dimStyle
+	if selected {
+		style = selectedStyle
+	}
+
+	glyph := iconIdle
+	label := ci.label
+	switch ci.kind {
+	case convWorkflow:
+		glyph = iconFoldOpen
+		if ci.folded {
+			glyph = iconFoldClosed
+		}
+		glyph += " " + workflowStatusGlyph(ci.workflow.Status)
+		label = ci.workflow.Name
+		if label == "" {
+			label = ci.workflow.RunID
+		}
+		label += fmt.Sprintf(" [%d agents", ci.workflow.AgentCount)
+		if ci.workflow.TotalTokens > 0 {
+			label += " · " + compactTokenCount(ci.workflow.TotalTokens)
+		}
+		label += "]"
+	case convPhase:
+		glyph = "─"
+		if label == "" {
+			label = ci.phase.Title
+		}
+	case convShell:
+		glyph = shellStatusGlyph(ci.shell.Status)
+		label = ci.shell.Description
+		if label == "" {
+			label = ci.shell.Command
+		}
+		if nl := strings.IndexByte(label, '\n'); nl >= 0 {
+			label = label[:nl]
+		}
+		if ci.shell.PollCount > 0 {
+			label += fmt.Sprintf(" · %d poll", ci.shell.PollCount)
+			if ci.shell.PollCount != 1 {
+				label += "s"
+			}
+		}
+		if ci.shell.Persistent {
+			label += " · persistent"
+		}
+	case convDecision:
+		glyph = "▣"
+		if data, ok := ci.decision.Data.(session.DecisionData); ok {
+			label = data.Label
+		}
+	}
+
+	if ci.summaryOnly {
+		style = acDimStyle
+	}
+	badges := renderFacetBadges(ci.facets, ci.aggregate)
+	maxW := width - lipgloss.Width(indent) - lipgloss.Width(cursor) - lipgloss.Width(glyph) - lipgloss.Width(badges) - 4
+	if maxW < 4 {
+		maxW = 4
+	}
+	if filterTerm != "" {
+		label = highlightSnippet(label, filterTerm, maxW, style)
+	} else {
+		label = style.Render(truncate(label, maxW))
+	}
+	line := fmt.Sprintf("%s%s %s %s%s", indent, cursor, glyph, label, badges)
+	fmt.Fprint(w, clamp.Render(line))
+}
+
+func workflowStatusGlyph(status string) string {
+	switch strings.ToLower(status) {
+	case "completed", "done", "success":
+		return taskDoneStyle.Render("✓")
+	case "failed", "error":
+		return errorStyle.Render("✗")
+	case "running", "in_progress":
+		return taskInProgressStyle.Render("⟳")
+	default:
+		return dimStyle.Render("○")
+	}
+}
+
+func shellStatusGlyph(status string) string {
+	switch strings.ToLower(status) {
+	case "completed":
+		return taskDoneStyle.Render("✓")
+	case "failed":
+		return errorStyle.Render("✗")
+	case "killed", "stopped":
+		return dimStyle.Render("⊘")
+	case "polled":
+		return taskInProgressStyle.Render("⟳")
+	default:
+		return taskInProgressStyle.Render("⟳")
+	}
+}
+
+func compactTokenCount(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM tok", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk tok", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d tok", n)
+	}
+}
+
+func renderFacetBadges(f session.FacetSummary, aggregate bool) string {
+	var parts []string
+	if n := f.Counts[session.ArtifactChange]; n > 0 {
+		parts = append(parts, fmt.Sprintf("Δ%d", n))
+	}
+	if n := f.Counts[session.ArtifactRef]; n > 0 {
+		parts = append(parts, fmt.Sprintf("R%d", n))
+	}
+	if n := f.Counts[session.ArtifactImage]; n > 0 {
+		parts = append(parts, fmt.Sprintf("I%d", n))
+	}
+	if f.Errors > 0 {
+		parts = append(parts, fmt.Sprintf("!%d", f.Errors))
+	}
+	if f.Tokens > 0 {
+		parts = append(parts, compactTokenCount(f.Tokens))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	prefix := "  "
+	if aggregate {
+		prefix += "Σ"
+	}
+	return dimStyle.Render(prefix + strings.Join(parts, " "))
+}
+
 func renderConvSessionMeta(w io.Writer, ci convItem, selected bool, width int, clamp lipgloss.Style, filterTerm string) {
 	cursor := "  "
 	if selected {
@@ -275,6 +421,12 @@ func renderConvSessionMeta(w io.Writer, ci convItem, selected bool, width int, c
 	title := ci.label
 	subtitle := ""
 	switch ci.sessionMeta {
+	case "summary":
+		badge = planBadge.Render("[F]")
+		if title == "" {
+			title = "Session Flow"
+		}
+		subtitle = renderFacetBadges(ci.facets, true)
 	case "memory":
 		badge = memoryBadge.Render("[M]")
 		if title == "" {
@@ -472,11 +624,104 @@ func inferAgentStatuses(merged []mergedMsg) map[string]string {
 	return statuses
 }
 
+func mergedIndexForOrigin(merged []mergedMsg, messageUUID string, entryIndex int) int {
+	for i, message := range merged {
+		if messageUUID != "" && message.entry.UUID == messageUUID {
+			return i
+		}
+		if entryIndex >= message.startIdx && entryIndex <= message.endIdx {
+			return i
+		}
+	}
+	return -1
+}
+
+func isTerminalWorkflowStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "completed", "done", "success", "failed", "error", "cancelled", "stopped":
+		return true
+	default:
+		return false
+	}
+}
+
+func workflowAgentStatus(status string) string {
+	switch strings.ToLower(status) {
+	case "done", "completed", "success":
+		return "completed"
+	case "error", "failed", "stopped", "cancelled":
+		return "stopped"
+	case "running", "in_progress":
+		return "running"
+	default:
+		return status
+	}
+}
+
+func workflowPhases(run session.WorkflowRun) []session.WorkflowPhase {
+	if len(run.Phases) > 0 {
+		return run.Phases
+	}
+	seen := make(map[int]bool)
+	phases := make([]session.WorkflowPhase, 0)
+	for _, agent := range run.Agents {
+		if seen[agent.PhaseIndex] {
+			continue
+		}
+		seen[agent.PhaseIndex] = true
+		title := agent.PhaseTitle
+		if title == "" {
+			title = fmt.Sprintf("Phase %d", agent.PhaseIndex)
+		}
+		phases = append(phases, session.WorkflowPhase{Index: agent.PhaseIndex, Title: title})
+	}
+	sort.Slice(phases, func(i, j int) bool { return phases[i].Index < phases[j].Index })
+	return phases
+}
+
+func shortFlowID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func legacyAgentMessageIndex(merged []mergedMsg, timestamp time.Time) int {
+	if timestamp.IsZero() {
+		return -1
+	}
+	best := -1
+	for i, message := range merged {
+		if message.entry.Role != "assistant" || message.entry.Timestamp.IsZero() {
+			continue
+		}
+		if !timestamp.Before(message.entry.Timestamp) {
+			best = i
+		}
+	}
+	if best >= 0 {
+		return best
+	}
+	for i, message := range merged {
+		if message.entry.Role == "assistant" {
+			return i
+		}
+	}
+	return -1
+}
+
 // buildConvItems builds a flattened conversation item list from merged messages,
 // with inline task and agent sub-items under assistant messages.
 // A collapsible task group header appears at every task-touching message.
 // Individual task rows (expandable) are attached only under the LAST one.
-func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem, crons []session.CronItem) []convItem {
+func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem, crons []session.CronItem, flows ...*session.FlowIndex) []convItem {
+	var flow *session.FlowIndex
+	if len(flows) > 0 {
+		flow = flows[0]
+	}
+	if flow != nil {
+		agents = flow.Agents()
+	}
 	// First pass: find all task-touching message indices and the last one.
 	// Always scan for task operations (TaskCreate, TaskOutput, etc.) regardless
 	// of whether a resolved task list exists — operations should be visible as
@@ -544,32 +789,63 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 	// Background bash tasks produce tool_result with "Command running in background with ID: <taskID>".
 	bgTasks := buildBgTaskMap(merged)
 
-	// Pre-assign each agent to the last assistant message that precedes its timestamp.
-	// This places agents chronologically at the right position in the conversation.
-	agentsByMsg := make(map[int][]session.Subagent) // message index → agents
-	for _, a := range agents {
-		if a.Timestamp.IsZero() || isSystemAgent(a) {
+	// Attach agents to the exact assistant turn that contains their spawning
+	// Agent/Task tool_use. Timestamp placement is legacy fallback only. Workflow
+	// agents are emitted below their workflow phase and are excluded here.
+	agentsByMsg := make(map[int][]session.Subagent)
+	workflowAgentIDs := make(map[string]bool)
+	if flow != nil {
+		for _, run := range flow.Workflows() {
+			for _, agent := range run.Agents {
+				workflowAgentIDs[agent.AgentID] = true
+			}
+		}
+	}
+	for _, agent := range agents {
+		if isSystemAgent(agent) || workflowAgentIDs[agent.ID] || agent.WorkflowRunID != "" {
 			continue
 		}
-		bestIdx := -1
-		for mi, m := range merged {
-			if m.entry.Role != "assistant" || m.entry.Timestamp.IsZero() {
-				continue
-			}
-			if !a.Timestamp.Before(m.entry.Timestamp) {
-				bestIdx = mi
-			}
+		messageIdx := mergedIndexForOrigin(merged, agent.OriginMessageUUID, agent.OriginEntryIndex)
+		if messageIdx < 0 && agent.SpawnToolUseID == "" {
+			messageIdx = legacyAgentMessageIndex(merged, agent.Timestamp)
 		}
-		if bestIdx >= 0 {
-			agentsByMsg[bestIdx] = append(agentsByMsg[bestIdx], a)
-		} else {
-			// Agent predates all messages — attach to first assistant message
-			for mi, m := range merged {
-				if m.entry.Role == "assistant" {
-					agentsByMsg[mi] = append(agentsByMsg[mi], a)
-					break
+		if messageIdx >= 0 {
+			agentsByMsg[messageIdx] = append(agentsByMsg[messageIdx], agent)
+		}
+	}
+
+	workflowByMsg := make(map[int][]session.WorkflowRun)
+	shellsByMsg := make(map[int][]session.ShellJob)
+	decisionsByMsg := make(map[int][]session.Artifact)
+	steeringByMsg := make(map[int]bool)
+	if flow != nil {
+		for _, run := range flow.Workflows() {
+			if node, ok := flow.Node(session.FlowWorkflowNodeID(run.RunID)); ok {
+				if messageIdx := mergedIndexForOrigin(merged, node.Origin.MessageUUID, node.Origin.EntryIndex); messageIdx >= 0 {
+					workflowByMsg[messageIdx] = append(workflowByMsg[messageIdx], run)
 				}
 			}
+		}
+		for _, shell := range flow.ShellJobs() {
+			if node, ok := flow.Node(session.FlowShellNodeID(shell.ID)); ok {
+				if messageIdx := mergedIndexForOrigin(merged, node.Origin.MessageUUID, node.Origin.EntryIndex); messageIdx >= 0 {
+					shellsByMsg[messageIdx] = append(shellsByMsg[messageIdx], shell)
+				}
+			}
+		}
+		for _, decision := range flow.Decisions(session.ScopeSession) {
+			if decision.Origin.Transcript != sess.FilePath {
+				continue
+			}
+			messageIdx := mergedIndexForOrigin(merged, decision.Origin.MessageUUID, decision.Origin.EntryIndex)
+			if messageIdx < 0 {
+				continue
+			}
+			if data, ok := decision.Data.(session.DecisionData); ok && data.Kind == session.DecisionSteering {
+				steeringByMsg[messageIdx] = true
+				continue
+			}
+			decisionsByMsg[messageIdx] = append(decisionsByMsg[messageIdx], decision)
 		}
 	}
 
@@ -579,6 +855,12 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 	agentStatuses := inferAgentStatuses(merged)
 
 	var items []convItem
+	if flow != nil {
+		facets := flow.Facets(flow.RootID, session.ScopeSession)
+		decisions := flow.Decisions(session.ScopeSession)
+		label := fmt.Sprintf("Session Flow · %d turns · %d agents · %d wf · ▣%d decisions", len(merged), len(flow.Agents()), len(flow.Workflows()), len(decisions))
+		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "summary", label: label, facets: facets, aggregate: true})
+	}
 	if sess.HasMemory || len(sess.Todos) > 0 {
 		items = append(items, convItem{
 			kind:        convSessionMeta,
@@ -597,8 +879,9 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 	for mi, m := range merged {
 		parentIdx := len(items)
 		items = append(items, convItem{
-			kind:   convMsg,
-			merged: m,
+			kind:     convMsg,
+			merged:   m,
+			steering: steeringByMsg[mi],
 		})
 
 		// Only add sub-items under assistant messages
@@ -606,18 +889,93 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 			continue
 		}
 
-		// Add agent sub-items assigned to this message
+		// Add agent sub-items assigned to this exact spawning turn.
 		for _, a := range agentsByMsg[mi] {
 			status := agentStatuses[a.ID]
 			if status == "" {
 				status = agentStatuses[a.ShortID]
 			}
+			facets := session.FacetSummary{}
+			if flow != nil {
+				facets = flow.Facets(session.FlowAgentNodeID(a.ID), session.ScopeNode)
+			}
 			items = append(items, convItem{
 				kind:        convAgent,
 				agent:       a,
 				agentStatus: status,
+				facets:      facets,
 				indent:      1,
 				parentIdx:   parentIdx,
+			})
+		}
+
+		// Workflow lifecycle: run → phases → agents. Workflow agents are emitted
+		// only here, never as ordinary agent rows.
+		for _, run := range workflowByMsg[mi] {
+			wfFacets := flow.Facets(session.FlowWorkflowNodeID(run.RunID), session.ScopeSubtree)
+			folded := isTerminalWorkflowStatus(run.Status)
+			items = append(items, convItem{
+				kind:      convWorkflow,
+				workflow:  run,
+				facets:    wfFacets,
+				aggregate: true,
+				indent:    1,
+				parentIdx: parentIdx,
+				groupTag:  "workflow:" + run.RunID,
+				count:     max(run.AgentCount, len(run.Agents)),
+				folded:    folded,
+			})
+			transcriptAgents := make(map[string]session.Subagent)
+			for _, agent := range agents {
+				if agent.WorkflowRunID == run.RunID {
+					transcriptAgents[agent.ID] = agent
+				}
+			}
+			for _, phase := range workflowPhases(run) {
+				items = append(items, convItem{
+					kind:      convPhase,
+					workflow:  run,
+					phase:     phase,
+					label:     phase.Title,
+					indent:    2,
+					parentIdx: parentIdx,
+				})
+				for _, wfAgent := range run.Agents {
+					if wfAgent.PhaseIndex != phase.Index {
+						continue
+					}
+					agent, ok := transcriptAgents[wfAgent.AgentID]
+					if !ok {
+						agent = session.Subagent{
+							ID: wfAgent.AgentID, ShortID: shortFlowID(wfAgent.AgentID),
+							WorkflowRunID: run.RunID, WorkflowLabel: wfAgent.Label,
+							WorkflowPhaseIndex: phase.Index, WorkflowPhaseTitle: phase.Title,
+							FirstPrompt: wfAgent.PromptPreview,
+						}
+					}
+					label := wfAgent.Label
+					if label == "" {
+						label = agentLabel(agent, 42)
+					}
+					facets := flow.Facets(session.FlowAgentNodeID(wfAgent.AgentID), session.ScopeNode)
+					items = append(items, convItem{
+						kind: convAgent, agent: agent, agentStatus: workflowAgentStatus(wfAgent.State),
+						label: label, facets: facets, summaryOnly: !ok,
+						indent: 3, parentIdx: parentIdx,
+					})
+				}
+			}
+		}
+
+		for _, shell := range shellsByMsg[mi] {
+			items = append(items, convItem{
+				kind: convShell, shell: shell, indent: 1, parentIdx: parentIdx,
+			})
+		}
+
+		for _, decision := range decisionsByMsg[mi] {
+			items = append(items, convItem{
+				kind: convDecision, decision: decision, indent: 1, parentIdx: parentIdx,
 			})
 		}
 
@@ -787,243 +1145,6 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 					})
 				}
 			}
-		}
-	}
-
-	return items
-}
-
-// buildEntityTree builds an entity-centric tree view: agents, background jobs,
-// and task board items grouped under collapsible section headers.
-func buildEntityTree(
-	sess session.Session,
-	merged []mergedMsg,
-	agents []session.Subagent,
-	tasks []session.TaskItem,
-	crons []session.CronItem,
-	agentStatuses map[string]string,
-) []convItem {
-	var items []convItem
-	if sess.HasMemory || len(sess.Todos) > 0 {
-		items = append(items, convItem{
-			kind:        convSessionMeta,
-			sessionMeta: "memory",
-			label:       "Session Memory",
-		})
-	}
-	if sess.HasPlan || sess.HasTasks || sess.HasCrons || sess.HasAgents {
-		items = append(items, convItem{
-			kind:        convSessionMeta,
-			sessionMeta: "tasksplan",
-			label:       "Session Tasks/Plan",
-		})
-	}
-
-	// --- Agents section ---
-	if len(agents) > 0 {
-		visibleAgents := make([]session.Subagent, 0, len(agents))
-		for _, a := range agents {
-			if !isSystemAgent(a) {
-				visibleAgents = append(visibleAgents, a)
-			}
-		}
-		if len(visibleAgents) > 0 {
-			items = append(items, convItem{
-				kind:     convTask,
-				groupTag: "agents",
-				count:    len(visibleAgents),
-				folded:   false,
-				indent:   0,
-				label:    "Agents",
-				task:     session.TaskItem{Subject: fmt.Sprintf("Agents (%d)", len(visibleAgents))},
-			})
-			for _, a := range visibleAgents {
-				status := agentStatuses[a.ID]
-				if status == "" {
-					status = agentStatuses[a.ShortID]
-				}
-				items = append(items, convItem{
-					kind:        convAgent,
-					agent:       a,
-					agentStatus: status,
-					indent:      1,
-					label:       compactTreeLabel("Agent", agentTreeName(a), 44),
-				})
-			}
-		}
-	}
-
-	// --- Background jobs section ---
-	bgTasks := buildBgTaskMap(merged)
-	if len(bgTasks) > 0 {
-		// Build job items with status from TaskOutput results
-		type bgJob struct {
-			id     string
-			desc   string
-			status string // "pending", "completed", "stopped"
-		}
-		var jobs []bgJob
-		for id, desc := range bgTasks {
-			status := "pending"
-			// Scan for TaskOutput results to determine status
-			for _, m := range merged {
-				for _, b := range m.entry.Content {
-					if b.Type == "tool_result" && strings.Contains(b.Text, id) {
-						if strings.Contains(b.Text, "<status>completed</status>") {
-							status = "completed"
-						} else if strings.Contains(b.Text, "<status>stopped</status>") {
-							status = "stopped"
-						}
-					}
-				}
-			}
-			jobs = append(jobs, bgJob{id: id, desc: desc, status: status})
-		}
-		// Sort: pending first, then by ID
-		sort.Slice(jobs, func(i, j int) bool {
-			if jobs[i].status != jobs[j].status {
-				if jobs[i].status == "pending" {
-					return true
-				}
-				if jobs[j].status == "pending" {
-					return false
-				}
-			}
-			return jobs[i].id < jobs[j].id
-		})
-
-		items = append(items, convItem{
-			kind:     convTask,
-			groupTag: "bgjobs",
-			count:    len(jobs),
-			folded:   false,
-			indent:   0,
-			label:    "BG Jobs",
-			task:     session.TaskItem{Subject: fmt.Sprintf("Background Jobs (%d)", len(jobs))},
-		})
-		for _, j := range jobs {
-			// Show just the first line of the command description
-			desc := j.desc
-			if nl := strings.IndexByte(desc, '\n'); nl > 0 {
-				desc = desc[:nl]
-			}
-			items = append(items, convItem{
-				kind:     convTask,
-				task:     session.TaskItem{Subject: desc, ID: j.id, Status: j.status},
-				bgTaskID: j.id,
-				indent:   1,
-				label:    compactTreeLabel("BG", j.id+" "+desc, 44),
-			})
-		}
-	}
-
-	// --- Monitors / background shells section ---
-	// Long-lived Monitor watchers and backgrounded Bash jobs would otherwise be
-	// invisible in the tree (they render only as inline tool_use blocks). Surface
-	// them as their own section so a fleet operator can see what a session is
-	// watching without scrolling the conversation.
-	if sess.HasShellJobs {
-		shellJobs := sess.ShellJobs
-		if len(shellJobs) == 0 {
-			entries := make([]session.Entry, 0, len(merged))
-			for _, m := range merged {
-				entries = append(entries, m.entry)
-			}
-			shellJobs = session.LoadShellJobsFromEntries(entries)
-		}
-		if len(shellJobs) > 0 {
-			items = append(items, convItem{
-				kind:     convTask,
-				groupTag: "shelljobs",
-				count:    len(shellJobs),
-				folded:   false,
-				indent:   0,
-				label:    "Monitors",
-				task:     session.TaskItem{Subject: fmt.Sprintf("Monitors & BG Shells (%d)", len(shellJobs))},
-			})
-			for _, j := range shellJobs {
-				label := j.Description
-				if label == "" {
-					label = j.Command
-				}
-				if nl := strings.IndexByte(label, '\n'); nl > 0 {
-					label = label[:nl]
-				}
-				kind := "SH"
-				if j.ToolName == "Monitor" {
-					kind = "MON"
-				}
-				// Map job status onto TaskItem status colors: active→in_progress,
-				// killed/stopped→completed (terminal).
-				st := "in_progress"
-				if j.Status == "killed" || j.Status == "stopped" {
-					st = "completed"
-				}
-				items = append(items, convItem{
-					kind:   convTask,
-					task:   session.TaskItem{Subject: label, ID: j.ID, Status: st},
-					indent: 1,
-					label:  compactTreeLabel(kind, label, 44),
-				})
-			}
-		}
-	}
-
-	// --- Task board section ---
-	if len(tasks) > 0 {
-		completed := 0
-		for _, t := range tasks {
-			if t.Status == "completed" {
-				completed++
-			}
-		}
-		items = append(items, convItem{
-			kind:     convTask,
-			groupTag: "tasks",
-			count:    len(tasks),
-			folded:   false,
-			indent:   0,
-			label:    "Tasks",
-			task:     session.TaskItem{Subject: fmt.Sprintf("Task Board (%d/%d)", completed, len(tasks))},
-		})
-		for _, t := range tasks {
-			idTag := ""
-			if t.ID != "" {
-				idTag = "#" + t.ID + " "
-			}
-			items = append(items, convItem{
-				kind:   convTask,
-				task:   t,
-				indent: 1,
-				label:  compactTreeLabel("Task", idTag+t.Subject, 44),
-			})
-		}
-	}
-
-	// --- Cron section ---
-	if len(crons) > 0 {
-		items = append(items, convItem{
-			kind:     convTask,
-			groupTag: "crons",
-			count:    len(crons),
-			folded:   false,
-			indent:   0,
-			label:    "Crons",
-		})
-		for _, c := range crons {
-			text := c.ID
-			if c.Cron != "" {
-				if text != "" {
-					text += " "
-				}
-				text += c.Cron
-			}
-			items = append(items, convItem{
-				kind:   convTask,
-				cron:   c,
-				indent: 1,
-				label:  compactTreeLabel("Cron", text, 44),
-			})
 		}
 	}
 

@@ -122,8 +122,7 @@ func (a *App) convHelpLine(badges string) string {
 				h = joinHelpSections(h, interactionHelpText(a.conversationPreviewStructuredHelpActions(next)...))
 			}
 		} else {
-			next := convPaneModeLabels[(a.conv.leftPaneMode+1)%len(convPaneModeLabels)]
-			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions(next)...))
+			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions("inspector")...))
 		}
 		h = joinHelpSections(h, interactionHelpText(labelAction("", "esc", "close"), resizeHelpAction(a)))
 	} else {

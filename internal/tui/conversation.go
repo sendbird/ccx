@@ -53,10 +53,6 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.conv.cron = session.CronItem{}
 	a.conv.toolUseToAgent = buildToolUseToAgentMap(entries)
 
-	// Load agents
-	agents, _ := session.FindSubagents(sess.FilePath)
-	a.conv.agents = agents
-
 	// Build conversation items — use file-based tasks/crons, or extract from JSONL
 	tasks := sess.Tasks
 	if len(tasks) == 0 {
@@ -70,7 +66,14 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	}
 	a.conv.sess = sess
 	a.currentSess = sess
-	a.conv.items = buildConvItems(sess, a.conv.merged, agents, tasks, crons)
+	flow, _ := session.BuildSessionFlow(&sess)
+	agents, _ := session.FindSubagents(sess.FilePath)
+	if flow != nil {
+		agents = flow.Agents()
+	}
+	a.conv.flow = flow
+	a.conv.agents = agents
+	a.conv.items = buildConvItems(sess, a.conv.merged, agents, tasks, crons, flow)
 
 	// Reset artifact page browser state on fresh conversation open.
 	a.convPageActive = false
@@ -85,7 +88,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 		a.lastMsgLoadTime = info.ModTime()
 	}
 
-	// Create list with preview auto-open while keeping the current flat/tree mode.
+	// Create the unified flow list with preview auto-open.
 	a.conv.split.Show = true
 	a.conv.split.Focus = false
 	a.conv.split.CacheKey = ""
@@ -95,7 +98,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 
 	// Auto-enable live tail for live sessions
 	a.liveTail = false
-	if sess.IsLive && a.conv.leftPaneMode != convPaneTree {
+	if sess.IsLive {
 		a.liveTail = true
 		a.conv.split.BottomAlign = true
 		// Select last item
@@ -567,16 +570,13 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a.openLiveInput(a.currentSess.ProjectPath, a.currentSess.ID)
 	case a.keymap.Conversation.JumpToTree:
-		// In tree mode: jump to origin message in flat view
-		if a.conv.leftPaneMode == convPaneTree {
+		if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind != convMsg {
 			return a.jumpToOriginMessage()
 		}
-		// In flat mode with tmux: jump to tmux pane
 		if a.config.TmuxEnabled {
 			return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
 		}
-		// In flat mode without tmux: jump to tree
-		return a.jumpToEntityTree()
+		return a, nil
 	case a.keymap.Conversation.Actions:
 		a.convActionsMenu = true
 		return a, nil
@@ -590,25 +590,17 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Tab/shift+tab act on the focused pane: left toggles flat/tree, right cycles compact/standard/verbose.
+	// Tab moves between the unified flow and inspector. Detail level remains
+	// available through the explicit detail commands and structured preview keys.
 	if key == "tab" || key == "shift+tab" {
 		if !sp.Show {
 			sp.Show = true
 			sp.Focus = false
 			a.updateConvPreview()
-			return a, nil
-		}
-		if sp.Focus {
-			if key == "shift+tab" {
-				a.setConvDetailLevel((a.conv.rightPaneMode + len(previewModeLabels) - 1) % len(previewModeLabels))
-			} else {
-				a.setConvDetailLevel((a.conv.rightPaneMode + 1) % len(previewModeLabels))
-			}
 		} else {
-			if a.conv.leftPaneMode == convPaneFlat {
-				a.setConvLeftPaneMode(convPaneTree)
-			} else {
-				a.setConvLeftPaneMode(convPaneFlat)
+			sp.Focus = !sp.Focus
+			if sp.Focus {
+				a.updateConvPreview()
 			}
 		}
 		return a, nil
@@ -810,8 +802,22 @@ func (a *App) updateConvPreview() {
 		}
 	case convAgent:
 		build = buildAgentPreview(item.agent)
+	case convWorkflow:
+		a.setConvPreviewText(renderWorkflowInspector(item.workflow, item.facets))
+		return
+	case convPhase:
+		a.setConvPreviewText(renderPhaseInspector(item.workflow, item.phase))
+		return
+	case convShell:
+		a.setConvPreviewText(renderShellInspector(item.shell))
+		return
+	case convDecision:
+		a.setConvPreviewText(renderDecisionInspector(item.decision))
+		return
 	case convSessionMeta:
 		switch item.sessionMeta {
+		case "summary":
+			a.setConvPreviewText(a.renderFlowSummary())
 		case "memory":
 			a.setConvPreviewText(a.buildMemoryContent(a.conv.sess))
 		default:
@@ -895,6 +901,108 @@ func (a *App) updateConvPreview() {
 	if !isNewEntry && anchor.baseKey != "" {
 		restoreConvPreviewAnchor(sp, anchor)
 	}
+}
+
+func renderWorkflowInspector(run session.WorkflowRun, facets session.FacetSummary) string {
+	var b strings.Builder
+	name := run.Name
+	if name == "" {
+		name = run.RunID
+	}
+	fmt.Fprintf(&b, "# Workflow: %s\n\nStatus: %s · %d agents · %s · %d tool calls\n", name, run.Status, max(run.AgentCount, len(run.Agents)), compactTokenCount(run.TotalTokens), run.TotalToolCalls)
+	if run.Summary != "" {
+		fmt.Fprintf(&b, "\n%s\n", run.Summary)
+	}
+	if badges := renderFacetBadges(facets, true); badges != "" {
+		fmt.Fprintf(&b, "\nArtifacts: %s\n", stripANSI(badges))
+	}
+	for _, phase := range workflowPhases(run) {
+		fmt.Fprintf(&b, "\n## %s\n", phase.Title)
+		if phase.Detail != "" {
+			fmt.Fprintln(&b, phase.Detail)
+		}
+		for _, agent := range run.Agents {
+			if agent.PhaseIndex == phase.Index {
+				fmt.Fprintf(&b, "  %s %s · %s · %s\n", workflowStatusGlyph(agent.State), agent.Label, compactTokenCount(agent.Tokens), agent.ResultPreview)
+			}
+		}
+	}
+	if run.Result != "" {
+		fmt.Fprintf(&b, "\n## Result\n%s\n", run.Result)
+	}
+	return b.String()
+}
+
+func renderPhaseInspector(run session.WorkflowRun, phase session.WorkflowPhase) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Phase: %s\n\n%s\n", phase.Title, phase.Detail)
+	for _, agent := range run.Agents {
+		if agent.PhaseIndex == phase.Index {
+			fmt.Fprintf(&b, "\n%s %s\n  model %s · %s · %d tools\n  %s\n", workflowStatusGlyph(agent.State), agent.Label, agent.Model, compactTokenCount(agent.Tokens), agent.ToolCalls, agent.ResultPreview)
+		}
+	}
+	return b.String()
+}
+
+func renderShellInspector(job session.ShellJob) string {
+	var b strings.Builder
+	name := job.Description
+	if name == "" {
+		name = job.Command
+	}
+	fmt.Fprintf(&b, "# %s: %s\n\nStatus: %s", job.ToolName, name, job.Status)
+	if job.Persistent {
+		b.WriteString(" · persistent")
+	}
+	fmt.Fprintf(&b, " · %d polls\n", job.PollCount)
+	if !job.StartedAt.IsZero() {
+		fmt.Fprintf(&b, "Started: %s\n", job.StartedAt.Format(time.RFC3339))
+	}
+	if !job.LastEventAt.IsZero() {
+		fmt.Fprintf(&b, "Last event: %s\n", job.LastEventAt.Format(time.RFC3339))
+	}
+	if job.Command != "" {
+		fmt.Fprintf(&b, "\n$ %s\n", job.Command)
+	}
+	return b.String()
+}
+
+func renderDecisionInspector(artifact session.Artifact) string {
+	data, _ := artifact.Data.(session.DecisionData)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Decision: %s\n\nKind: %s\n", data.Label, data.Kind)
+	fmt.Fprintf(&b, "Origin: %s · entry %d · block %d\n", artifact.Origin.Transcript, artifact.Origin.EntryIndex+1, artifact.Origin.BlockIndex+1)
+	if data.Related != "" {
+		fmt.Fprintf(&b, "Related: %s\n", data.Related)
+	}
+	b.WriteString("\nPress J to jump to the originating turn.\n")
+	return b.String()
+}
+
+func (a *App) renderFlowSummary() string {
+	if a.conv.flow == nil {
+		return "# Session Flow\n\nNo flow index available.\n"
+	}
+	flow := a.conv.flow
+	facets := flow.Facets(flow.RootID, session.ScopeSession)
+	stats := flow.Stats(flow.RootID, session.ScopeSession)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Session Flow\n\n%d turns · %d agents · %d workflows · %d decisions\n", len(a.conv.merged), len(flow.Agents()), len(flow.Workflows()), len(flow.Decisions(session.ScopeSession)))
+	fmt.Fprintf(&b, "Tokens: %s", compactTokenCount(stats.TotalInputTokens+stats.TotalOutputTokens+stats.TotalCacheReadTokens+stats.TotalCacheCreationTokens))
+	if stats.EstimatedTokens > 0 {
+		fmt.Fprintf(&b, " + ~%s", compactTokenCount(stats.EstimatedTokens))
+	}
+	fmt.Fprintf(&b, " · Errors: %d\n", facets.Errors)
+	if badges := renderFacetBadges(facets, true); badges != "" {
+		fmt.Fprintf(&b, "Artifacts: %s\n", stripANSI(badges))
+	}
+	b.WriteString("\n## Decisions\n")
+	for _, d := range flow.Decisions(session.ScopeSession) {
+		if dd, ok := d.Data.(session.DecisionData); ok {
+			fmt.Fprintf(&b, "  ▣ %s\n", dd.Label)
+		}
+	}
+	return b.String()
 }
 
 func previewTextChunks(e session.Entry) []string {
@@ -1813,6 +1921,14 @@ func convPreviewBaseKey(item convItem) string {
 		return fmt.Sprintf("msg:%d", item.merged.startIdx)
 	case item.kind == convAgent:
 		return "agent:" + item.agent.ShortID
+	case item.kind == convWorkflow:
+		return "workflow:" + item.workflow.RunID
+	case item.kind == convPhase:
+		return fmt.Sprintf("phase:%s:%d", item.workflow.RunID, item.phase.Index)
+	case item.kind == convShell:
+		return "shell:" + item.shell.ID
+	case item.kind == convDecision:
+		return "decision:" + item.decision.ID
 	case item.kind == convSessionMeta:
 		return "sessionmeta:" + item.sessionMeta
 	case item.bgTaskID != "":
@@ -2319,120 +2435,34 @@ func (a *App) toggleConvLiveTail() (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// jumpToEntityTree switches to tree mode, optionally selecting the entity matching
-// the currently selected conv sub-item (agent or bg task).
-func (a *App) jumpToEntityTree() (tea.Model, tea.Cmd) {
-	// Capture the entity ID to select in tree
-	var targetAgentID, targetBgTaskID string
-	if item, ok := a.convList.SelectedItem().(convItem); ok {
-		switch item.kind {
-		case convAgent:
-			targetAgentID = item.agent.ID
-		case convTask:
-			if item.bgTaskID != "" {
-				targetBgTaskID = item.bgTaskID
-			}
-		}
-	}
-
-	a.setConvLeftPaneMode(convPaneTree)
-
-	// Find and select the matching entity in the tree
-	if targetAgentID != "" || targetBgTaskID != "" {
-		for i, item := range a.convList.Items() {
-			ci, ok := item.(convItem)
-			if !ok {
-				continue
-			}
-			if targetAgentID != "" && ci.kind == convAgent && ci.agent.ID == targetAgentID {
-				a.convList.Select(i)
-				break
-			}
-			if targetBgTaskID != "" && ci.kind == convTask && ci.bgTaskID == targetBgTaskID {
-				a.convList.Select(i)
-				break
-			}
-		}
-	}
-
-	a.updateConvPreview()
-	return a, nil
-}
-
-// jumpToOriginMessage switches from tree mode to flat mode, jumping to the
-// parent message that spawned the currently selected agent or task.
+// jumpToOriginMessage selects the exact spawning turn for the current flow node.
 func (a *App) jumpToOriginMessage() (tea.Model, tea.Cmd) {
 	item, ok := a.convList.SelectedItem().(convItem)
-	if !ok {
+	if !ok || item.parentIdx < 0 || item.parentIdx >= len(a.conv.items) {
+		a.copiedMsg = "no origin turn found"
 		return a, nil
 	}
-
-	// Find the parent message's UUID from the tree items
-	var targetUUID string
-	switch item.kind {
-	case convAgent:
-		// parentIdx points to the parent convMsg in the current items slice
-		if item.parentIdx >= 0 && item.parentIdx < len(a.convList.Items()) {
-			if parent, ok := a.convList.Items()[item.parentIdx].(convItem); ok && parent.kind == convMsg {
-				targetUUID = parent.merged.entry.UUID
-			}
-		}
-		// Fallback: search by agent timestamp — find assistant message just before agent
-		if targetUUID == "" {
-			for _, ci := range a.conv.items {
-				if ci.kind == convMsg && ci.merged.entry.Role == "assistant" {
-					for _, b := range ci.merged.entry.Content {
-						if b.ToolName == "Agent" {
-							targetUUID = ci.merged.entry.UUID
-						}
-					}
-				}
-			}
-		}
-	case convTask:
-		if item.parentIdx >= 0 && item.parentIdx < len(a.convList.Items()) {
-			if parent, ok := a.convList.Items()[item.parentIdx].(convItem); ok && parent.kind == convMsg {
-				targetUUID = parent.merged.entry.UUID
-			}
-		}
-	case convMsg:
-		// Already a message, just switch to flat at this position
-		targetUUID = item.merged.entry.UUID
-	}
-
-	if targetUUID == "" {
-		a.copiedMsg = "no parent message found"
+	target := a.conv.items[item.parentIdx]
+	if target.kind != convMsg {
+		a.copiedMsg = "no origin turn found"
 		return a, nil
 	}
-
-	// Switch to flat mode
-	a.setConvLeftPaneMode(convPaneFlat)
-
-	// Find the matching message in flat items and select it
 	for i, li := range a.convList.Items() {
 		ci, ok := li.(convItem)
-		if !ok {
-			continue
-		}
-		if ci.kind == convMsg && ci.merged.entry.UUID == targetUUID {
+		if ok && ci.kind == convMsg && ci.merged.entry.UUID == target.merged.entry.UUID {
 			a.convList.Select(i)
-			break
+			a.updateConvPreview()
+			return a, nil
 		}
 	}
-
-	a.updateConvPreview()
+	a.copiedMsg = "origin turn is hidden by filter"
 	return a, nil
 }
 
-// rebuildConversationList rebuilds the left-pane list based on the active flat/tree mode.
+// rebuildConversationList rebuilds the single unified flow list.
 func (a *App) rebuildConversationList(selectIdx int) {
 	contentH := ContentHeight(a.height)
-	items := a.conv.items
-	if a.conv.leftPaneMode == convPaneTree {
-		a.conv.treeItems = buildEntityTree(a.conv.sess, a.conv.merged, a.conv.agents, a.conv.sess.Tasks, a.conv.sess.Crons, inferAgentStatuses(a.conv.merged))
-		items = a.conv.treeItems
-	}
-	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
+	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
 	a.conv.split.List = &a.convList
 	if selectIdx >= 0 && selectIdx < len(a.convList.Items()) {
 		a.convList.Select(selectIdx)
@@ -2440,13 +2470,7 @@ func (a *App) rebuildConversationList(selectIdx int) {
 	a.conv.split.CacheKey = ""
 }
 
-// activeConvItems returns the item slice backing the current list mode (flat or tree).
-func (a *App) activeConvItems() []convItem {
-	if a.conv.leftPaneMode == convPaneTree {
-		return a.conv.treeItems
-	}
-	return a.conv.items
-}
+func (a *App) activeConvItems() []convItem { return a.conv.items }
 
 // refreshConversation reloads messages for the current conversation.
 func (a *App) refreshConversation() tea.Cmd {
@@ -2456,7 +2480,12 @@ func (a *App) refreshConversation() tea.Cmd {
 	}
 	a.conv.messages = entries
 	a.conv.merged = filterConversation(mergeConversationTurns(entries))
+	flow, _ := session.BuildSessionFlow(&a.conv.sess)
 	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
+	if flow != nil {
+		agents = flow.Agents()
+	}
+	a.conv.flow = flow
 	a.conv.agents = agents
 	tasks := a.conv.sess.Tasks
 	if len(tasks) == 0 {
@@ -2468,7 +2497,7 @@ func (a *App) refreshConversation() tea.Cmd {
 		crons = session.LoadCronsFromEntries(entries)
 		a.conv.sess.Crons = crons
 	}
-	a.conv.items = buildConvItems(a.conv.sess, a.conv.merged, agents, tasks, crons)
+	a.conv.items = buildConvItems(a.conv.sess, a.conv.merged, agents, tasks, crons, flow)
 	a.conv.sess.Tasks = tasks
 
 	// Preserve list cursor and preview selection across the rebuild
@@ -3091,7 +3120,7 @@ func (a *App) openCronConversation(cron session.CronItem) (tea.Model, tea.Cmd) {
 
 	merged := filterConversation(mergeConversationTurns(cronEntries))
 	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
-	items := buildConvItems(a.currentSess, merged, agents, nil, nil)
+	items := buildConvItems(a.currentSess, merged, agents, nil, nil, a.conv.flow)
 
 	a.conv.sess = a.currentSess
 	a.conv.messages = cronEntries
@@ -3121,7 +3150,7 @@ func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 
 	merged := filterConversation(mergeConversationTurns(taskEntries))
 	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
-	items := buildConvItems(a.currentSess, merged, agents, nil, nil)
+	items := buildConvItems(a.currentSess, merged, agents, nil, nil, a.conv.flow)
 
 	a.conv.sess = a.currentSess
 	a.conv.messages = taskEntries
@@ -3159,10 +3188,18 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	}
 
 	merged := filterConversation(mergeConversationTurns(entries))
+	agentSess := a.currentSess
+	agentSess.ID = agent.ID
+	agentSess.FilePath = agent.FilePath
+	flow, _ := session.BuildSessionFlow(&agentSess)
 	agents, _ := session.FindSubagents(agent.FilePath)
-	items := buildConvItems(a.currentSess, merged, agents, nil, nil)
+	if flow != nil {
+		agents = flow.Agents()
+	}
+	items := buildConvItems(agentSess, merged, agents, nil, nil, flow)
 
-	a.conv.sess = a.currentSess
+	a.conv.sess = agentSess
+	a.conv.flow = flow
 	a.conv.messages = entries
 	a.conv.merged = merged
 	a.conv.agents = agents
