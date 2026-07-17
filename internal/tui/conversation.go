@@ -52,6 +52,8 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.conv.task = session.TaskItem{}
 	a.conv.cron = session.CronItem{}
 	a.conv.toolUseToAgent = buildToolUseToAgentMap(entries)
+	a.conv.inspector = conversationInspector{Scope: session.ScopeNode}
+	a.conv.split.PreviewOnly = false
 
 	// Build conversation items — use file-based tasks/crons, or extract from JSONL
 	tasks := sess.Tasks
@@ -400,9 +402,33 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Block filter input intercepts all keys
+	// Block filter input owns all keystrokes until it is applied or cancelled.
 	if a.conv.blockFiltering {
 		return a.handleBlockFilterInput(msg)
+	}
+
+	// Inspector controls are handled before generic split-pane keys so [ and ]
+	// cycle facets rather than resize while the inspector is focused.
+	if key == "z" {
+		a.setInspectorZoom(!a.conv.inspector.Zoom)
+		return a, nil
+	}
+	if key == "esc" && a.conv.inspector.Zoom {
+		a.setInspectorZoom(false)
+		return a, nil
+	}
+	if sp.Show && sp.Focus {
+		switch key {
+		case "[":
+			a.cycleInspectorTabBy(-1)
+			return a, nil
+		case "]":
+			a.cycleInspectorTabBy(1)
+			return a, nil
+		case "s":
+			a.cycleInspectorScope()
+			return a, nil
+		}
 	}
 
 	// Translate navigation aliases (vim hjkl, etc.)
@@ -545,9 +571,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			// Open full-screen detail for this message
-			a.pushNavFrame()
-			return a.openMsgFullForEntry(item.merged)
+			// Conversation detail is the same inspector in full-width zoom; keep
+			// the selected flow node and fold state instead of switching views.
+			a.openInspector(inspectorConversation, session.ScopeNode, true)
+			return a, nil
 		}
 		return a, nil
 	case a.keymap.Conversation.LiveToggle:
@@ -788,8 +815,11 @@ func (a *App) updateConvPreview() {
 	baseKey := convPreviewBaseKey(item)
 	oldCacheKey := sp.CacheKey
 	anchor := captureConvPreviewAnchor(sp, baseKey)
-	if item.kind == convAgent && oldCacheKey != "" && strings.HasPrefix(oldCacheKey, baseKey+":") {
-		debugLog.Printf("updateConvPreview: CACHE HIT key=%q (agent)", oldCacheKey)
+	node, hasNode := a.syncInspectorSelection(item)
+	if hasNode && a.conv.inspector.Tab != inspectorConversation {
+		content := a.renderInspector(item, node, a.renderInspectorTab(item, node))
+		cacheKey := fmt.Sprintf("inspector:%s:%d:%d:%t", node.ID, a.conv.inspector.Tab, a.conv.inspector.Scope, a.conv.inspector.Zoom)
+		a.setConvPreviewTextKey(content, cacheKey)
 		return
 	}
 
@@ -861,8 +891,13 @@ func (a *App) updateConvPreview() {
 	default:
 		entry, blockSrcIdx = verbosePreview(build)
 	}
+	if hasNode {
+		header := a.inspectorHeader(item, node)
+		entry.Content = append([]session.ContentBlock{{Type: "text", Text: header}}, entry.Content...)
+		blockSrcIdx = append([]int{-1}, blockSrcIdx...)
+	}
 
-	cacheKey := fmt.Sprintf("%s:%d:%x", baseKey, len(entry.Content), entryContentHash(entry.Content))
+	cacheKey := fmt.Sprintf("%s:%d:%d:%t:%d:%x", baseKey, a.conv.inspector.Tab, a.conv.inspector.Scope, a.conv.inspector.Zoom, len(entry.Content), entryContentHash(entry.Content))
 	if cacheKey == sp.CacheKey {
 		debugLog.Printf("updateConvPreview: CACHE HIT key=%q", cacheKey)
 		return
@@ -1640,11 +1675,24 @@ func (a *App) openConvChangesPage() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) setConvPreviewText(content string) {
+	a.setConvPreviewTextKey(content, "text")
+}
+
+func (a *App) setConvPreviewTextKey(content, cacheKey string) {
 	sp := &a.conv.split
-	sp.CacheKey = "text"
-	sp.SetPreviewContent(content, a.width, a.height, a.splitRatio)
-	sp.Preview.YOffset = 0
-	// Clear stale fold state so fold keys don't re-render a previous message
+	oldOffset := sp.Preview.YOffset
+	sameKey := sp.CacheKey == cacheKey
+	sp.CacheKey = cacheKey
+	sp.Preview.Width = sp.PreviewWidth(a.width, a.splitRatio)
+	sp.Preview.Height = ContentHeight(a.height)
+	sp.Preview.SetContent(content)
+	if sameKey {
+		maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
+		sp.Preview.YOffset = min(oldOffset, maxOffset)
+	} else {
+		sp.Preview.YOffset = 0
+	}
+	// Clear stale fold state so fold keys don't re-render a previous message.
 	if sp.Folds != nil {
 		sp.Folds.Entry = session.Entry{}
 		sp.Folds.BlockStarts = nil
@@ -2864,6 +2912,10 @@ func (a *App) kittyImageLayer() string {
 func (a *App) renderConvSplit() string {
 	sp := &a.conv.split
 	rendered := sp.Render(a.width, a.height, a.splitRatio)
+
+	if sp.PreviewOnly {
+		return rendered
+	}
 
 	// Show tooltip for selected item when list is focused and tooltip is on.
 	// When preview is focused, prefer a tooltip for the focused artifact/block.

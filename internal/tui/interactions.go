@@ -151,6 +151,9 @@ func (a *App) conversationPrimaryHelpActions() []interactionAction {
 func (a *App) conversationPreviewTextHelpActions(next string) []interactionAction {
 	return []interactionAction{
 		labelAction("", "↑↓", "scroll"),
+		labelAction("", "[]", "facet"),
+		labelAction("", "s", "scope"),
+		labelAction("", "z", "zoom"),
 		bindAction("", a.keymap.Preview.CopyMode, "copy"),
 		labelAction("", "tab", next),
 	}
@@ -160,6 +163,9 @@ func (a *App) conversationPreviewStructuredHelpActions(next string) []interactio
 	return []interactionAction{
 		labelAction("", "↑↓", "blocks"),
 		labelAction("", "←→", "fold"),
+		labelAction("", "[]", "facet"),
+		labelAction("", "s", "scope"),
+		labelAction("", "z", "zoom"),
 		foldAllHelpAction(a),
 		bindAction("", a.keymap.Preview.Filter, "filter"),
 		labelAction("", "tab", next),

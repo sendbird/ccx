@@ -470,6 +470,7 @@ type App struct {
 		agents         []session.Subagent
 		items          []convItem
 		flow           *session.FlowIndex
+		inspector      conversationInspector
 		toolUseToAgent map[string]string // tool_use_id → subagent ID (from toolUseResult.agentId)
 		split          SplitPane
 		agent          session.Subagent // non-zero when viewing agent conversation
@@ -2782,15 +2783,13 @@ func (a *App) renderStatsPageHintBox() string {
 func (a *App) handleConvPageMenu(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "u":
-		return a.openConvURLsPage()
+		a.openInspector(inspectorRefs, session.ScopeSession, false)
 	case "i":
-		return a.openConvImagesPage()
-	case "g":
-		return a.openConvChangesPage()
-	case "f":
-		return a.openConvFilesPage()
+		a.openInspector(inspectorImages, session.ScopeSession, false)
+	case "g", "f":
+		a.openInspector(inspectorChanges, session.ScopeSession, false)
 	case "c":
-		return a.openConvContextsPage()
+		a.openInspector(inspectorOverview, session.ScopeSession, false)
 	}
 	return a, nil
 }
@@ -7679,6 +7678,11 @@ func (a *App) breadcrumbRightStatus() string {
 	if a.state == viewConversation {
 		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
 		parts = append(parts, modeStyle.Render("FLOW"))
+		parts = append(parts, modeStyle.Render(strings.ToUpper(a.conv.inspector.Tab.String())))
+		parts = append(parts, modeStyle.Render(strings.ToUpper(inspectorScopeName(a.conv.inspector.Scope))))
+		if a.conv.inspector.Zoom {
+			parts = append(parts, modeStyle.Render("ZOOM"))
+		}
 		parts = append(parts, modeStyle.Render(strings.ToUpper(previewModeLabels[a.conv.rightPaneMode])))
 	} else if a.state == viewMessageFull {
 		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
@@ -7882,4 +7886,3 @@ type urlRefStatusMsg struct {
 // back as refStatusMsg). An earlier fleet-wide background sweep ran `gh pr view`
 // (~1.6s each) across every HasRefs session — hundreds of subprocesses that
 // spiked CPU and froze the UI for minutes, resolving statuses no one viewed.
-

@@ -17,9 +17,10 @@ type SplitPane struct {
 	Preview viewport.Model
 
 	// State
-	Show     bool
-	Focus    bool   // true = preview focused, false = list focused
-	CacheKey string // tracks last-rendered item ID to avoid redundant updates
+	Show        bool
+	Focus       bool   // true = preview focused, false = list focused
+	PreviewOnly bool   // true = render the existing preview full-width (zoom)
+	CacheKey    string // tracks last-rendered item ID to avoid redundant updates
 
 	// Item height for mouse click calculations (delegate Height + Spacing)
 	ItemHeight int
@@ -66,6 +67,9 @@ func (sp *SplitPane) ListWidth(totalW, splitRatio int) int {
 
 // PreviewWidth returns the preview width (totalW - listW - 1 for border).
 func (sp *SplitPane) PreviewWidth(totalW, splitRatio int) int {
+	if sp.PreviewOnly {
+		return max(totalW, 1)
+	}
 	return max(totalW-sp.ListWidth(totalW, splitRatio)-1, 1)
 }
 
@@ -161,6 +165,15 @@ func renderFixedSplit(left, right string, listW, previewW, contentH int, borderC
 // Render draws the split layout: list | border | preview.
 // If Show is false or dimensions too small, returns list-only view.
 func (sp *SplitPane) Render(totalW, totalH, splitRatio int) string {
+	if sp.PreviewOnly && sp.Show {
+		contentH := ContentHeight(totalH)
+		if sp.Preview.Width != totalW || sp.Preview.Height != contentH {
+			sp.Preview.Width = max(totalW, 1)
+			sp.Preview.Height = max(contentH, 1)
+			sp.cachedRP = nil
+		}
+		return sp.Preview.View()
+	}
 	if !sp.Show || totalW < 40 || totalH < 10 {
 		return sp.List.View()
 	}
