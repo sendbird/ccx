@@ -146,8 +146,8 @@ func HasWorkflows(sessionFile string) bool {
 // workflow-nested agents, ordered by run (newest run first) then by the
 // summary's agent order, so drill-down lists read like the workflow itself.
 func JoinWorkflowAgents(runs []WorkflowRun, agents []Subagent) []Subagent {
-	// agentID → label, and agentID → run order index.
-	labelByID := make(map[string]string)
+	// agentID → summary entry, and agentID → run order index.
+	waByID := make(map[string]WorkflowAgent)
 	runOrder := make(map[string]int)
 	agentOrder := make(map[string]int)
 	for ri, r := range runs {
@@ -155,7 +155,7 @@ func JoinWorkflowAgents(runs []WorkflowRun, agents []Subagent) []Subagent {
 			if wa.AgentID == "" {
 				continue
 			}
-			labelByID[wa.AgentID] = wa.Label
+			waByID[wa.AgentID] = wa
 			runOrder[wa.AgentID] = ri
 			agentOrder[wa.AgentID] = ai
 		}
@@ -166,8 +166,10 @@ func JoinWorkflowAgents(runs []WorkflowRun, agents []Subagent) []Subagent {
 		if a.WorkflowRunID == "" {
 			continue
 		}
-		if lbl, ok := labelByID[a.ID]; ok {
-			a.WorkflowLabel = lbl
+		if wa, ok := waByID[a.ID]; ok {
+			a.WorkflowLabel = wa.Label
+			a.WorkflowPhaseIndex = wa.PhaseIndex
+			a.WorkflowPhaseTitle = wa.PhaseTitle
 		}
 		out = append(out, a)
 	}

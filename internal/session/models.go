@@ -154,4 +154,19 @@ type Subagent struct {
 	// WorkflowLabel is the human label from the workflow summary (e.g. "ux-review"),
 	// resolved by matching agentId; empty until joined.
 	WorkflowLabel string
+	// WorkflowPhaseIndex/WorkflowPhaseTitle come from the workflow summary's
+	// workflowProgress entry for this agent (see FillWorkflowAgentMeta). Zero /
+	// empty until joined.
+	WorkflowPhaseIndex int
+	WorkflowPhaseTitle string
+
+	// Exact spawn edge into the parent transcript (see AttachSpawnOrigins):
+	// the Agent/Task tool_use block that launched this subagent. Empty when no
+	// exact edge exists (legacy transcripts) — timestamp placement is the
+	// fallback then. OriginEntryIndex is the index into the parent's
+	// LoadMessages slice; it is only meaningful when SpawnToolUseID is set
+	// (AttachSpawnOrigins stores -1 when the spawning block was not found).
+	SpawnToolUseID    string
+	OriginMessageUUID string
+	OriginEntryIndex  int
 }

@@ -2262,19 +2262,10 @@ func (a *App) findBgTaskResultMsg(taskID string) (mergedMsg, int, bool) {
 
 // buildToolUseToAgentMap scans entries for Agent tool_result entries that carry
 // AgentID (from toolUseResult.agentId) and builds a map from tool_use_id → agent ID.
+// Thin wrapper over session.BuildToolUseToAgentMap so the data layer and the view
+// share one implementation.
 func buildToolUseToAgentMap(entries []session.Entry) map[string]string {
-	m := make(map[string]string)
-	for _, e := range entries {
-		if e.AgentID == "" {
-			continue
-		}
-		for _, b := range e.Content {
-			if b.Type == "tool_result" && b.ID != "" {
-				m[b.ID] = e.AgentID
-			}
-		}
-	}
-	return m
+	return session.BuildToolUseToAgentMap(entries)
 }
 
 // findAgentForConv finds the subagent matching an entry that contains an Agent tool_use.
