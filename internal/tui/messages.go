@@ -662,32 +662,41 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 			if cursorPrefix != "" {
 				buf.WriteString(cursorPrefix)
 			}
-			// Show skill name prominently for Skill tool_use blocks
-			if block.ToolName == "Skill" {
-				skillName := extractSkillFromInput(block.ToolInput)
-				if skillName != "" {
-					buf.WriteString(skillBlockStyle.Render("Skill: " + skillName))
-				} else {
-					buf.WriteString(toolBlockStyle.Render("Tool: Skill"))
-				}
-			} else if block.ToolName == "Monitor" {
-				// Monitors are long-lived background watchers — distinguish them
-				// from one-shot tools with a dedicated color + their description.
-				desc, persistent, ok := session.MonitorInputSummary(block.ToolInput)
-				buf.WriteString(monitorBlockStyle.Render("Monitor"))
-				if persistent {
-					buf.WriteString(dimStyle.Render(" [persistent]"))
-				}
-				if ok && desc != "" {
-					buf.WriteString(monitorBlockStyle.Render(": " + desc))
-				}
-			} else if server, tool, ok := session.MCPToolLabel(block.ToolName); ok {
-				// Split MCP tools into server / tool for readability instead of
-				// the long mcp__server__tool identifier.
-				buf.WriteString(toolBlockStyle.Render("MCP: "+server) + dimStyle.Render(" / "+tool))
-			} else {
-				buf.WriteString(toolBlockStyle.Render("Tool: " + block.ToolName))
+			// Registry-based semantic rendering (toolrender.go). Disclosure
+			// ladder: headline (folded) → headline + semantic body (unfolded)
+			// → headline + raw JSON (unfolded + Formatted toggle, the deepest
+			// level — reuses the existing `l`-on-expanded-block mechanics).
+			renderer := lookupToolRenderer(block.ToolName)
+			var headline string
+			if renderer != nil {
+				headline = renderer.headline(block.ToolInput, max(w-4, 20))
 			}
+			if headline != "" {
+				buf.WriteString(toolGlyphStyle.Render(iconToolUse) + " " + headline)
+				if len(block.Hooks) > 0 && !opts.hideHooks {
+					buf.WriteString(renderHookBadges(block.Hooks))
+				}
+				buf.WriteString("\n")
+				if !folded {
+					if formatted {
+						// Deepest disclosure: raw JSON input.
+						input := session.StripXMLTags(stripANSI(block.ToolInput))
+						buf.WriteString(dimStyle.Render(wrapText(tryFormatJSON(input), w)) + "\n")
+					} else {
+						result := findToolResult(e.Content, i, block.ID)
+						for _, line := range renderer.body(block.ToolInput, result, w) {
+							buf.WriteString(line + "\n")
+						}
+					}
+					if len(block.Hooks) > 0 && !opts.hideHooks {
+						buf.WriteString(renderHookDetails(block.Hooks))
+					}
+					buf.WriteString("\n")
+				}
+				break
+			}
+			// Fallback: generic rendering for unregistered tools (unchanged).
+			buf.WriteString(toolBlockStyle.Render("Tool: " + block.ToolName))
 			// Show hook badges inline (unless hidden)
 			if len(block.Hooks) > 0 && !opts.hideHooks {
 				buf.WriteString(renderHookBadges(block.Hooks))
@@ -725,23 +734,21 @@ func renderFullMessageImpl(e session.Entry, width int, folds foldSet, formats fo
 				buf.WriteString("\n")
 			}
 		case "tool_result":
-			prefix := "Result: "
-			style := dimStyle
-			if block.IsError {
-				prefix = "Error: "
-				style = errorStyle
-			}
 			if cursorPrefix != "" {
 				buf.WriteString(cursorPrefix)
 			}
 			if folded {
-				summary := session.StripXMLTags(stripANSI(block.Text))
-				if len(summary) > 60 {
-					summary = summary[:57] + "..."
-				}
-				buf.WriteString(style.Render(prefix+summary) + "\n")
+				// Attached ⎿ summary: successes are one dim line; errors
+				// auto-expand their tail (see renderResultSummary).
+				buf.WriteString(renderResultSummary(block, w))
 			} else {
-				buf.WriteString(style.Render(prefix) + "\n")
+				style := dimStyle
+				header := iconResultTee + " " + iconResultOK + " Result"
+				if block.IsError {
+					style = errorStyle
+					header = iconResultTee + " " + iconResultErr + " Error"
+				}
+				buf.WriteString(style.Render(header) + "\n")
 				text := session.StripXMLTags(stripANSI(block.Text))
 				if formatted {
 					text = tryFormatJSON(text)
