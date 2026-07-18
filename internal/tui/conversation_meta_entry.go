@@ -253,12 +253,37 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 			return true, m, cmd
 		}
 		return true, a, nil
+	case metaTargetTask:
+		// Prefer opening the task's own view (matches decision-task Enter); fall
+		// back to jumping to its definition turn.
+		if task, ok := a.taskByID(target.taskID); ok && len(extractTaskEntries(a.conv.messages, task.ID)) > 0 {
+			a.pushNavFrame()
+			m, cmd := a.openTaskConversation(task)
+			return true, m, cmd
+		}
+		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
+			return true, m, cmd
+		}
+		return true, a, nil
 	default:
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
 			return true, m, cmd
 		}
 	}
 	return false, a, nil
+}
+
+// taskByID finds a session task by its ID.
+func (a *App) taskByID(id string) (session.TaskItem, bool) {
+	if id == "" {
+		return session.TaskItem{}, false
+	}
+	for _, t := range a.conv.sess.Tasks {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return session.TaskItem{}, false
 }
 
 // enterMemoryDrill switches the memory row from list mode to single-file detail
@@ -317,18 +342,207 @@ func (a *App) mergedByUUID(uuid string) (mergedMsg, bool) {
 	return mergedMsg{}, false
 }
 
+// metaSummaryEntries renders the Session Flow summary as a header block plus one
+// selectable row per decision marker. Each decision row jumps (Enter/J) to the
+// turn that produced it.
+func (a *App) metaSummaryEntries() []metaEntry {
+	flow := a.conv.flow
+	if flow == nil {
+		return []metaEntry{textMeta(strings.TrimRight(a.renderFlowSummary(), "\n"))}
+	}
+
+	out := []metaEntry{textMeta(strings.TrimRight(a.flowSummaryHeader(), "\n"))}
+
+	decisions := flow.Decisions(session.ScopeSession)
+	if len(decisions) == 0 {
+		out = append(out, textMeta(dimStyle.Render("No decisions recorded.")))
+		return out
+	}
+	out = append(out, textMeta(dimStyle.Render(fmt.Sprintf("── Decisions [%d] · ↵/J jump ──", len(decisions)))))
+	for _, d := range decisions {
+		dd, _ := d.Data.(session.DecisionData)
+		out = append(out, metaEntry{
+			block: session.ContentBlock{Type: "text", Text: decisionRow(dd)},
+			target: metaEntryTarget{
+				kind:        metaTargetDecision,
+				messageUUID: d.Origin.MessageUUID,
+				blockIdx:    d.Origin.BlockIndex,
+			},
+		})
+	}
+	return out
+}
+
+// flowSummaryHeader is the non-decision preamble of the flow summary (counts,
+// tokens, artifact badges) — the decisions list is rendered as selectable rows
+// separately so it is intentionally omitted here.
+func (a *App) flowSummaryHeader() string {
+	full := a.renderFlowSummary()
+	if idx := strings.Index(full, "\n## Decisions"); idx >= 0 {
+		return full[:idx]
+	}
+	return full
+}
+
+// decisionRow formats one decision marker as a selectable row.
+func decisionRow(dd session.DecisionData) string {
+	label := dd.Label
+	if label == "" {
+		label = string(dd.Kind)
+	}
+	return dimStyle.Render("▣ ") + label
+}
+
+// metaTasksPlanEntries renders tasks, cron jobs, and plans as selectable rows.
+// Tasks jump to their definition turn (when known), plans to the ExitPlanMode
+// turn, crons to their create turn.
+func (a *App) metaTasksPlanEntries() []metaEntry {
+	sess := a.conv.sess
+	var out []metaEntry
+
+	taskOrigins := a.taskOriginByID()
+	if len(sess.Tasks) > 0 {
+		completed := 0
+		for _, t := range sess.Tasks {
+			if t.Status == "completed" {
+				completed++
+			}
+		}
+		out = append(out, textMeta(dimStyle.Render(fmt.Sprintf("── Tasks [%d/%d] · ↵/J jump ──", completed, len(sess.Tasks)))))
+		for _, task := range sess.Tasks {
+			origin := taskOrigins[task.ID]
+			out = append(out, metaEntry{
+				block: session.ContentBlock{Type: "text", Text: taskRow(task)},
+				target: metaEntryTarget{
+					kind:        metaTargetTask,
+					taskID:      task.ID,
+					messageUUID: origin.MessageUUID,
+					blockIdx:    origin.BlockIndex,
+				},
+			})
+		}
+	}
+
+	if len(sess.Crons) > 0 {
+		out = append(out, textMeta(dimStyle.Render(fmt.Sprintf("── Cron Jobs [%d] ──", len(sess.Crons)))))
+		for _, cron := range sess.Crons {
+			out = append(out, metaEntry{
+				block:  session.ContentBlock{Type: "text", Text: cronRow(cron)},
+				target: metaEntryTarget{kind: metaTargetCron, blockIdx: -1},
+			})
+		}
+	}
+
+	if plans := a.planEntries(); len(plans) > 0 {
+		out = append(out, textMeta(dimStyle.Render(fmt.Sprintf("── Plans [%d] · ↵/J jump ──", len(plans)))))
+		out = append(out, plans...)
+	}
+
+	if len(out) == 0 {
+		out = append(out, textMeta(dimStyle.Render("No tasks, cron jobs, or plans.")))
+	}
+	return out
+}
+
+// planEntries builds one selectable row per ExitPlanMode plan occurrence, in
+// chronological order, jumping to the turn that wrote it.
+func (a *App) planEntries() []metaEntry {
+	if a.conv.flow == nil {
+		return nil
+	}
+	arts := a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactPlan, session.ScopeSession)
+	hist := a.conv.flow.PlanTouchHistory()
+	seen := make(map[string]bool)
+	var out []metaEntry
+	for _, art := range arts {
+		if seen[art.Key] {
+			continue
+		}
+		seen[art.Key] = true
+		data, _ := art.Data.(session.PlanData)
+		out = append(out, metaEntry{
+			block: session.ContentBlock{Type: "text", Text: planRow(art.Key, data, hist[art.Key])},
+			target: metaEntryTarget{
+				kind:        metaTargetPlan,
+				messageUUID: art.Origin.MessageUUID,
+				blockIdx:    art.Origin.BlockIndex,
+			},
+		})
+	}
+	return out
+}
+
+// taskOriginByID maps each task ID to the origin of its most recent
+// TaskCreate/TaskUpdate occurrence, so a task row can jump to its turn.
+func (a *App) taskOriginByID() map[string]session.ArtifactOrigin {
+	out := make(map[string]session.ArtifactOrigin)
+	if a.conv.flow == nil {
+		return out
+	}
+	for _, art := range a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactTask, session.ScopeSession) {
+		data, ok := art.Data.(session.TaskEventData)
+		if !ok || data.TaskID == "" {
+			continue
+		}
+		prev, seen := out[data.TaskID]
+		if !seen || !art.Origin.Timestamp.Before(prev.Timestamp) {
+			out[data.TaskID] = art.Origin
+		}
+	}
+	return out
+}
+
+func taskRow(t session.TaskItem) string {
+	icon := iconIdle
+	style := dimStyle
+	switch t.Status {
+	case "completed":
+		icon = iconDone
+		style = lipgloss.NewStyle().Foreground(colorAccent)
+	case "in_progress":
+		icon = iconActive
+		style = lipgloss.NewStyle().Foreground(colorAssistant)
+	}
+	subject := t.Subject
+	if subject == "" {
+		subject = "(untitled task)"
+	}
+	return style.Render(icon+" ") + subject
+}
+
+func cronRow(c session.CronItem) string {
+	icon := iconActive
+	style := lipgloss.NewStyle().Foreground(colorAssistant)
+	suffix := ""
+	if c.Status == "deleted" {
+		icon = iconStopped
+		style = dimStyle
+		if !c.DeletedAt.IsZero() {
+			suffix = dimStyle.Render("  deleted " + c.DeletedAt.Format("01-02 15:04"))
+		}
+	}
+	headline := strings.TrimSpace(strings.Join([]string{c.ID, c.Cron}, "  "))
+	if headline == "" {
+		headline = "(cron)"
+	}
+	return style.Render(icon+" ") + headline + suffix
+}
+
+func planRow(key string, data session.PlanData, hist session.TouchHistory) string {
+	name := key
+	if data.PlanFilePath != "" {
+		name = filepath.Base(data.PlanFilePath)
+	} else {
+		name = filepath.Base(key)
+	}
+	row := planBadge.Render("▤ ") + name
+	if h := memoryHistoryLine(hist); h != "" {
+		row += dimStyle.Render("  " + h)
+	}
+	return row
+}
+
 // textMeta wraps a rendered string as a non-selectable-target metaEntry.
 func textMeta(text string) metaEntry {
 	return metaEntry{block: session.ContentBlock{Type: "text", Text: text}, target: metaEntryTarget{blockIdx: -1}}
-}
-
-// metaSummaryEntries and metaTasksPlanEntries are filled in a later step; for
-// now they render the existing text content as a single non-selectable block so
-// only the memory row gains selectable behavior first.
-func (a *App) metaSummaryEntries() []metaEntry {
-	return []metaEntry{textMeta(strings.TrimRight(a.renderFlowSummary(), "\n"))}
-}
-
-func (a *App) metaTasksPlanEntries() []metaEntry {
-	return []metaEntry{textMeta(strings.TrimRight(a.buildTasksPlanContent(a.conv.sess), "\n"))}
 }
