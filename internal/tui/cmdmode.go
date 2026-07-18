@@ -33,7 +33,6 @@ type cmdEntry struct {
 const (
 	cmdSessions = 1 << viewSessions
 	cmdConv     = 1 << viewConversation
-	cmdMsgFull  = 1 << viewMessageFull
 	cmdConfig   = 1 << viewConfig
 	cmdPlugins  = 1 << viewPlugins
 	cmdStats    = 1 << viewGlobalStats
@@ -78,10 +77,6 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvDetailLevel(previewTool); return a, nil }},
 		{name: "detail:verbose", aliases: []string{"d:verbose"}, desc: "text + tools + hooks", views: cmdConv,
 			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvDetailLevel(previewHook); return a, nil }},
-		{name: "pane:flat", aliases: []string{"list:flat", "flat"}, desc: "flat conversation list", views: cmdConv,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvLeftPaneMode(convPaneFlat); return a, nil }},
-		{name: "pane:tree", aliases: []string{"list:tree", "tree"}, desc: "entity tree list", views: cmdConv,
-			action: func(a *App) (tea.Model, tea.Cmd) { a.setConvLeftPaneMode(convPaneTree); return a, nil }},
 
 		// Preview modes (sessions only)
 		{name: "preview:conv", aliases: []string{"p:conv"}, desc: "conversation preview", views: cmdSessions,
@@ -420,7 +415,7 @@ func (a *App) setSessPreviewMode(mode sessPreview) tea.Cmd {
 func (a *App) setConvDetailLevel(level int) {
 	sp := &a.conv.split
 	baseKey := ""
-	if item, ok := a.convList.SelectedItem().(convItem); ok {
+	if item, ok := a.selectedConversationItem(); ok {
 		baseKey = convPreviewBaseKey(item)
 	}
 	anchor := captureConvPreviewAnchor(sp, baseKey)
@@ -434,20 +429,6 @@ func (a *App) setConvDetailLevel(level int) {
 	if baseKey != "" {
 		restoreConvPreviewAnchor(sp, anchor)
 	}
-}
-
-// setConvLeftPaneMode switches the conversation list between flat and tree modes.
-func (a *App) setConvLeftPaneMode(mode int) {
-	if mode == a.conv.leftPaneMode {
-		return
-	}
-	a.conv.leftPaneMode = mode
-	if mode == convPaneTree && a.liveTail {
-		a.liveTail = false
-		a.conv.split.BottomAlign = false
-	}
-	a.rebuildConversationList(0)
-	a.updateConvPreview()
 }
 
 // startCmdMode initializes command mode with an empty text input.

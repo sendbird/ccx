@@ -242,6 +242,26 @@ func TestParseEntry_MetaFields(t *testing.T) {
 	}
 }
 
+func TestParseEntry_SeparatesTranscriptOwnerFromSpawnedChild(t *testing.T) {
+	line := `{"type":"user","agentId":"parent-agent","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"spawn-child","content":"done"}]},"toolUseResult":{"agentId":"child-agent","agentType":"Explore","runId":"run-1"}}`
+	entry, err := ParseEntry(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.AgentID != "parent-agent" {
+		t.Fatalf("owner AgentID = %q, want parent-agent", entry.AgentID)
+	}
+	if entry.ToolResultAgentID != "child-agent" {
+		t.Fatalf("ToolResultAgentID = %q, want child-agent", entry.ToolResultAgentID)
+	}
+	if entry.ToolResultRunID != "run-1" {
+		t.Fatalf("ToolResultRunID = %q, want run-1", entry.ToolResultRunID)
+	}
+	if got := BuildToolUseToAgentMap([]Entry{entry})["spawn-child"]; got != "child-agent" {
+		t.Fatalf("spawn edge child = %q, want child-agent", got)
+	}
+}
+
 func TestParseEntry_InvalidJSON(t *testing.T) {
 	_, err := ParseEntry("not json")
 	if err == nil {

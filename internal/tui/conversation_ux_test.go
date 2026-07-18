@@ -8,9 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -144,7 +142,11 @@ func setupTreeConvApp(t *testing.T, entries []session.Entry, tasks []session.Tas
 	app.conv.sess.Tasks = tasks
 	app.conv.agents = agents
 	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, agents, tasks, nil)
-	app.conv.leftPaneMode = convPaneTree
+	for i := range app.conv.items {
+		if app.conv.items[i].groupTag == "tasks" {
+			app.conv.items[i].folded = false
+		}
+	}
 	app.rebuildConversationList(0)
 	app.updateConvPreview()
 	return app
@@ -155,7 +157,7 @@ func selectConvItemBy(t *testing.T, app *App, match func(convItem) bool) {
 	for i, item := range app.convList.Items() {
 		ci, ok := item.(convItem)
 		if ok && match(ci) {
-			app.convList.Select(i)
+			app.selectConvBody(i)
 			return
 		}
 	}
@@ -216,32 +218,47 @@ func testEntries() []session.Entry {
 	}
 }
 
-func TestBuildConvItemsAddsSessionMetaRows(t *testing.T) {
+func TestBuildConvContextItemsAreSeparateFromBody(t *testing.T) {
 	entries := testEntries()
 	sess := session.Session{
-		ID:        "test-sess",
-		ShortID:   "test",
+		ID:          "test-sess",
+		ShortID:     "test",
 		ProjectPath: "/tmp/test",
-		HasMemory: true,
-		HasPlan:   true,
-		Todos:     []session.TodoItem{{Content: "remember this", Status: "pending"}},
+		HasMemory:   true,
+		HasPlan:     true,
+		Todos:       []session.TodoItem{{Content: "remember this", Status: "pending"}},
 	}
 	merged := filterConversation(mergeConversationTurns(entries))
-	items := buildConvItems(sess, merged, nil, nil, nil)
-	if len(items) < 2 {
-		t.Fatalf("expected session meta rows, got %d items", len(items))
+	contextItems := buildConvContextItems(sess, merged, nil)
+	bodyItems := buildConvItems(sess, merged, nil, nil, nil)
+	if len(contextItems) != 2 {
+		t.Fatalf("context rows = %d, want memory and tasks/plan", len(contextItems))
 	}
-	if items[0].kind != convSessionMeta || items[0].sessionMeta != "memory" {
-		t.Fatalf("first item = %#v, want memory session meta", items[0])
+	if contextItems[0].sessionMeta != "memory" || contextItems[1].sessionMeta != "tasksplan" {
+		t.Fatalf("context order = %q, %q", contextItems[0].sessionMeta, contextItems[1].sessionMeta)
 	}
-	if items[1].kind != convSessionMeta || items[1].sessionMeta != "tasksplan" {
-		t.Fatalf("second item = %#v, want tasksplan session meta", items[1])
+	for _, item := range bodyItems {
+		if item.kind == convSessionMeta {
+			t.Fatalf("chronological body contains session meta row: %#v", item)
+		}
 	}
-	if fv := items[0].FilterValue(); !strings.Contains(fv, "is:memory") {
+	if fv := contextItems[0].FilterValue(); !strings.Contains(fv, "is:memory") {
 		t.Fatalf("memory filter tokens missing: %q", fv)
 	}
-	if fv := items[1].FilterValue(); !strings.Contains(fv, "is:tasksplan") || !strings.Contains(fv, "is:plan") {
+	if fv := contextItems[1].FilterValue(); !strings.Contains(fv, "is:tasksplan") || !strings.Contains(fv, "is:plan") {
 		t.Fatalf("tasksplan filter tokens missing: %q", fv)
+	}
+}
+
+func TestBuildConvContextItemsPinsCompletedTaskHistory(t *testing.T) {
+	sess := session.Session{
+		ID:       "completed-tasks",
+		HasTasks: false,
+		Tasks:    []session.TaskItem{{ID: "1", Subject: "Finished work", Status: "completed"}},
+	}
+	items := buildConvContextItems(sess, nil, nil)
+	if len(items) != 1 || items[0].sessionMeta != "tasksplan" {
+		t.Fatalf("completed task history was not pinned: %#v", items)
 	}
 }
 
@@ -251,18 +268,20 @@ func TestConvPreviewSessionMetaUsesSessionRenderers(t *testing.T) {
 	app.currentSess.HasPlan = true
 	app.currentSess.Todos = []session.TodoItem{{Content: "saved todo", Status: "pending"}}
 	app.conv.sess = app.currentSess
+	app.conv.contextItems = buildConvContextItems(app.conv.sess, app.conv.merged, nil)
 	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
-	contentH := ContentHeight(app.height)
-	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
-	app.conv.split.List = &app.convList
-
-	selectConvItemBy(t, app, func(ci convItem) bool { return ci.kind == convSessionMeta && ci.sessionMeta == "memory" })
+	app.rebuildConversationList(0)
+	for i, item := range app.conv.contextItems {
+		if item.sessionMeta == "memory" {
+			app.selectConvContext(i)
+			break
+		}
+	}
 	app.updateConvPreview()
 	if got := app.conv.split.Preview.View(); !strings.Contains(got, "saved todo") {
 		t.Fatalf("memory preview did not use session memory renderer: %q", got)
 	}
 }
-
 
 func TestConvPreviewUpdatesOnCursorMove(t *testing.T) {
 	app := setupConvApp(t, testEntries(), 160, 50)
@@ -792,35 +811,22 @@ func TestTabOpensPreviewWithoutFocus(t *testing.T) {
 	}
 }
 
-func TestLeftPaneTabTogglesTreeWithoutChangingRightMode(t *testing.T) {
+func TestTabMovesFocusBetweenFlowAndInspector(t *testing.T) {
 	app := setupConvApp(t, testEntries(), 160, 50)
-	app.conv.leftPaneMode = convPaneFlat
 	app.conv.rightPaneMode = previewHook
 	app.conv.split.Focus = false
 
 	app = pressKey(app, "tab")
-
-	if app.conv.leftPaneMode != convPaneTree {
-		t.Fatalf("left pane tab should switch to tree mode, got %d", app.conv.leftPaneMode)
+	if !app.conv.split.Focus {
+		t.Fatal("tab from flow should focus inspector")
 	}
 	if app.conv.rightPaneMode != previewHook {
-		t.Fatalf("left pane tab should not change right pane mode, got %d", app.conv.rightPaneMode)
+		t.Fatalf("tab should preserve detail level, got %d", app.conv.rightPaneMode)
 	}
-}
-
-func TestRightPaneTabCyclesDetailWithoutChangingLeftMode(t *testing.T) {
-	tasks := []session.TaskItem{{ID: "42", Subject: "Refactor preview", Status: "in_progress"}}
-	app := setupTreeConvApp(t, testEntries(), tasks, nil, 160, 50)
-	app.conv.split.Focus = true
-	app.conv.rightPaneMode = previewText
 
 	app = pressKey(app, "tab")
-
-	if app.conv.rightPaneMode != previewTool {
-		t.Fatalf("right pane tab should cycle to standard mode, got %d", app.conv.rightPaneMode)
-	}
-	if app.conv.leftPaneMode != convPaneTree {
-		t.Fatalf("right pane tab should not change left pane mode, got %d", app.conv.leftPaneMode)
+	if app.conv.split.Focus {
+		t.Fatal("second tab should return focus to flow")
 	}
 }
 
@@ -1202,52 +1208,27 @@ func TestVerboseToolToCompactFallsBackToPrecedingText(t *testing.T) {
 	}
 }
 
-func TestBuildEntityTreeUsesCompactLabels(t *testing.T) {
-	merged := []mergedMsg{{
-		entry: session.Entry{
-			Role: "assistant",
-			Content: []session.ContentBlock{
-				{Type: "tool_use", ID: "bash-1", ToolName: "Bash", ToolInput: `{"command":"npm test --watch --runInBand --color=always"}`},
-				{Type: "tool_result", ID: "bash-1", Text: "Command running in background with ID: bg-1."},
-			},
-		},
-	}}
-	agents := []session.Subagent{{
-		ID:          "agent-1",
-		ShortID:     "agent-1",
-		FirstPrompt: "This is a very long agent prompt that should not appear in the compact tree label",
-	}}
-	tasks := []session.TaskItem{{
-		ID:      "42",
-		Subject: "This is a very long task title that should be compacted in the tree",
-		Status:  "in_progress",
-	}}
+func TestUnifiedFlowUsesExactAgentOrigin(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	merged := []mergedMsg{
+		{entry: session.Entry{UUID: "user-1", Role: "user", Timestamp: base, Content: []session.ContentBlock{{Type: "text", Text: "start"}}}},
+		{entry: session.Entry{UUID: "assistant-1", Role: "assistant", Timestamp: base.Add(time.Second), Content: []session.ContentBlock{{Type: "tool_use", ID: "spawn-1", ToolName: "Agent"}}}},
+		{entry: session.Entry{UUID: "assistant-2", Role: "assistant", Timestamp: base.Add(2 * time.Second), Content: []session.ContentBlock{{Type: "text", Text: "later"}}}},
+	}
+	agents := []session.Subagent{{ID: "agent-1", ShortID: "agent-1", SpawnToolUseID: "spawn-1", OriginMessageUUID: "assistant-1", OriginEntryIndex: 1, Timestamp: base.Add(time.Hour)}}
+	items := buildConvItems(session.Session{}, merged, agents, nil, nil)
 
-	items := buildEntityTree(session.Session{}, merged, agents, tasks, nil, map[string]string{"agent-1": "running"})
-
-	var agentLabel, bgLabel, taskLabel string
-	for _, item := range items {
-		switch {
-		case item.kind == convAgent:
-			agentLabel = item.label
-		case item.bgTaskID != "":
-			bgLabel = item.label
-		case item.kind == convTask && item.task.ID == "42":
-			taskLabel = item.label
+	agentIdx, parentIdx := -1, -1
+	for i, item := range items {
+		if item.kind == convAgent {
+			agentIdx, parentIdx = i, item.parentIdx
 		}
 	}
-
-	if !strings.HasPrefix(agentLabel, "Agent: ") {
-		t.Fatalf("agent tree label = %q, want compact Agent prefix", agentLabel)
+	if agentIdx < 0 {
+		t.Fatal("expected agent lifecycle row")
 	}
-	if strings.Contains(agentLabel, "very long agent prompt") {
-		t.Fatalf("agent tree label should not include full prompt: %q", agentLabel)
-	}
-	if !strings.HasPrefix(bgLabel, "BG: ") {
-		t.Fatalf("background job tree label = %q, want compact BG prefix", bgLabel)
-	}
-	if !strings.HasPrefix(taskLabel, "Task: ") {
-		t.Fatalf("task tree label = %q, want compact Task prefix", taskLabel)
+	if parentIdx < 0 || items[parentIdx].merged.entry.UUID != "assistant-1" {
+		t.Fatalf("agent attached to wrong origin: parent=%d", parentIdx)
 	}
 }
 
@@ -1266,14 +1247,21 @@ func TestTreeAgentPreviewShowsConversationAndToolCalls(t *testing.T) {
 		},
 	})
 	agents := []session.Subagent{{
-		ID:          "agent-1",
-		ShortID:     "agent-1",
-		FilePath:    agentPath,
-		AgentType:   "planner",
-		FirstPrompt: "Investigate the failure",
+		ID:                "agent-1",
+		ShortID:           "agent-1",
+		FilePath:          agentPath,
+		AgentType:         "planner",
+		FirstPrompt:       "Investigate the failure",
+		SpawnToolUseID:    "spawn-1",
+		OriginMessageUUID: "parent-assistant",
+		OriginEntryIndex:  1,
 	}}
+	parentEntries := []session.Entry{
+		makeTextEntry("user", base, "parent"),
+		{UUID: "parent-assistant", Role: "assistant", Timestamp: base.Add(time.Millisecond), Content: []session.ContentBlock{{Type: "tool_use", ID: "spawn-1", ToolName: "Agent"}}},
+	}
 
-	app := setupTreeConvApp(t, []session.Entry{makeTextEntry("user", base, "parent")}, nil, agents, 160, 50)
+	app := setupTreeConvApp(t, parentEntries, nil, agents, 160, 50)
 	app.conv.rightPaneMode = previewTool
 	selectConvItemBy(t, app, func(ci convItem) bool { return ci.kind == convAgent })
 	app.updateConvPreview()
@@ -1340,6 +1328,29 @@ func TestTreeBgJobPreviewShowsCommandAndOutput(t *testing.T) {
 	}
 	if !strings.Contains(verboseFull.String(), "all tests passed") {
 		t.Fatalf("verbose bg job preview should retain tool_result output text; got %q", verboseFull.String())
+	}
+
+	// Enter follows exact provenance into the owning conversation turn,
+	// pauses live tail, and positions the inspector on the TaskOutput result.
+	app.liveTail = true
+	app.conv.split.BottomAlign = true
+	app = pressKey(app, "enter")
+	if app.liveTail || app.conv.split.BottomAlign {
+		t.Fatalf("exact result jump left live tail active: live=%t bottom=%t", app.liveTail, app.conv.split.BottomAlign)
+	}
+	if app.state != viewConversation || !app.conv.inspector.Zoom || !app.conv.split.PreviewOnly {
+		t.Fatalf("background result did not open zoomed conversation inspector: state=%v inspector=%+v", app.state, app.conv.inspector)
+	}
+	if app.conv.rightPaneMode != previewHook {
+		t.Fatalf("background result detail mode = %d, want verbose", app.conv.rightPaneMode)
+	}
+	fs := app.conv.split.Folds
+	if fs == nil || fs.BlockCursor < 0 || fs.BlockCursor >= len(fs.Entry.Content) {
+		t.Fatalf("background result block cursor is invalid: %+v", fs)
+	}
+	block := fs.Entry.Content[fs.BlockCursor]
+	if block.Type != "tool_result" || !strings.Contains(block.Text, "all tests passed") {
+		t.Fatalf("background result cursor points at %+v, want TaskOutput result", block)
 	}
 }
 
@@ -1695,166 +1706,6 @@ func TestDefaultFoldsCollapseTools(t *testing.T) {
 // TestLiveTickMsgReachesHandleLiveTailInConvView verifies that liveTickMsg
 // dispatches to handleLiveTail (not refreshLivePreview) when app.state == viewConversation,
 // even if sessPreviewLive and livePreviewSessID are set from a prior session view.
-func TestConversationPageMenuOpensWithP(t *testing.T) {
-	app := setupConvApp(t, testEntries(), 160, 40)
-	app = pressKey(app, "p")
-	if !app.convPageMenu {
-		t.Fatal("expected conversation page menu to open")
-	}
-}
-
-func TestConversationPageMenuConsumesSecondKey(t *testing.T) {
-	app := setupConvApp(t, testEntries(), 160, 40)
-	app.convPageMenu = true
-	app = pressKey(app, "o")
-	if app.convPageMenu {
-		t.Fatal("expected conversation page menu to close after selection")
-	}
-}
-
-func TestConversationPageMenuImagesPage(t *testing.T) {
-	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	entries := []session.Entry{{
-		Role:      "assistant",
-		Timestamp: base,
-		Content: []session.ContentBlock{{
-			Type:         "image",
-			Text:         "[Image: image/png]",
-			ImagePasteID: 42,
-		}},
-	}}
-	app := setupConvApp(t, entries, 160, 40)
-	app.conv.merged = filterConversation(mergeConversationTurns(entries))
-	m, _ := app.openConvImagesPage()
-	app = m.(*App)
-	if app.convPage != convPageImages {
-		t.Fatal("expected images page to open")
-	}
-	if len(app.convPageItems) != 1 {
-		t.Fatalf("expected 1 image artifact item, got %d", len(app.convPageItems))
-	}
-}
-
-func TestConversationPageBrowserUsesXPrefixedActions(t *testing.T) {
-	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	entries := []session.Entry{{
-		Role:      "assistant",
-		Timestamp: base,
-		Content: []session.ContentBlock{{
-			Type:      "tool_use",
-			ToolName:  "Write",
-			ToolInput: `{"file_path":"/tmp/example.txt","content":"hello"}`,
-		}},
-	}}
-	app := setupConvApp(t, entries, 120, 20)
-	m, _ := app.openConvFilesPage()
-	app = m.(*App)
-	if len(app.convPageItems) == 0 {
-		t.Fatal("expected file page items")
-	}
-
-	app = pressKey(app, "e")
-	if app.convPageActionsMenu {
-		t.Fatal("direct e should not open actions in conversation page browser")
-	}
-
-	app = pressKey(app, "y")
-	if app.convPageActionsMenu {
-		t.Fatal("direct y should not open actions in conversation page browser")
-	}
-
-	app = pressKey(app, "x")
-	if !app.convPageActionsMenu {
-		t.Fatal("x should open conversation page actions menu")
-	}
-
-	app = pressKey(app, "e")
-	if app.convPageActionsMenu {
-		t.Fatal("xe should consume and close the actions menu")
-	}
-}
-
-func TestConversationPageBrowserNavigationKeys(t *testing.T) {
-	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	entries := []session.Entry{{
-		Role:      "assistant",
-		Timestamp: base,
-		Content: []session.ContentBlock{{
-			Type:     "tool_use",
-			ToolName: "Bash",
-			ToolInput: strings.Join([]string{
-				"https://a.example.com/path-a",
-				"https://b.example.com/path-b",
-				"https://c.example.com/path-c",
-				"https://d.example.com/path-d",
-				"https://e.example.com/path-e",
-			}, "\n"),
-		}},
-	}}
-	app := setupConvApp(t, entries, 120, 20)
-	m, _ := app.openConvURLsPage()
-	app = m.(*App)
-	if len(app.convPageItems) < 5 {
-		t.Fatalf("expected multiple URL items, got %d", len(app.convPageItems))
-	}
-
-	app = pressKey(app, "G")
-	if got, want := app.convPageCursor, len(app.convPageItems)-1; got != want {
-		t.Fatalf("G should jump to last item: got %d want %d", got, want)
-	}
-
-	app = pressKey(app, "g")
-	if app.convPageCursor != 0 {
-		t.Fatalf("g should jump to first item: got %d", app.convPageCursor)
-	}
-
-	app = pressKey(app, "pgdown")
-	if app.convPageCursor <= 0 {
-		t.Fatalf("pgdown should move cursor down by a page: got %d", app.convPageCursor)
-	}
-
-	app = pressKey(app, "pgup")
-	if app.convPageCursor != 0 {
-		t.Fatalf("pgup should move cursor back toward top: got %d", app.convPageCursor)
-	}
-}
-
-func TestConversationPageBrowserSplitStaysSeparated(t *testing.T) {
-	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	entries := []session.Entry{{
-		Role:      "assistant",
-		Timestamp: base,
-		Content: []session.ContentBlock{{
-			Type:      "tool_use",
-			ToolName:  "Write",
-			ToolInput: `{"file_path":"/tmp/really/long/path/that/should/not/break/the/layout/file.txt","content":"` + strings.Repeat("very long content without natural wrapping ", 30) + `"}`,
-		}},
-	}}
-	app := setupConvApp(t, entries, 100, 24)
-	m, _ := app.openConvChangesPage()
-	app = m.(*App)
-
-	view := app.renderConvPageBrowser()
-	lines := strings.Split(view, "\n")
-	if len(lines) == 0 {
-		t.Fatal("expected non-empty browser view")
-	}
-	for i, line := range lines {
-		if lipgloss.Width(line) > app.width {
-			t.Fatalf("line %d exceeds width: got %d want <= %d\n%q", i, lipgloss.Width(line), app.width, line)
-		}
-	}
-
-	app = sendResize(app, 80, 24)
-	view = app.renderConvPageBrowser()
-	lines = strings.Split(view, "\n")
-	for i, line := range lines {
-		if lipgloss.Width(line) > app.width {
-			t.Fatalf("after resize line %d exceeds width: got %d want <= %d\n%q", i, lipgloss.Width(line), app.width, line)
-		}
-	}
-}
-
 func TestBuildStandardEntryPlacesArtifactsNearRelatedText(t *testing.T) {
 	entry := session.Entry{
 		Role: "assistant",
@@ -2122,70 +1973,163 @@ func TestLiveTailSelectsLastMessageNotAgentOrTask(t *testing.T) {
 	}
 }
 
-func TestHandleLiveTailMsgFullFollowsNewLastMessage(t *testing.T) {
-	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	initial := []session.Entry{
-		makeTextEntry("user", base, "Hello"),
-		makeTextEntry("assistant", base.Add(time.Second), "Reply 1"),
+func setupFixedContextConvApp(t *testing.T, width, height int) *App {
+	t.Helper()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	entries := make([]session.Entry, 0, 24)
+	for i := 0; i < 24; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		entry := makeTextEntry(role, base.Add(time.Duration(i)*time.Second), fmt.Sprintf("fixed-context-message-%02d", i))
+		entry.UUID = fmt.Sprintf("fixed-%02d", i)
+		entries = append(entries, entry)
 	}
-	path := writeSessionJSONL(t, initial)
-
-	app := setupConvApp(t, initial, 120, 30)
-	app.currentSess.FilePath = path
-	app.conv.sess.FilePath = path
-	app.state = viewMessageFull
-	app.msgFull.sess = app.currentSess
-	app.msgFull.messages = app.conv.messages
-	app.msgFull.merged = app.conv.merged
-	app.msgFull.agents = app.conv.agents
-	app.navToMsgFull(len(app.msgFull.merged) - 1)
-	app.liveTail = true
-
-	updated := append(append([]session.Entry{}, initial...), makeTextEntry("user", base.Add(2*time.Second), "Follow-up"))
-	path = writeSessionJSONL(t, updated)
-	app.msgFull.sess.FilePath = path
-
-	app.handleLiveTailMsgFull()
-
-	if got, want := app.msgFull.idx, len(app.msgFull.merged)-1; got != want {
-		t.Fatalf("msgFull idx = %d, want %d", got, want)
+	path := writeSessionJSONL(t, entries)
+	sess := session.Session{
+		ID:          "fixed-context",
+		ShortID:     "fixed",
+		FilePath:    path,
+		ProjectPath: t.TempDir(),
+		ProjectName: "fixed",
+		HasMemory:   true,
+		HasPlan:     true,
+		Todos:       []session.TodoItem{{Content: "fixed todo", Status: "pending"}},
 	}
-	if got := app.msgFull.merged[app.msgFull.idx].entry.Content[0].Text; got != "Follow-up" {
-		t.Fatalf("live tail should follow new last message, got %q", got)
+	app := NewApp([]session.Session{sess}, Config{})
+	model, _ := app.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	app = model.(*App)
+	app.openConversation(sess)
+	return app
+}
+
+func TestFixedContextRemainsVisibleAcrossBodyPages(t *testing.T) {
+	app := setupFixedContextConvApp(t, 100, 14)
+	if len(app.conv.contextItems) != 3 {
+		t.Fatalf("context rows = %d, want Flow/Memory/Tasks", len(app.conv.contextItems))
+	}
+	if app.convList.Paginator.PerPage >= len(app.convList.Items()) {
+		t.Fatalf("test requires multiple body pages: perPage=%d items=%d", app.convList.Paginator.PerPage, len(app.convList.Items()))
+	}
+
+	app.selectConvBody(0)
+	app = pressKey(app, "pgdown")
+	if app.convList.Paginator.Page == 0 {
+		t.Fatal("pgdown did not move the chronological body to a later page")
+	}
+	plain := stripANSI(app.renderConvSplit())
+	for _, label := range []string{"Session Flow", "Session Memory", "Session Tasks/Plan"} {
+		if !strings.Contains(plain, label) {
+			t.Fatalf("fixed context %q disappeared on body page %d: %q", label, app.convList.Paginator.Page, plain)
+		}
+	}
+	if app.convList.Height() < 1 {
+		t.Fatalf("fixed header consumed the entire body height: %d", app.convList.Height())
 	}
 }
 
-func TestHandleLiveTailMsgFullRefreshesAllMessagesView(t *testing.T) {
-	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	initial := []session.Entry{
-		makeTextEntry("user", base, "Hello"),
-		makeTextEntry("assistant", base.Add(time.Second), "Reply 1"),
+func TestFixedContextKeyboardCrossesBodyBoundary(t *testing.T) {
+	app := setupFixedContextConvApp(t, 120, 24)
+	item, ok := app.selectedConversationItem()
+	if !ok || item.sessionMeta != "summary" {
+		t.Fatalf("initial selection = %#v, want Session Flow", item)
 	}
-	path := writeSessionJSONL(t, initial)
 
-	app := setupConvApp(t, initial, 120, 30)
-	app.currentSess.FilePath = path
-	app.conv.sess.FilePath = path
-	app.state = viewMessageFull
-	app.msgFull.sess = app.currentSess
-	app.msgFull.messages = app.conv.messages
-	app.msgFull.merged = app.conv.merged
-	app.msgFull.agents = app.conv.agents
-	app.msgFull.allMessages = true
-	app.msgFull.vp = viewport.New(app.width, ContentHeight(app.height))
-	app.msgFull.content = renderAllMessages(app.msgFull.merged, app.width)
-	app.msgFull.vp.SetContent(app.msgFull.content)
-
-	updated := append(append([]session.Entry{}, initial...), makeTextEntry("user", base.Add(2*time.Second), "Newest tail line"))
-	path = writeSessionJSONL(t, updated)
-	app.msgFull.sess.FilePath = path
-
-	app.handleLiveTailMsgFull()
-
-	if !strings.Contains(app.msgFull.content, "Newest tail line") {
-		t.Fatalf("allMessages content did not refresh with latest message")
+	app = pressKey(app, "down")
+	item, _ = app.selectedConversationItem()
+	if item.sessionMeta != "memory" || !strings.Contains(stripANSI(app.conv.split.Preview.View()), "fixed todo") {
+		t.Fatalf("down did not select Session Memory and its renderer: %#v", item)
 	}
-	if app.msgFull.vp.YOffset != max(app.msgFull.vp.TotalLineCount()-app.msgFull.vp.Height, 0) {
-		t.Fatalf("allMessages live tail should scroll to bottom, got YOffset=%d", app.msgFull.vp.YOffset)
+	app = pressKey(app, "down")
+	item, _ = app.selectedConversationItem()
+	if item.sessionMeta != "tasksplan" {
+		t.Fatalf("second down selected %#v, want Session Tasks/Plan", item)
+	}
+	app = pressKey(app, "down")
+	item, _ = app.selectedConversationItem()
+	if app.conv.contextActive || item.kind != convMsg || app.convList.Index() != 0 {
+		t.Fatalf("third down did not cross into first body row: active=%t idx=%d item=%#v", app.conv.contextActive, app.convList.Index(), item)
+	}
+	app = pressKey(app, "up")
+	item, _ = app.selectedConversationItem()
+	if !app.conv.contextActive || item.sessionMeta != "tasksplan" {
+		t.Fatalf("up did not cross back into fixed context: %#v", item)
+	}
+	app = pressKey(app, "pgdown")
+	item, _ = app.selectedConversationItem()
+	if app.conv.contextActive || item.kind != convMsg || app.convList.Index() != 0 {
+		t.Fatalf("pgdown from context did not enter first body row: active=%t idx=%d item=%#v", app.conv.contextActive, app.convList.Index(), item)
+	}
+	app = pressKey(app, "pgup")
+	item, _ = app.selectedConversationItem()
+	if !app.conv.contextActive || item.sessionMeta != "tasksplan" {
+		t.Fatalf("pgup from first body page did not return to context: %#v", item)
+	}
+	app = pressKey(app, "home")
+	item, _ = app.selectedConversationItem()
+	if item.sessionMeta != "summary" {
+		t.Fatalf("home selected %#v, want Session Flow", item)
+	}
+	app = pressKey(app, "end")
+	item, _ = app.selectedConversationItem()
+	if app.conv.contextActive || item.kind != convMsg || app.convList.Index() != len(app.convList.Items())-1 {
+		t.Fatalf("end did not select final body row: active=%t idx=%d item=%#v", app.conv.contextActive, app.convList.Index(), item)
+	}
+}
+
+func TestFixedContextFilterAndResizePreserveBodyIdentity(t *testing.T) {
+	app := setupFixedContextConvApp(t, 110, 18)
+	target := 12
+	app.selectConvBody(target)
+	selectedID := app.selectedConversationItemID()
+	applyListFilter(&app.convList, "fixed-context-message-12")
+	if len(app.convList.VisibleItems()) != 1 {
+		t.Fatalf("filtered body rows = %d, want 1", len(app.convList.VisibleItems()))
+	}
+	plain := stripANSI(app.renderConvSplit())
+	if !strings.Contains(plain, "Session Flow") || !strings.Contains(plain, "Session Memory") || !strings.Contains(plain, "Session Tasks/Plan") {
+		t.Fatalf("filter hid fixed context: %q", plain)
+	}
+	app.resetActiveFilter()
+	if got := app.selectedConversationItemID(); got != selectedID {
+		t.Fatalf("filter reset selected %q, want %q", got, selectedID)
+	}
+
+	app = sendResize(app, 85, 13)
+	if got := app.selectedConversationItemID(); got != selectedID {
+		t.Fatalf("resize selected %q, want %q", got, selectedID)
+	}
+	plain = stripANSI(app.renderConvSplit())
+	if !strings.Contains(plain, "Session Flow") || app.convList.Height() < 1 {
+		t.Fatalf("resize hid fixed context or body: height=%d view=%q", app.convList.Height(), plain)
+	}
+}
+
+func TestFixedContextRefreshAndLiveTailPreserveLogicalSelection(t *testing.T) {
+	app := setupFixedContextConvApp(t, 120, 20)
+	app.selectConvBody(8)
+	selectedID := app.selectedConversationItemID()
+	before := len(app.conv.contextItems)
+
+	app.conv.sess.HasMemory = false
+	app.conv.sess.HasPlan = false
+	app.conv.sess.Todos = nil
+	app.refreshConversation()
+	if got := app.selectedConversationItemID(); got != selectedID {
+		t.Fatalf("refresh selected %q, want %q", got, selectedID)
+	}
+	if len(app.conv.contextItems) >= before {
+		t.Fatalf("refresh did not reflect changed context availability: before=%d after=%d", before, len(app.conv.contextItems))
+	}
+
+	app.selectConvContext(0)
+	app.toggleConvLiveTail()
+	item, ok := app.selectedConversationItem()
+	if !ok || app.conv.contextActive || item.kind != convMsg {
+		t.Fatalf("live tail did not switch to latest body message: active=%t item=%#v", app.conv.contextActive, item)
+	}
+	if !strings.Contains(stripANSI(app.renderConvSplit()), "Session Flow") {
+		t.Fatal("live tail hid fixed context")
 	}
 }

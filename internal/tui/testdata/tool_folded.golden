@@ -3,9 +3,7 @@
 
 Let me check that file.
 
-Tool: Read  /tmp/test.go
-Result: package main
-                    
-func main() {}      
+⏺ Read /tmp/test.go
+⎿ ✓ package main (+2 lines)
 The file contains a simple main function.
 

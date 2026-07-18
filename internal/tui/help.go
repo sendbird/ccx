@@ -122,8 +122,7 @@ func (a *App) convHelpLine(badges string) string {
 				h = joinHelpSections(h, interactionHelpText(a.conversationPreviewStructuredHelpActions(next)...))
 			}
 		} else {
-			next := convPaneModeLabels[(a.conv.leftPaneMode+1)%len(convPaneModeLabels)]
-			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions(next)...))
+			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions("inspector")...))
 		}
 		h = joinHelpSections(h, interactionHelpText(labelAction("", "esc", "close"), resizeHelpAction(a)))
 	} else {
@@ -207,49 +206,4 @@ func (a *App) pluginsHelpLine() string {
 		return "  " + badges + formatHelp(" "+h)
 	}
 	return "  " + formatHelp(h)
-}
-
-// --- Message-full view help ---
-
-func (a *App) msgFullHelpLine() string {
-	if a.msgFull.blockFiltering {
-		return "  " + a.msgFull.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
-	}
-	if a.msgFull.searching {
-		return "  " + a.msgFull.searchInput.View() + helpStyle.Render("  enter:search esc:cancel")
-	}
-	if a.msgFull.allMessages {
-		if a.copyModeActive {
-			return formatHelp(joinHelpSections("all messages", interactionHelpText(a.messageFullCopyModeHelpActions()...)))
-		}
-		h := joinHelpSections("all messages", interactionHelpText(a.messageFullAllMessagesHelpActions()...))
-		if a.msgFull.searchTerm != "" {
-			h = joinHelpSections(h, fmt.Sprintf("[%d/%d]", a.msgFull.searchIdx+1, len(a.msgFull.searchLines)), "n/N:match")
-		}
-		return formatHelp(joinHelpSections(h, "esc:back", "q:quit"))
-	}
-
-	pos := fmt.Sprintf("#%d/%d", a.msgFull.idx+1, len(a.msgFull.merged))
-	if a.copyModeActive {
-		return formatHelp(joinHelpSections(pos, interactionHelpText(a.messageFullCopyModeHelpActions()...)))
-	}
-
-	var h string
-	selCount := len(a.msgFull.folds.Selected)
-	switch {
-	case selCount > 0:
-		h = joinHelpSections(pos, fmt.Sprintf("[%d sel]", selCount), interactionHelpText(a.messageFullSelectedHelpActions()...))
-	case a.msgFull.searchTerm != "":
-		h = joinHelpSections(pos, fmt.Sprintf("[%d/%d]", a.msgFull.searchIdx+1, len(a.msgFull.searchLines)), interactionHelpText(a.messageFullSearchHelpActions()...))
-	default:
-		h = joinHelpSections(pos, interactionHelpText(a.messageFullDetailHelpActions()...))
-	}
-
-	if a.msgFull.folds.BlockFilter != "" {
-		vis := countVisibleBlocks(a.msgFull.folds.BlockVisible)
-		total := len(a.msgFull.folds.Entry.Content)
-		filterInfo := filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, a.msgFull.folds.BlockFilter))
-		return filterInfo + " " + formatHelp(joinHelpSections(h, "esc:back", "q:quit"))
-	}
-	return formatHelp(joinHelpSections(h, "esc:back", "q:quit"))
 }

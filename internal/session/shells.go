@@ -2,6 +2,8 @@ package session
 
 import (
 	"encoding/json"
+	"regexp"
+	"strings"
 )
 
 type shellInputBash struct {
@@ -36,7 +38,7 @@ func (s Session) ActiveShellJobs() []ShellJob {
 	var out []ShellJob
 	for _, j := range s.ShellJobs {
 		switch j.Status {
-		case "killed", "stopped":
+		case "killed", "stopped", "completed", "failed":
 			continue
 		}
 		out = append(out, j)
@@ -162,19 +164,54 @@ func AwaitingUserInput(entries []Entry) bool {
 // LoadShellJobsFromEntries scans parsed entries for background Bash and Monitor
 // tool invocations. It correlates BashOutput/KillShell calls (which carry a
 // tool_use_id) back to the originating shell so we can show how many polls
-// happened and whether the shell was explicitly killed.
+// happened and whether the shell was explicitly killed. It also inspects
+// BashOutput tool_result content and <task-notification> blocks for completion
+// records, promoting a job's status to "completed" or "failed" when the shell
+// verifiably exited. When no completion signal is detectable, statuses stay at
+// the conservative "running"/"polled"/"killed"/"stopped" set.
 //
 // Entries are assumed to be in chronological order, matching how the JSONL is
 // stored on disk.
 func LoadShellJobsFromEntries(entries []Entry) []ShellJob {
 	var jobs []ShellJob
-	byID := make(map[string]int) // tool_use ID → index in jobs
+	byID := make(map[string]int)         // shell tool_use ID → index in jobs
+	pollShell := make(map[string]string) // BashOutput tool_use ID → shell tool_use ID
 
 	for _, e := range entries {
 		for _, b := range e.Content {
-			if b.Type != "tool_use" {
+			switch b.Type {
+			case "tool_result":
+				// A BashOutput result may carry an explicit shell exit status.
+				shellID, ok := pollShell[b.ID]
+				if !ok {
+					continue
+				}
+				idx, ok := byID[shellID]
+				if !ok {
+					continue
+				}
+				if st := shellResultStatus(b.Text); st != "" {
+					jobs[idx].Status = st
+					if !e.Timestamp.IsZero() {
+						jobs[idx].LastEventAt = e.Timestamp
+					}
+				}
+				continue
+
+			case "text", "system_tag":
+				// task-notification blocks record background-shell completion:
+				// <tool-use-id>toolu_…</tool-use-id> … <status>completed|failed</status>
+				if strings.Contains(b.Text, "tool-use-id") {
+					applyTaskNotification(b.Text, e, byID, jobs)
+				}
+				continue
+
+			case "tool_use":
+				// handled below
+			default:
 				continue
 			}
+
 			switch b.ToolName {
 			case "Bash":
 				var in shellInputBash
@@ -230,6 +267,9 @@ func LoadShellJobsFromEntries(entries []Entry) []ShellJob {
 					continue
 				}
 				if idx, ok := byID[in.ToolUseID]; ok {
+					if b.ID != "" {
+						pollShell[b.ID] = in.ToolUseID
+					}
 					jobs[idx].PollCount++
 					if !e.Timestamp.IsZero() {
 						jobs[idx].LastEventAt = e.Timestamp
@@ -255,4 +295,55 @@ func LoadShellJobsFromEntries(entries []Entry) []ShellJob {
 	}
 
 	return jobs
+}
+
+// shellStatusRe matches an explicit shell exit status embedded in a result or
+// notification body, e.g. "<status>completed</status>".
+var shellStatusRe = regexp.MustCompile(`<status>(completed|failed|stopped)</status>`)
+
+// shellToolUseIDRe pulls the <tool-use-id> out of a task-notification body.
+var shellToolUseIDRe = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
+
+// shellResultStatus inspects a BashOutput tool_result body for an explicit
+// completion record. Returns "completed"/"failed"/"stopped" when the shell
+// verifiably exited, or "" when undetectable (keep the current status).
+func shellResultStatus(text string) string {
+	if text == "" {
+		return ""
+	}
+	if m := shellStatusRe.FindStringSubmatch(text); m != nil {
+		return m[1]
+	}
+	// Prose form: "exited with code N" / "completed (exit code N)".
+	if strings.Contains(text, "exit code 0") || strings.Contains(text, "exited with code 0") {
+		return "completed"
+	}
+	if strings.Contains(text, "exited with code") || strings.Contains(text, "(exit code") {
+		return "failed"
+	}
+	return ""
+}
+
+// applyTaskNotification parses a <task-notification> body carrying a
+// <tool-use-id> back-reference to a background shell and promotes that job's
+// status when the notification records completion or failure.
+func applyTaskNotification(text string, e Entry, byID map[string]int, jobs []ShellJob) {
+	idm := shellToolUseIDRe.FindStringSubmatch(text)
+	if idm == nil {
+		return
+	}
+	idx, ok := byID[idm[1]]
+	if !ok {
+		return
+	}
+	st := shellStatusRe.FindStringSubmatch(text)
+	if st == nil {
+		return
+	}
+	// "stopped" from a notification is already covered by the conservative
+	// status set; completed/failed are the new verifiable states.
+	jobs[idx].Status = st[1]
+	if !e.Timestamp.IsZero() {
+		jobs[idx].LastEventAt = e.Timestamp
+	}
 }

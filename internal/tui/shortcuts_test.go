@@ -30,11 +30,8 @@ func TestDefaultShortcuts(t *testing.T) {
 	if !ok {
 		t.Fatal("expected conversation view shortcuts")
 	}
-	if conv.Left["1"] != "pane:flat" {
-		t.Errorf("conversation left 1 = %q, want pane:flat", conv.Left["1"])
-	}
-	if conv.Left["2"] != "pane:tree" {
-		t.Errorf("conversation left 2 = %q, want pane:tree", conv.Left["2"])
+	if len(conv.Left) != 0 {
+		t.Errorf("conversation left shortcuts = %v, want none for unified flow", conv.Left)
 	}
 	if conv.Right["3"] != "detail:verbose" {
 		t.Errorf("conversation right 3 = %q, want detail:verbose", conv.Right["3"])
@@ -99,8 +96,8 @@ func TestMergeShortcuts(t *testing.T) {
 		t.Errorf("newview left 1 = %q, want custom:cmd", dst["newview"].Left["1"])
 	}
 	// Other views preserved
-	if dst["conversation"].Left["1"] != "pane:flat" {
-		t.Errorf("conversation left 1 = %q, want pane:flat (preserved)", dst["conversation"].Left["1"])
+	if len(dst["conversation"].Left) != 0 {
+		t.Errorf("conversation left shortcuts = %v, want none", dst["conversation"].Left)
 	}
 }
 
@@ -148,7 +145,6 @@ func TestCurrentViewName(t *testing.T) {
 	}{
 		{viewSessions, "sessions"},
 		{viewConversation, "conversation"},
-		{viewMessageFull, "messagefull"},
 		{viewConfig, "config"},
 		{viewPlugins, "plugins"},
 		{viewGlobalStats, "stats"},

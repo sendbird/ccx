@@ -15,34 +15,46 @@ var (
 	cursorBg = lipgloss.NewStyle().Background(lipgloss.Color("#2A3A5C")).Foreground(lipgloss.Color("#E2E8F0"))
 )
 
+func (a *App) renderedInspectorText() string {
+	if a.conv.inspector.Tab == inspectorConversation || a.conv.inspector.Rendered == "" {
+		return ""
+	}
+	return strings.TrimRight(stripANSI(a.conv.inspector.Rendered), "\n")
+}
+
 func (a *App) enterCopyMode() {
 	vp := a.activeDetailVP()
 	if vp == nil {
 		return
 	}
 
-	var content string
 	switch a.state {
-	case viewMessageFull:
-		content = a.msgFull.content
 	case viewConversation:
-		if a.conv.rightPaneMode != previewText {
-			return
+		var chunks []string
+		if content := a.renderedInspectorText(); content != "" {
+			chunks = strings.Split(content, "\n")
+		} else if a.conv.rightPaneMode == previewText {
+			item, ok := a.selectedConversationItem()
+			if !ok {
+				return
+			}
+			var entry session.Entry
+			switch item.kind {
+			case convMsg:
+				entry = item.merged.entry
+			case convAgent:
+				entry = buildAgentPreviewEntry(item.agent)
+			default:
+				return
+			}
+			chunks = previewTextChunks(entry)
+		} else if a.conv.split.Folds != nil {
+			for _, block := range a.conv.split.Folds.Entry.Content {
+				if text := blockPlainText(block); text != "" {
+					chunks = append(chunks, strings.Split(text, "\n")...)
+				}
+			}
 		}
-		item, ok := a.convList.SelectedItem().(convItem)
-		if !ok {
-			return
-		}
-		var entry session.Entry
-		switch item.kind {
-		case convMsg:
-			entry = item.merged.entry
-		case convAgent:
-			entry = buildAgentPreviewEntry(item.agent)
-		default:
-			return
-		}
-		chunks := previewTextChunks(entry)
 		if len(chunks) == 0 {
 			return
 		}
@@ -53,32 +65,19 @@ func (a *App) enterCopyMode() {
 		a.renderCopyMode()
 		return
 	}
-
-	a.copyLines = strings.Split(stripANSI(content), "\n")
-	a.copyModeActive = true
-	a.copyCursor = vp.YOffset
-	a.copyAnchor = -1
-	a.renderCopyMode()
 }
 
 func (a *App) exitCopyMode() {
 	a.copyModeActive = false
-	vp := a.activeDetailVP()
-	if vp == nil {
+	if a.state != viewConversation {
 		return
 	}
-	offset := vp.YOffset
-	switch a.state {
-	case viewMessageFull:
-		a.refreshMsgFullPreview()
-	}
-	vp.YOffset = offset
+	a.conv.split.CacheKey = ""
+	a.updateConvPreview()
 }
 
 func (a *App) activeDetailVP() *viewport.Model {
 	switch a.state {
-	case viewMessageFull:
-		return &a.msgFull.vp
 	case viewConversation:
 		if a.conv.split.Show && a.conv.split.Focus {
 			return &a.conv.split.Preview
@@ -222,6 +221,11 @@ func (a *App) renderCopyMode() {
 // those blocks are copied; otherwise the block under the cursor is copied. When
 // no fold state exists yet, falls back to the message-level text.
 func (a *App) copyConvSelection() {
+	if text := a.renderedInspectorText(); text != "" {
+		copyToClipboard(text)
+		a.copiedMsg = "Copied inspector!"
+		return
+	}
 	sp := &a.conv.split
 	if sp.Folds == nil || len(sp.Folds.Entry.Content) == 0 {
 		a.copyConvSelectedMessage()
@@ -268,7 +272,7 @@ func (a *App) copyConvSelection() {
 // copyConvSelectedMessage copies the full text of the currently selected
 // conversation list item, used when there is no block-level selection.
 func (a *App) copyConvSelectedMessage() {
-	item, ok := a.convList.SelectedItem().(convItem)
+	item, ok := a.selectedConversationItem()
 	if !ok {
 		a.copiedMsg = "Nothing to copy"
 		return

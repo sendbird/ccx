@@ -14,7 +14,7 @@ import (
 	"github.com/sendbird/ccx/internal/session"
 )
 
-// --- Conversation/message-full actions menu ---
+// --- Conversation inspector actions menu ---
 
 // handleConvActionsMenu processes key events for the conversation actions menu.
 func (a *App) handleConvActionsMenu(key string) (tea.Model, tea.Cmd) {
@@ -22,52 +22,23 @@ func (a *App) handleConvActionsMenu(key string) (tea.Model, tea.Cmd) {
 	actions := a.conversationActionMenuActions()
 	switch {
 	case interactionKeyMatches(actions, key, interactionActionURLs):
-		if a.state == viewMessageFull {
-			return a.openMsgFullURLMenu()
-		}
-		return a.openConvURLMenu()
+		a.openInspector(inspectorRefs, a.conv.inspector.Scope, false)
 	case interactionKeyMatches(actions, key, interactionActionFiles):
-		if a.state == viewMessageFull {
-			return a.openMsgFullFilesMenu()
-		}
-		return a.openConvFilesMenu()
+		a.openInspector(inspectorFiles, a.conv.inspector.Scope, false)
 	case interactionKeyMatches(actions, key, interactionActionChanges):
-		if a.state == viewMessageFull {
-			return a.openMsgFullChangesMenu()
-		}
-		return a.openConvChangesMenu()
+		a.openInspector(inspectorChanges, a.conv.inspector.Scope, false)
 	case interactionKeyMatches(actions, key, interactionActionCopy):
-		if a.state == viewMessageFull {
-			a.copyMsgFullBlocks()
-			return a, nil
-		}
 		a.copyConvSelection()
-		return a, nil
 	}
 	return a, nil
 }
 
-// renderConvActionsHintBox renders the actions hint box for conversation/message-full views.
+// renderConvActionsHintBox renders the conversation inspector actions hint box.
 func (a *App) renderConvActionsHintBox() string {
 	return renderInteractionHintBox([][]interactionAction{a.conversationActionMenuActions()}, "esc:cancel")
 }
 
 // --- URL menu state & handlers ---
-
-// openConvURLMenu opens the URL menu scoped to the conversation context.
-func (a *App) openConvURLMenu() (tea.Model, tea.Cmd) {
-	return a.openScopedMenu(extract.BlockURLs, extract.SessionURLs, "")
-}
-
-// openMsgFullURLMenu opens the URL menu scoped to the message-full context.
-func (a *App) openMsgFullURLMenu() (tea.Model, tea.Cmd) {
-	return a.openScopedMenu(extract.BlockURLs, extract.SessionURLs, "")
-}
-
-// openConvFilesMenu opens the file paths menu scoped by conversation context.
-func (a *App) openConvFilesMenu() (tea.Model, tea.Cmd) {
-	return a.openScopedMenu(extract.BlockFilePaths, extract.SessionFilePaths, "files")
-}
 
 func changeItemLabel(ch extract.ChangeItem) string {
 	label := ch.Item.Label + "  " + ch.Summary
@@ -90,68 +61,6 @@ func changeItemsFromSlice(changes []extract.ChangeItem) ([]extract.Item, map[str
 		})
 	}
 	return items, cmap
-}
-
-func blockChangeItems(blocks []session.ContentBlock) []extract.Item {
-	items, _ := changeItemsFromSlice(extract.BlockChanges(blocks))
-	return items
-}
-
-func sessionChangeItems(filePath string) []extract.Item {
-	items, _ := changeItemsFromSlice(extract.SessionChanges(filePath))
-	return items
-}
-
-func (a *App) openConvChangesMenu() (tea.Model, tea.Cmd) {
-	return a.openScopedChangesMenu()
-}
-
-func (a *App) openMsgFullChangesMenu() (tea.Model, tea.Cmd) {
-	return a.openScopedChangesMenu()
-}
-
-// openScopedChangesMenu is like openScopedMenu but preserves ChangeItem data for diff preview.
-func (a *App) openScopedChangesMenu() (tea.Model, tea.Cmd) {
-	scopeLabel := func(base string) string { return base + " changes" }
-
-	tryOpen := func(changes []extract.ChangeItem, scope string) (tea.Model, tea.Cmd, bool) {
-		if len(changes) == 0 {
-			return nil, nil, false
-		}
-		items, cmap := changeItemsFromSlice(changes)
-		a.urlChangeMap = cmap
-		a.initDiffViewport()
-		m, cmd := a.openURLMenuFromItems(items, scope)
-		return m, cmd, true
-	}
-
-	if a.state == viewMessageFull {
-		fs := &a.msgFull.folds
-		if fs.Entry.Role != "" {
-			if m, cmd, ok := tryOpen(extract.BlockChanges(fs.Entry.Content), scopeLabel("message")); ok {
-				return m, cmd
-			}
-		}
-	} else {
-		sp := &a.conv.split
-		if sp.Show && sp.Folds != nil && sp.Folds.Entry.Role != "" {
-			if m, cmd, ok := tryOpen(extract.BlockChanges(sp.Folds.Entry.Content), scopeLabel("message")); ok {
-				return m, cmd
-			}
-		}
-		if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
-			if m, cmd, ok := tryOpen(extract.BlockChanges(item.merged.entry.Content), scopeLabel("message")); ok {
-				return m, cmd
-			}
-		}
-	}
-
-	// Fall back: entire session with timestamps
-	changes := extract.SessionChanges(a.currentSess.FilePath)
-	items, cmap := changeItemsFromSlice(changes)
-	a.urlChangeMap = cmap
-	a.initDiffViewport()
-	return a.openURLMenuFromItems(items, scopeLabel("session"))
 }
 
 func (a *App) initDiffViewport() {
@@ -212,59 +121,6 @@ func (a *App) updateChangeDiffPreview() {
 	}
 }
 
-// openMsgFullFilesMenu opens the file paths menu scoped by message-full context.
-func (a *App) openMsgFullFilesMenu() (tea.Model, tea.Cmd) {
-	return a.openScopedMenu(extract.BlockFilePaths, extract.SessionFilePaths, "files")
-}
-
-// openScopedMenu tries progressively wider scopes to extract items.
-// blockFn extracts from content blocks, sessionFn from a file path.
-// suffix is appended to scope labels (e.g. "files" → "message files").
-func (a *App) openScopedMenu(
-	blockFn func([]session.ContentBlock) []extract.Item,
-	sessionFn func(string) []extract.Item,
-	suffix string,
-) (tea.Model, tea.Cmd) {
-	scopeLabel := func(base string) string {
-		if suffix != "" {
-			return base + " " + suffix
-		}
-		return base
-	}
-
-	// Message-full view: try current block first
-	if a.state == viewMessageFull {
-		fs := &a.msgFull.folds
-		if suffix == "" && fs.BlockCursor >= 0 && fs.BlockCursor < len(fs.Entry.Content) {
-			if items := blockFn([]session.ContentBlock{fs.Entry.Content[fs.BlockCursor]}); len(items) > 0 {
-				return a.openURLMenuFromItems(items, scopeLabel("block"))
-			}
-		}
-		if fs.Entry.Role != "" {
-			if items := blockFn(fs.Entry.Content); len(items) > 0 {
-				return a.openURLMenuFromItems(items, scopeLabel("message"))
-			}
-		}
-	} else {
-		// Conversation view: try focused preview → selected list item
-		sp := &a.conv.split
-		if sp.Show && sp.Folds != nil && sp.Folds.Entry.Role != "" {
-			if items := blockFn(sp.Folds.Entry.Content); len(items) > 0 {
-				return a.openURLMenuFromItems(items, scopeLabel("message"))
-			}
-		}
-		if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
-			if items := blockFn(item.merged.entry.Content); len(items) > 0 {
-				return a.openURLMenuFromItems(items, scopeLabel("message"))
-			}
-		}
-	}
-
-	// Fall back: entire session
-	return a.openURLMenuFromItems(sessionFn(a.currentSess.FilePath), scopeLabel("session"))
-}
-
-// openURLMenuFromItems opens the URL menu with pre-extracted items and a scope label.
 func (a *App) openURLMenuFromItems(items []extract.Item, scope string) (tea.Model, tea.Cmd) {
 	if len(items) == 0 {
 		if strings.Contains(scope, "files") || strings.Contains(scope, "changes") {

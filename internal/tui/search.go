@@ -177,7 +177,7 @@ func (a *App) openSearchResult(result session.SearchResult) {
 				// Check all entries in the merged range
 				for j := item.merged.startIdx; j <= item.merged.endIdx; j++ {
 					if j < len(a.conv.messages) && a.conv.messages[j].UUID == targetUUID {
-						a.convList.Select(idx)
+						a.selectConvBody(idx)
 						a.updateConvPreview()
 						return
 					}

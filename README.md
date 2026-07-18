@@ -201,54 +201,39 @@ user: error -test                     # User messages with "error", excluding "t
 assistant: "I recommend" -deprecated  # Complex combination
 ```
 
-### Conversation View
+### Unified Session Flow
 
-Drill into any session to read the full conversation.
+Drill into any session to see one chronological spine containing conversation turns, subagents, workflow runs and phases, shell/monitor jobs, tasks, and decision markers. Lifecycle rows are inserted at their exact originating turn rather than collected in a separate hierarchy.
 
-- **Split-pane preview** (`Tab`/`→`) — foldable message detail with three detail levels:
-  - **Compact** — text blocks only
-  - **Standard** — text + per-turn artifact list (images, files, changes, URLs)
-  - **Verbose** — text + tool blocks + full hook details
-- **Kitty image preview** — inline image rendering in the left pane for Kitty-compatible terminals (kitty, WezTerm, ghostty). Aspect-ratio-preserving, auto-detected inside tmux.
+- **Flow ↔ inspector focus** (`Tab`) — move between the chronological spine and the selected node's inspector
+- **Inspector facets** (`[`/`]`) — cycle the selected node's non-empty Overview, Conversation, Changes, Files, Refs, Images, and Stats facets
+- **Scope** (`s`) — aggregate the inspector over Node → Subtree → Session without silently falling back to a wider scope
+- **Session facet picker** (`p`) — jump directly to session-wide URLs, images, changes/files, or contexts
+- **Zoom** (`z`, or `Enter` on a conversation turn) — render the same inspector full-width; `Esc` returns without changing selection or fold state
+- **Three conversation detail levels** — Compact (text), Standard (text + artifacts), and Verbose (tools, results, hooks); use `detail:text|tool|hook` in command mode
+- **Block navigation and folding** (`↑`/`↓`, `←`/`→`, `f`/`F`) — navigate and disclose content in both split and zoomed inspectors
+- **Block filter** (`/`) — filter by `is:tool`, `is:hook`, `is:error`, `is:skill`, `is:mcp`, `tool:Name`, or `tool:Prefix*`
+- **Copy mode** (`v`) — line selection works in the same inspector, including zoomed structured/verbose content
+- **Exact provenance jump** (`J`) — lifecycle and artifact rows jump to their owning conversation turn
+- **Recursive subagent drill-down** (`Enter` on agent) — opens the agent transcript with a back-stack while preserving inspector state
+- **Kitty image preview** — inline, aspect-ratio-preserving rendering for Kitty-compatible terminals (kitty, WezTerm, ghostty), including images owned by subagent transcripts
+- **Live controls** — `L` toggles live tail, `I` sends input, and `J` switches to the tmux pane when a conversation turn is selected
 
 ![Kitty image preview](docs/gifs/08-kitty-image-preview.png)
 
-- **Block navigation** (`↑`/`↓`) — navigate text, tool calls, and results
-- **Fold/unfold** (`←`/`→`, `f`/`F`) — collapse/expand content blocks
-- **System tag folding** — `<system-reminder>`, `<task-notification>`, `<available-deferred-tools>`, etc. are folded by default, expandable on demand
-- **Block filter** (`/`) — filter by `is:tool`, `is:hook`, `is:error`, `is:skill`, `is:mcp`, `tool:Name`, `tool:Prefix*` (e.g. `tool:mcp*`)
-- **Subagent drill-down** (`Enter` on agent) — recursive navigation into sub-sessions with back-stack
-- **Side-question context** — background context from parent sessions is collapsed into a summary; only the actual question/answer is shown
-- **Full conversation** (`c`) — scrollable concatenated view with search (`/`) and copy mode
-- **Live tail** (`L`) — auto-follow active sessions in real-time
-- **Send input** (`I`) — send text to running Claude via tmux
-- **Jump to pane** (`J`) — switch to the tmux pane running the session
+#### Subagent and Workflow Support
 
-#### Subagent Support
-
-Subagents are displayed inline in the conversation with type badges:
+Subagents and workflow agents are displayed inline at their exact spawn origin:
 
 | Type | Badge | Source |
 |------|-------|--------|
 | `aside_question` | `?` `:btw` | Side-question (background Q&A) |
 | `Explore` | `⊕ Explore` | Codebase exploration agent |
 | `general-purpose` | `⊕ general-purpose` | Default agent |
+| Workflow agent | workflow/phase lifecycle row | `subagents/workflows/{runId}/agent-*.jsonl` |
 | Custom types | `⊕ {type}` | From `agent-*.meta.json` |
 
-Agent type detection: reads `agent-{id}.meta.json` (preferred) or parses type from filename `agent-{type}-{hash}.jsonl`. Auto-compaction files (`agent-acompact-*.jsonl`) are excluded.
-
-Timestamp ordering uses the **last message** in the subagent file (most recent activity), not the first.
-
-### Detail View
-
-Full-screen message viewer with block-level navigation.
-
-- **Block cursor** (`↑`/`↓`) — navigate between blocks
-- **Fold/unfold** (`←`/`→`, `f`/`F`) — collapse/expand blocks
-- **Message navigation** (`n`/`N`) — step through messages
-- **Copy mode** (`v`) — line-by-line selection with anchor/cursor, vim-style navigation
-- **Clipboard** (`y`) — copy selected text/blocks to system clipboard
-- **Pager** (`o`) — open in external pager
+Agent type detection reads `agent-{id}.meta.json` (preferred) or parses the type from `agent-{type}-{hash}.jsonl`. Auto-compaction files (`agent-acompact-*.jsonl`) are excluded. Workflow summaries are joined from `{sessionID}/workflows/{runId}.json`, and nested workflow agents retain their run/phase ownership.
 
 ### Global Stats (`v` → `s`)
 
@@ -350,39 +335,28 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `?` | Help |
 | `q` | Quit |
 
-### Conversation
+### Unified Session Flow / Inspector
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Open detail / drill into agent |
-| `c` | Full conversation view |
-| `/` | Filter blocks |
-| `Tab` | Cycle preview detail (text/tool/hook) |
-| `↑` / `↓` | Navigate messages/blocks |
-| `←` / `→` | Fold/unfold blocks |
-| `f` / `F` | Fold/unfold all |
-| `[` / `]` | Adjust split ratio |
-| `L` | Toggle live tail |
-| `I` | Send input |
-| `J` | Jump to pane |
-| `x` | Actions menu (URLs, files) |
+| `Enter` | Inspect/zoom conversation turn, open artifact, or drill into agent/task |
+| `Tab` | Switch focus between flow spine and inspector |
+| `↑` / `↓` | Navigate flow rows or inspector blocks |
+| `←` / `→` | Fold/unfold node or block |
+| `f` / `F` | Fold/unfold all blocks |
+| `[` / `]` | Previous/next non-empty inspector facet |
+| `s` | Scope: Node → Subtree → Session |
+| `z` | Toggle the same inspector full-width |
+| `p` | Session facet picker (URLs, images, changes/files, contexts) |
+| `/` | Filter the focused flow or inspector blocks |
+| `v` | Copy mode in the focused conversation inspector |
+| `x` | Inspector actions (refs, changes/files, copy) |
 | `e` | Edit menu (session/agent JSONL, text export) |
-| `u` | URL extraction (scoped to message/session) |
+| `L` | Toggle live tail |
+| `I` | Send input to a live session |
+| `J` | Jump lifecycle/artifact row to its exact origin; on a turn, jump to tmux pane |
 | `R` | Refresh |
-| `Esc` | Back to sessions / close preview |
-
-### Detail View
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Navigate blocks |
-| `←` / `→` | Fold/unfold block |
-| `f` / `F` | Fold/unfold all |
-| `n` / `N` | Next/prev message |
-| `v` | Copy mode |
-| `y` | Copy to clipboard |
-| `x` | Actions menu (URLs, files) |
-| `o` | Open in pager |
+| `Esc` | Exit zoom, close inspector, pop drill-down, or return to sessions |
 
 ### Command Mode (`:`)
 
@@ -668,7 +642,7 @@ internal/
 
 ## How It Works
 
-ccx reads Claude Code's session files from `~/.claude/projects/`. Each session is a JSONL file containing the full conversation history — user prompts, assistant responses, tool calls, and results. Subagent sessions live under `{sessionID}/subagents/agent-*.jsonl` with optional `*.meta.json` for type metadata.
+ccx reads Claude Code's session files from `~/.claude/projects/`. Each session is a JSONL file containing the full conversation history — user prompts, assistant responses, tool calls, and results. Direct subagents live under `{sessionID}/subagents/agent-*.jsonl`; workflow agents live under `{sessionID}/subagents/workflows/{runId}/agent-*.jsonl`, with run summaries at `{sessionID}/workflows/{runId}.json`. Optional `*.meta.json` files provide agent type metadata.
 
 Session metadata is cached to `~/.claude/sessions.gob` for instant startup (~1ms). A full async scan runs in the background to pick up new sessions.
 

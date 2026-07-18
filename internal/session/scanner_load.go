@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -168,61 +169,135 @@ func loadFileTodos(sessionID, home string) []TodoItem {
 	return todos
 }
 
-// LoadTasksFromEntries extracts the latest task states from parsed conversation entries.
-// This is used as a fallback when task files have been cleaned up from disk.
+var taskCreatedResultRE = regexp.MustCompile(`(?i)\bTask\s+#?([A-Za-z0-9._:-]+)\s+created successfully\b`)
+
+// LoadTasksFromEntries extracts the latest task states from parsed conversation
+// entries. Current TaskCreate inputs omit the assigned ID, so creates are held
+// by tool_use_id until the matching result supplies "Task #N created successfully".
 func LoadTasksFromEntries(entries []Entry) []TaskItem {
 	tasks := make(map[string]*TaskItem)
+	order := make([]string, 0)
+	pendingCreate := make(map[string]string) // tool_use_id -> temporary task key
+	synthetic := 0
+
+	moveTask := func(from, to string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		task := tasks[from]
+		if task == nil {
+			return
+		}
+		if existing := tasks[to]; existing != nil {
+			mergeTaskItem(existing, *task)
+			delete(tasks, from)
+		} else {
+			delete(tasks, from)
+			task.ID = to
+			tasks[to] = task
+		}
+		for i := range order {
+			if order[i] == from {
+				order[i] = to
+				break
+			}
+		}
+	}
+
 	for _, e := range entries {
 		for _, b := range e.Content {
-			if b.Type != "tool_use" {
-				continue
-			}
-			if b.ToolName != "TaskCreate" && b.ToolName != "TaskUpdate" {
-				continue
-			}
-			// Parse task data from tool input JSON
-			var input struct {
-				ID          string `json:"id"`
-				TaskID      string `json:"taskId"`
-				Subject     string `json:"subject"`
-				Status      string `json:"status"`
-				Description string `json:"description"`
-			}
-			if json.Unmarshal([]byte(b.ToolInput), &input) != nil {
-				continue
-			}
-			if input.ID == "" {
-				input.ID = input.TaskID
-			}
-			if input.ID == "" && input.Subject == "" {
-				continue
-			}
-			if existing, ok := tasks[input.ID]; ok {
-				// Update existing task
-				if input.Status != "" {
-					existing.Status = input.Status
+			switch {
+			case b.Type == "tool_use" && (b.ToolName == "TaskCreate" || b.ToolName == "TaskUpdate"):
+				var input TaskItem
+				var ids struct {
+					ID     string `json:"id"`
+					TaskID string `json:"taskId"`
 				}
-				if input.Subject != "" {
-					existing.Subject = input.Subject
+				if json.Unmarshal([]byte(b.ToolInput), &input) != nil || json.Unmarshal([]byte(b.ToolInput), &ids) != nil {
+					continue
 				}
-				if input.Description != "" {
-					existing.Description = input.Description
+				id := ids.ID
+				if id == "" {
+					id = ids.TaskID
 				}
-			} else {
-				tasks[input.ID] = &TaskItem{
-					ID:          input.ID,
-					Subject:     input.Subject,
-					Status:      input.Status,
-					Description: input.Description,
+				if b.ToolName == "TaskCreate" && id == "" {
+					synthetic++
+					id = fmt.Sprintf("create:%s:%d", b.ID, synthetic)
+					pendingCreate[b.ID] = id
+				}
+				if id == "" || (input.Subject == "" && b.ToolName == "TaskCreate") {
+					continue
+				}
+				input.ID = id
+				if existing := tasks[id]; existing != nil {
+					mergeTaskItem(existing, input)
+				} else {
+					copy := input
+					tasks[id] = &copy
+					order = append(order, id)
+				}
+
+			case b.Type == "tool_result":
+				key := pendingCreate[b.ID]
+				if key == "" {
+					continue
+				}
+				if id := taskIDFromCreateResult(b.Text); id != "" {
+					moveTask(key, id)
+					delete(pendingCreate, b.ID)
 				}
 			}
 		}
 	}
-	var result []TaskItem
-	for _, t := range tasks {
-		result = append(result, *t)
+
+	result := make([]TaskItem, 0, len(order))
+	seen := make(map[string]bool, len(order))
+	for _, id := range order {
+		if seen[id] || tasks[id] == nil {
+			continue
+		}
+		seen[id] = true
+		result = append(result, *tasks[id])
 	}
 	return result
+}
+
+func taskIDFromCreateResult(text string) string {
+	if match := taskCreatedResultRE.FindStringSubmatch(text); len(match) == 2 {
+		return match[1]
+	}
+	var result struct {
+		ID     string `json:"id"`
+		TaskID string `json:"taskId"`
+	}
+	if json.Unmarshal([]byte(text), &result) == nil {
+		if result.ID != "" {
+			return result.ID
+		}
+		return result.TaskID
+	}
+	return ""
+}
+
+func mergeTaskItem(dst *TaskItem, src TaskItem) {
+	if src.Subject != "" {
+		dst.Subject = src.Subject
+	}
+	if src.Status != "" {
+		dst.Status = src.Status
+	}
+	if src.Description != "" {
+		dst.Description = src.Description
+	}
+	if src.ActiveForm != "" {
+		dst.ActiveForm = src.ActiveForm
+	}
+	if src.Blocks != nil {
+		dst.Blocks = src.Blocks
+	}
+	if src.BlockedBy != nil {
+		dst.BlockedBy = src.BlockedBy
+	}
 }
 
 func LoadCronsFromEntries(entries []Entry) []CronItem {
