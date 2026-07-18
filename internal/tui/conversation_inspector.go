@@ -42,6 +42,10 @@ type conversationInspector struct {
 	ExplicitTab    inspectorTab
 	ExplicitNodeID string
 	Explicit       bool
+	// ReturnToID is the item selected when a zoom entry jumped the list
+	// selection elsewhere (e.g. a marker opening its parent turn); leaving
+	// zoom restores it so "back" lands where the user entered from.
+	ReturnToID string
 }
 
 func (t inspectorTab) String() string {
@@ -257,6 +261,7 @@ func (a *App) openInspector(tab inspectorTab, scope session.Scope, zoom bool) {
 	sp := &a.conv.split
 	a.conv.inspector.Scope = scope
 	a.conv.inspector.Tab = tab
+	a.conv.inspector.ReturnToID = ""
 	if item, ok := a.selectedConversationItem(); ok {
 		a.conv.inspector.Explicit = true
 		a.conv.inspector.ExplicitTab = tab
@@ -300,6 +305,15 @@ func (a *App) setInspectorZoom(zoom bool) {
 	}
 	maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
 	sp.Preview.YOffset = min(oldOffset, maxOffset)
+	if !zoom {
+		if id := a.conv.inspector.ReturnToID; id != "" {
+			a.conv.inspector.ReturnToID = ""
+			if id != a.selectedConversationItemID() && a.restoreConvSelection(id) {
+				sp.CacheKey = ""
+				a.updateConvPreview()
+			}
+		}
+	}
 }
 
 func (a *App) cycleInspectorTabBy(delta int) {
@@ -400,7 +414,7 @@ func (a *App) renderInspectorOverview(item convItem, node session.FlowNode) stri
 	case convShell:
 		content = renderShellInspector(item.shell)
 	case convDecision:
-		content = renderDecisionInspector(item.decision)
+		content = a.renderDecisionInspector(item.decision)
 	case convSessionMeta:
 		switch item.sessionMeta {
 		case "summary":
