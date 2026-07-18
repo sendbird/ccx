@@ -145,7 +145,6 @@ func TestCurrentViewName(t *testing.T) {
 	}{
 		{viewSessions, "sessions"},
 		{viewConversation, "conversation"},
-		{viewMessageFull, "messagefull"},
 		{viewConfig, "config"},
 		{viewPlugins, "plugins"},
 		{viewGlobalStats, "stats"},

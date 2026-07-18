@@ -52,59 +52,112 @@ func TestConversationHelpUsesConfigurablePreviewCopyBinding(t *testing.T) {
 	}
 }
 
-func TestMessageFullHelpUsesConfigurableActionBindings(t *testing.T) {
+func TestZoomedInspectorHelpUsesConfigurableActionBinding(t *testing.T) {
 	app := setupConvApp(t, testEntries(), 120, 30)
-	item, ok := app.convList.SelectedItem().(convItem)
-	if !ok {
-		t.Fatal("expected selected conversation item")
-	}
-	m, _ := app.openMsgFullForEntry(item.merged)
-	app = m.(*App)
 	app.keymap.Conversation.Actions = "A"
-	app.keymap.Preview.CopyAll = "Y"
+	app.openInspector(inspectorConversation, session.ScopeNode, true)
 
-	help := stripANSI(app.msgFullHelpLine())
+	help := stripANSI(app.convHelpLine(""))
 	if !strings.Contains(help, "A:actions") {
-		t.Fatalf("expected configurable actions binding in message-full help, got %q", help)
+		t.Fatalf("expected configurable actions binding in inspector help, got %q", help)
 	}
-	if !strings.Contains(help, "Y:all") {
-		t.Fatalf("expected configurable copy-all binding in message-full help, got %q", help)
+	if !strings.Contains(help, "z:zoom") {
+		t.Fatalf("expected zoom control in inspector help, got %q", help)
 	}
 }
 
 func TestHandleConvActionsMenuUsesConfigurableChangeBinding(t *testing.T) {
-	base := testEntries()
-	base = append(base, session.Entry{
-		Role: "assistant",
-		Content: []session.ContentBlock{{
-			Type:      "tool_use",
-			ToolName:  "Edit",
-			ToolInput: `{"file_path":"/tmp/x.go","old_string":"a","new_string":"b"}`,
-		}},
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a1"
 	})
-	app := setupConvApp(t, base, 120, 30)
-	selectConvItemBy(t, app, func(ci convItem) bool {
-		if ci.kind != convMsg {
-			return false
-		}
-		for _, block := range ci.merged.entry.Content {
-			if block.Type == "tool_use" && block.ToolName == "Edit" {
-				return true
-			}
-		}
-		return false
-	})
-	m, _ := app.openMsgFullForEntry(app.convList.SelectedItem().(convItem).merged)
-	app = m.(*App)
 	app.keymap.Actions.Changes = "G"
+	app.conv.inspector.Scope = session.ScopeNode
 
-	m, _ = app.handleConvActionsMenu("G")
+	m, _ := app.handleConvActionsMenu("G")
 	app = m.(*App)
-	if !app.urlMenu {
-		t.Fatal("expected actions menu to open scoped menu for configurable changes binding")
+	if app.conv.inspector.Tab != inspectorChanges {
+		t.Fatalf("action tab = %v, want Changes", app.conv.inspector.Tab)
 	}
-	if !strings.Contains(app.urlScope, "message") && !strings.Contains(app.urlScope, "block") {
-		t.Fatalf("expected change scope label, got %q", app.urlScope)
+	if app.conv.inspector.Scope != session.ScopeNode {
+		t.Fatalf("action scope = %v, want Node", app.conv.inspector.Scope)
+	}
+	if app.urlMenu {
+		t.Fatal("conversation changes must not open the legacy URL menu")
+	}
+}
+
+func TestHandleConvActionsMenuRoutesFilesToFilesFacet(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a1"
+	})
+	app.keymap.Actions.Files = "F"
+	app.conv.inspector.Scope = session.ScopeNode
+
+	m, _ := app.handleConvActionsMenu("F")
+	app = m.(*App)
+	if app.conv.inspector.Tab != inspectorFiles {
+		t.Fatalf("action tab = %v, want Files", app.conv.inspector.Tab)
+	}
+	if content := app.conv.inspector.Rendered; !strings.Contains(content, "/repo/parent.go") || !strings.Contains(content, "origin:") {
+		t.Fatalf("files facet missing path/provenance: %q", content)
+	}
+}
+
+func TestHandleConvActionsMenuKeepsEmptyFilesFacet(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+	})
+	app.keymap.Actions.Files = "F"
+	app.conv.inspector.Scope = session.ScopeNode
+
+	m, _ := app.handleConvActionsMenu("F")
+	app = m.(*App)
+	if app.conv.inspector.Tab != inspectorFiles {
+		t.Fatalf("empty action tab = %v, want Files", app.conv.inspector.Tab)
+	}
+	if !strings.Contains(app.conv.inspector.Rendered, "No files in this node scope") {
+		t.Fatalf("empty files action rendered %q", app.conv.inspector.Rendered)
+	}
+
+	app.conv.split.Focus = true
+	app = pressKey(app, "s")
+	if app.conv.inspector.Tab != inspectorFiles || app.conv.inspector.Scope != session.ScopeSubtree {
+		t.Fatalf("scope expansion lost files facet: tab=%v scope=%v", app.conv.inspector.Tab, app.conv.inspector.Scope)
+	}
+	if !strings.Contains(app.conv.inspector.Rendered, "/repo/agent.go") {
+		t.Fatalf("subtree files missing agent file: %q", app.conv.inspector.Rendered)
+	}
+}
+
+func TestHandleConvActionsMenuCopyCopiesRenderedFacet(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+	})
+	app.openInspector(inspectorRefs, session.ScopeSession, false)
+	app.keymap.Actions.Copy = "C"
+
+	var copied string
+	oldClipboardWrite := clipboardWrite
+	clipboardWrite = func(text string) error {
+		copied = text
+		return nil
+	}
+	t.Cleanup(func() { clipboardWrite = oldClipboardWrite })
+
+	m, _ := app.handleConvActionsMenu("C")
+	app = m.(*App)
+	if !strings.Contains(copied, "acme/repo#42") || !strings.Contains(copied, "origin:") {
+		t.Fatalf("action copy payload is not rendered facet: %q", copied)
+	}
+	if strings.Contains(copied, "delegate image inspection") {
+		t.Fatalf("action copy payload leaked selected message: %q", copied)
+	}
+	if app.copiedMsg != "Copied inspector!" {
+		t.Fatalf("copy confirmation = %q", app.copiedMsg)
 	}
 }
 

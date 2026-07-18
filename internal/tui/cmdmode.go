@@ -33,7 +33,6 @@ type cmdEntry struct {
 const (
 	cmdSessions = 1 << viewSessions
 	cmdConv     = 1 << viewConversation
-	cmdMsgFull  = 1 << viewMessageFull
 	cmdConfig   = 1 << viewConfig
 	cmdPlugins  = 1 << viewPlugins
 	cmdStats    = 1 << viewGlobalStats

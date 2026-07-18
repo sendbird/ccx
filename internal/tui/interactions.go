@@ -168,6 +168,7 @@ func (a *App) conversationPreviewStructuredHelpActions(next string) []interactio
 		labelAction("", "z", "zoom"),
 		foldAllHelpAction(a),
 		bindAction("", a.keymap.Preview.Filter, "filter"),
+		bindAction("", a.keymap.Preview.CopyMode, "copy"),
 		labelAction("", "tab", next),
 	}
 }
@@ -192,65 +193,5 @@ func (a *App) conversationActionMenuActions() []interactionAction {
 		bindAction(interactionActionFiles, a.keymap.Actions.Files, "files"),
 		bindAction(interactionActionChanges, a.keymap.Actions.Changes, "changes"),
 		bindAction(interactionActionCopy, a.keymap.Actions.Copy, "copy"),
-	}
-}
-
-func (a *App) messageFullCopyModeHelpActions() []interactionAction {
-	return []interactionAction{
-		labelAction("", "↑↓", "move"),
-		copySelectHelpAction(a),
-		copyConfirmHelpAction(a),
-		labelAction("", "home/end", ""),
-		labelAction("", "esc", "cancel"),
-	}
-}
-
-func (a *App) messageFullAllMessagesHelpActions() []interactionAction {
-	return []interactionAction{
-		labelAction("", "↑↓", "scroll"),
-		bindAction("", a.keymap.Preview.CopyMode, "copy"),
-		bindAction("", a.keymap.Preview.CopyAll, "all"),
-		bindAction("", a.keymap.Conversation.Actions, "actions"),
-		labelAction("", "/", "search"),
-	}
-}
-
-func (a *App) messageFullSelectedHelpActions() []interactionAction {
-	return []interactionAction{
-		labelAction("", "↑↓", "blocks"),
-		labelAction("", "sp", "select"),
-		bindAction("", a.keymap.Preview.CopyAll, "copy"),
-		labelAction("", "esc", "clear"),
-	}
-}
-
-func (a *App) messageFullSearchHelpActions() []interactionAction {
-	return []interactionAction{
-		labelAction("", "n/N", "match"),
-		labelAction("", "↑↓", "blocks"),
-		labelAction("", "←→", "fold"),
-		labelAction("", "sp", "select"),
-		foldAllHelpAction(a),
-		bindAction("", a.keymap.Preview.CopyMode, "copy"),
-		bindAction("", a.keymap.Preview.CopyAll, "all"),
-	}
-}
-
-func (a *App) messageFullDetailHelpActions() []interactionAction {
-	return []interactionAction{
-		labelAction("", "↑↓", "blocks"),
-		labelAction("", "←→", "fold"),
-		labelAction("", "n/N", "msg"),
-		foldAllHelpAction(a),
-		bindAction("", a.keymap.Preview.CopyMode, "copy"),
-		bindAction("", a.keymap.Preview.CopyAll, "all"),
-		bindAction("", a.keymap.Conversation.Actions, "actions"),
-		bindAction("", a.keymap.Preview.Filter, "filter"),
-	}
-}
-
-func (a *App) messageFullSearchHintActions() []interactionAction {
-	return []interactionAction{
-		labelAction("", "n/N", "next/prev match after search"),
 	}
 }

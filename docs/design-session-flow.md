@@ -25,7 +25,7 @@ ideas:
 ```text
 altitude 5  session summary    18 turns · 7 agents · 1 wf · Δ12 · R4 · 183k
 altitude 4  flow spine         turns + lifecycle nodes + facet badges
-altitude 3  node inspector     Overview·Conversation·Δ·R·I·Stats (z = zoom)
+altitude 3  node inspector     Overview·Conversation·Δ·Files·R·I·Stats (z = zoom)
 altitude 2  blocks/timelines   tool headlines, poll timeline, diffs, occurrences
 altitude 1  source             raw JSON, full output, full diff
 ```
@@ -322,24 +322,21 @@ sessions.
 
 ## Implementation phases
 
-1. **FlowIndex** — exact edges, workflow join at conversation open,
-   artifact occurrences with origin, scope aggregation, decision-marker
-   extraction, image resolution by owning transcript. No UI change;
-   fully testable.
-2. **Tool renderer registry** — independent of phase 1; immediate
-   visibility win in all existing views. Order: Bash/Edit/Read/Write/Grep
-   → result-pairing + error auto-expand → Agent/Workflow headlines →
-   the rest.
-3. **Unified flow spine** — insert lifecycle nodes at exact origins,
-   decision markers in the gutter, facet badges; remove tree mode.
-4. **Inspector + zoom** — facet tabs, scope toggle, reverse-provenance
-   views; absorb msgfull and artifact pages.
-5. **Cleanup** — delete duplicated paths listed above; update README
-   ("agent hierarchies", storage layout including
-   `subagents/workflows/<run>/`).
+All five phases are complete on `feature/session-flow`:
 
-Phases 1 and 2 can proceed in parallel; each is low-risk and
-independently shippable.
+1. **FlowIndex** — exact edges, workflow joins, artifact provenance,
+   scope aggregation, decision markers, and owning-transcript image
+   resolution.
+2. **Tool renderer registry** — semantic headlines/bodies, result pairing,
+   error expansion, and raw-source disclosure.
+3. **Unified flow spine** — lifecycle nodes at exact origins, decision
+   markers, facet badges, and no separate entity-tree mode.
+4. **Inspector + zoom** — non-empty facet tabs, Node/Subtree/Session scope,
+   reverse provenance, and full-width rendering of the same inspector state.
+5. **Cleanup** — removed standalone msgfull and artifact-page navigation,
+   parent-transcript fallbacks, duplicate scoped menus, and stale tests;
+   README now documents workflow-agent storage under
+   `subagents/workflows/<run>/`.
 
 ## Product acceptance
 

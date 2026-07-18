@@ -441,7 +441,7 @@ func (sp *SplitPane) Resize(totalW, totalH, splitRatio int) {
 
 // HandleMouseScroll handles mouse wheel events for the split pane.
 func (sp *SplitPane) HandleMouseScroll(mouseX int, up bool, totalW, splitRatio int) {
-	if sp.Show && mouseX > sp.ListWidth(totalW, splitRatio) {
+	if sp.Show && (sp.PreviewOnly || mouseX > sp.ListWidth(totalW, splitRatio)) {
 		// Preview side: move block cursor for fold-aware panes, scroll for simple
 		if sp.Folds != nil && sp.Focus && len(sp.Folds.BlockStarts) > 0 {
 			if up {
@@ -460,7 +460,7 @@ func (sp *SplitPane) HandleMouseScroll(mouseX int, up bool, totalW, splitRatio i
 
 // HandleMouseClick handles mouse click to toggle focus between list and preview.
 func (sp *SplitPane) HandleMouseClick(mouseX, contentY int, totalW, splitRatio int) {
-	if sp.Show && mouseX > sp.ListWidth(totalW, splitRatio) {
+	if sp.Show && (sp.PreviewOnly || mouseX > sp.ListWidth(totalW, splitRatio)) {
 		sp.Focus = true
 		// For fold-aware panes, move block cursor to clicked block
 		if sp.Folds != nil && len(sp.Folds.BlockStarts) > 0 {
@@ -475,7 +475,7 @@ func (sp *SplitPane) HandleMouseClick(mouseX, contentY int, totalW, splitRatio i
 
 // HandleMouseDoubleClick handles double-click in the preview to toggle fold.
 func (sp *SplitPane) HandleMouseDoubleClick(mouseX int, totalW, splitRatio int) bool {
-	if !sp.Show || mouseX <= sp.ListWidth(totalW, splitRatio) {
+	if !sp.Show || (!sp.PreviewOnly && mouseX <= sp.ListWidth(totalW, splitRatio)) {
 		return false
 	}
 	if sp.Folds == nil || len(sp.Folds.BlockStarts) == 0 {

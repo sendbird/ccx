@@ -13,7 +13,7 @@ const doubleClickThreshold = 400 * time.Millisecond
 const mouseScrollLines = 1
 
 func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// In copy mode, only allow scroll on the detail viewport
+	// In copy mode, only allow scroll on the focused inspector viewport.
 	if a.copyModeActive {
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			if vp := a.activeDetailVP(); vp != nil {
@@ -52,7 +52,7 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // tryStartDragResize checks if the click is on the split pane border and starts drag.
 func (a *App) tryStartDragResize(msg tea.MouseMsg) bool {
 	sp := a.activeSplitPane()
-	if sp == nil || !sp.Show {
+	if sp == nil || !sp.Show || sp.PreviewOnly {
 		return false
 	}
 	borderX := sp.ListWidth(a.width, a.splitRatio)
@@ -109,7 +109,7 @@ func (a *App) activeSplitPane() *SplitPane {
 func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	up := msg.Button == tea.MouseButtonWheelUp
 	sp := a.activeSplitPane()
-	scrolledPreview := sp != nil && sp.Show && msg.X > sp.ListWidth(a.width, a.splitRatio)
+	scrolledPreview := sp != nil && sp.Show && (sp.PreviewOnly || msg.X > sp.ListWidth(a.width, a.splitRatio))
 
 	switch a.state {
 	case viewSessions:
@@ -138,9 +138,6 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if !scrolledPreview && a.conv.split.Show {
 			a.updateConvPreview()
 		}
-
-	case viewMessageFull:
-		mouseScrollVP(&a.msgFull.vp, up)
 
 	case viewConfig:
 		a.cfgSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
@@ -187,19 +184,23 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	a.lastClickY = msg.Y
 
 	if isDoubleClick {
-		// Double-click in preview → toggle fold
+		// Double-click in preview → toggle fold.
 		sp := a.activeSplitPane()
 		if sp != nil && sp.HandleMouseDoubleClick(msg.X, a.width, a.splitRatio) {
 			return a, a.refreshActivePreview()
 		}
-		// Double-click in list → enter
+		// A zoomed preview has no list target behind it.
+		if sp != nil && sp.PreviewOnly {
+			return a, nil
+		}
+		// Double-click in list → enter.
 		enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
 		return a.Update(enterMsg)
 	}
 
 	contentY := msg.Y - 1 // adjust for title bar
 	sp := a.activeSplitPane()
-	clickedPreview := sp != nil && sp.Show && msg.X > sp.ListWidth(a.width, a.splitRatio)
+	clickedPreview := sp != nil && sp.Show && (sp.PreviewOnly || msg.X > sp.ListWidth(a.width, a.splitRatio))
 
 	var previewCmd tea.Cmd
 	switch a.state {

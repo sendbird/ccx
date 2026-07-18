@@ -16,6 +16,7 @@ const (
 	inspectorOverview inspectorTab = iota
 	inspectorConversation
 	inspectorChanges
+	inspectorFiles
 	inspectorRefs
 	inspectorImages
 	inspectorStats
@@ -25,17 +26,22 @@ var inspectorTabOrder = []inspectorTab{
 	inspectorOverview,
 	inspectorConversation,
 	inspectorChanges,
+	inspectorFiles,
 	inspectorRefs,
 	inspectorImages,
 	inspectorStats,
 }
 
 type conversationInspector struct {
-	Tab           inspectorTab
-	Scope         session.Scope
-	Zoom          bool
-	ZoomPrevFocus bool
-	NodeID        string
+	Tab            inspectorTab
+	Scope          session.Scope
+	Zoom           bool
+	ZoomPrevFocus  bool
+	NodeID         string
+	Rendered       string
+	ExplicitTab    inspectorTab
+	ExplicitNodeID string
+	Explicit       bool
 }
 
 func (t inspectorTab) String() string {
@@ -44,6 +50,8 @@ func (t inspectorTab) String() string {
 		return "Conversation"
 	case inspectorChanges:
 		return "Changes"
+	case inspectorFiles:
+		return "Files"
 	case inspectorRefs:
 		return "Refs"
 	case inspectorImages:
@@ -158,6 +166,9 @@ func availableInspectorTabs(item convItem, flow *session.FlowIndex, nodeID strin
 	if facets.Counts[session.ArtifactChange] > 0 {
 		tabs = append(tabs, inspectorChanges)
 	}
+	if facets.Counts[session.ArtifactFile] > 0 {
+		tabs = append(tabs, inspectorFiles)
+	}
 	if facets.Counts[session.ArtifactRef]+facets.Counts[session.ArtifactURL] > 0 {
 		tabs = append(tabs, inspectorRefs)
 	}
@@ -214,6 +225,15 @@ func cycleInspectorTab(current inspectorTab, tabs []inspectorTab, delta int) ins
 	return tabs[idx]
 }
 
+func (a *App) inspectorTabs(item convItem, nodeID string) []inspectorTab {
+	tabs := availableInspectorTabs(item, a.conv.flow, nodeID, a.conv.inspector.Scope)
+	if a.conv.inspector.Explicit && a.conv.inspector.ExplicitNodeID == nodeID &&
+		!containsInspectorTab(tabs, a.conv.inspector.ExplicitTab) {
+		tabs = append(tabs, a.conv.inspector.ExplicitTab)
+	}
+	return tabs
+}
+
 func (a *App) syncInspectorSelection(item convItem) (session.FlowNode, bool) {
 	flow := a.conv.flow
 	nodeID := convItemFlowNodeID(item, flow)
@@ -224,17 +244,24 @@ func (a *App) syncInspectorSelection(item convItem) (session.FlowNode, bool) {
 	if !ok {
 		return session.FlowNode{}, false
 	}
+	if a.conv.inspector.Explicit && a.conv.inspector.ExplicitNodeID != nodeID {
+		a.conv.inspector.Explicit = false
+	}
 	a.conv.inspector.NodeID = nodeID
-	tabs := availableInspectorTabs(item, flow, nodeID, a.conv.inspector.Scope)
+	tabs := a.inspectorTabs(item, nodeID)
 	a.conv.inspector.Tab = validInspectorTab(a.conv.inspector.Tab, tabs)
 	return node, true
 }
 
 func (a *App) openInspector(tab inspectorTab, scope session.Scope, zoom bool) {
 	sp := &a.conv.split
-	a.convPageActive = false
 	a.conv.inspector.Scope = scope
 	a.conv.inspector.Tab = tab
+	if item, ok := a.convList.SelectedItem().(convItem); ok {
+		a.conv.inspector.Explicit = true
+		a.conv.inspector.ExplicitTab = tab
+		a.conv.inspector.ExplicitNodeID = convItemFlowNodeID(item, a.conv.flow)
+	}
 	sp.Show = true
 	if zoom {
 		a.conv.inspector.ZoomPrevFocus = sp.Focus
@@ -284,7 +311,8 @@ func (a *App) cycleInspectorTabBy(delta int) {
 	if nodeID == "" {
 		return
 	}
-	tabs := availableInspectorTabs(item, a.conv.flow, nodeID, a.conv.inspector.Scope)
+	tabs := a.inspectorTabs(item, nodeID)
+	a.conv.inspector.Explicit = false
 	a.conv.inspector.Tab = cycleInspectorTab(a.conv.inspector.Tab, tabs, delta)
 	a.conv.split.CacheKey = ""
 	a.updateConvPreview()
@@ -297,7 +325,7 @@ func (a *App) cycleInspectorScope() {
 }
 
 func (a *App) inspectorHeader(item convItem, node session.FlowNode) string {
-	tabs := availableInspectorTabs(item, a.conv.flow, node.ID, a.conv.inspector.Scope)
+	tabs := a.inspectorTabs(item, node.ID)
 	var tabLabels []string
 	for _, tab := range tabs {
 		label := tab.String()
@@ -336,6 +364,8 @@ func (a *App) renderInspectorTab(item convItem, node session.FlowNode) string {
 		return ""
 	case inspectorChanges:
 		return a.renderInspectorChanges(node.ID)
+	case inspectorFiles:
+		return a.renderInspectorFiles(node.ID)
 	case inspectorRefs:
 		return a.renderInspectorRefs(node.ID)
 	case inspectorImages:
@@ -400,6 +430,9 @@ func inspectorFacetSummary(f session.FacetSummary) string {
 	parts := make([]string, 0, 4)
 	if n := f.Counts[session.ArtifactChange]; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d changes", n))
+	}
+	if n := f.Counts[session.ArtifactFile]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d files", n))
 	}
 	if n := f.Counts[session.ArtifactRef] + f.Counts[session.ArtifactURL]; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d refs/URLs", n))
@@ -467,6 +500,28 @@ func (a *App) renderInspectorChanges(nodeID string) string {
 			fmt.Fprintf(&b, " · %s", summary)
 		}
 		b.WriteByte('\n')
+		fmt.Fprintf(&b, "   origin: %s\n", inspectorArtifactOrigin(art.Origin))
+	}
+	return b.String()
+}
+
+func (a *App) renderInspectorFiles(nodeID string) string {
+	arts := a.inspectorArtifacts(nodeID, session.ArtifactFile)
+	if len(arts) == 0 {
+		return fmt.Sprintf("# Files\n\nNo files in this %s scope.\n", strings.ToLower(inspectorScopeName(a.conv.inspector.Scope)))
+	}
+	counts := make(map[string]int)
+	for _, art := range arts {
+		counts[art.Key]++
+	}
+	var b strings.Builder
+	b.WriteString("# Files\n\n")
+	for i, art := range arts {
+		toolName, _ := art.Data.(string)
+		if toolName == "" {
+			toolName = "Tool"
+		}
+		fmt.Fprintf(&b, "%d. [%s] %s · occurrence %d/%d\n", i+1, toolName, art.Key, occurrenceIndex(arts, i), counts[art.Key])
 		fmt.Fprintf(&b, "   origin: %s\n", inspectorArtifactOrigin(art.Origin))
 	}
 	return b.String()

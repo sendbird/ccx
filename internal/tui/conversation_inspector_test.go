@@ -187,3 +187,114 @@ func TestInspectorScopeAndTabKeys(t *testing.T) {
 		t.Fatalf("scope = %v, want session", app.conv.inspector.Scope)
 	}
 }
+
+func TestZoomedInspectorRetainsFilterAndCopyModes(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a1"
+	})
+	app = pressKey(app, "enter")
+
+	app = pressKey(app, "/")
+	if !app.conv.blockFiltering || !app.conv.inspector.Zoom {
+		t.Fatalf("zoomed filter state = filtering:%t zoom:%t", app.conv.blockFiltering, app.conv.inspector.Zoom)
+	}
+	app = pressKey(app, "esc")
+	if app.conv.blockFiltering || !app.conv.inspector.Zoom {
+		t.Fatalf("filter cancel changed zoom state: filtering:%t zoom:%t", app.conv.blockFiltering, app.conv.inspector.Zoom)
+	}
+
+	copyKey := app.keymap.Preview.CopyMode
+	app = pressKey(app, copyKey)
+	if !app.copyModeActive || !app.conv.inspector.Zoom {
+		blockCount := 0
+		if app.conv.split.Folds != nil {
+			blockCount = len(app.conv.split.Folds.Entry.Content)
+		}
+		t.Fatalf("zoomed copy state = copy:%t zoom:%t key:%q focus:%t mode:%d blocks:%d", app.copyModeActive, app.conv.inspector.Zoom, copyKey, app.conv.split.Focus, app.conv.rightPaneMode, blockCount)
+	}
+	app = pressKey(app, "esc")
+	if app.copyModeActive || !app.conv.inspector.Zoom {
+		t.Fatalf("copy cancel changed zoom state: copy:%t zoom:%t", app.copyModeActive, app.conv.inspector.Zoom)
+	}
+}
+
+func TestInspectorFacetCopyUsesRenderedProvenance(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+	})
+	app.openInspector(inspectorRefs, session.ScopeSession, true)
+
+	app = pressKey(app, app.keymap.Preview.CopyMode)
+	if !app.copyModeActive {
+		t.Fatal("copy mode did not start for references facet")
+	}
+	copiedSource := strings.Join(app.copyLines, "\n")
+	if !strings.Contains(copiedSource, "acme/repo#42") || !strings.Contains(copiedSource, "origin:") {
+		t.Fatalf("copy source is not the rendered references facet: %q", copiedSource)
+	}
+	if strings.Contains(copiedSource, "delegate image inspection") {
+		t.Fatalf("copy source leaked selected conversation text: %q", copiedSource)
+	}
+	app = pressKey(app, "esc")
+	if app.copyModeActive {
+		t.Fatal("copy mode remained active after escape")
+	}
+	if restored := stripANSI(app.conv.split.Preview.View()); !strings.Contains(restored, "# References & URLs") || !strings.Contains(restored, "acme/repo#42") {
+		t.Fatalf("copy exit did not restore references facet: %q", restored)
+	}
+}
+
+func TestExplicitEmptyFacetClearsWhenSelectionChanges(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+	})
+	app.openInspector(inspectorFiles, session.ScopeNode, false)
+	if app.conv.inspector.Tab != inspectorFiles {
+		t.Fatalf("explicit empty tab = %v, want Files", app.conv.inspector.Tab)
+	}
+
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "u1"
+	})
+	if app.conv.inspector.Explicit {
+		t.Fatal("explicit facet pin survived node selection change")
+	}
+	if app.conv.inspector.Tab == inspectorFiles {
+		t.Fatal("empty Files facet remained pinned on a different node")
+	}
+}
+
+func TestInspectorFacetPickerUsesSessionScope(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+	})
+	app.conv.inspector.Scope = session.ScopeNode
+
+	app = pressKey(app, "p")
+	if !app.inspectorMenu {
+		t.Fatal("p did not open the inspector facet picker")
+	}
+	app = pressKey(app, "u")
+	if app.inspectorMenu {
+		t.Fatal("facet picker remained open")
+	}
+	if app.conv.inspector.Tab != inspectorRefs || app.conv.inspector.Scope != session.ScopeSession {
+		t.Fatalf("facet picker state = tab:%v scope:%v", app.conv.inspector.Tab, app.conv.inspector.Scope)
+	}
+	if app.urlMenu {
+		t.Fatal("facet picker opened the legacy URL menu")
+	}
+
+	app = pressKey(app, "p")
+	app = pressKey(app, "f")
+	if app.conv.inspector.Tab != inspectorFiles || app.conv.inspector.Scope != session.ScopeSession {
+		t.Fatalf("files picker state = tab:%v scope:%v", app.conv.inspector.Tab, app.conv.inspector.Scope)
+	}
+	if !strings.Contains(app.conv.inspector.Rendered, "/repo/parent.go") {
+		t.Fatalf("files picker rendered %q", app.conv.inspector.Rendered)
+	}
+}
