@@ -46,7 +46,37 @@ type conversationInspector struct {
 	// selection elsewhere (e.g. a marker opening its parent turn); leaving
 	// zoom restores it so "back" lands where the user entered from.
 	ReturnToID string
+
+	// MetaTargets is parallel to the synthetic Entry.Content blocks rendered for
+	// a session-meta row (memory/tasks-plan/summary). Index i describes what
+	// Enter/J does when block cursor i is selected. Empty for non-meta previews.
+	MetaTargets []metaEntryTarget
+	// MetaDrill is the memory note filename currently drilled into (file detail
+	// mode); empty means the file-list mode. Only meaningful for the memory row.
+	MetaDrill string
 }
+
+// metaEntryTarget describes the jump/drill action bound to one selectable block
+// in a session-meta inspector preview (memory files, decisions, tasks, plans,
+// crons). It is stored parallel to the synthetic Entry.Content blocks.
+type metaEntryTarget struct {
+	kind        metaTargetKind
+	fileName    string // memory note filename (memory-file drill target)
+	messageUUID string // originating turn to jump to (empty = no jump)
+	blockIdx    int    // block within that turn to focus (-1 = none)
+	taskID      string // task ID (task targets)
+}
+
+type metaTargetKind int
+
+const (
+	metaTargetNone      metaTargetKind = iota
+	metaTargetMemoryFile                // file-list row → Enter drills into the file
+	metaTargetDecision                  // flow-summary decision → jump to origin turn
+	metaTargetTask                      // task row → open task view / definition turn
+	metaTargetPlan                      // plan row → jump to ExitPlanMode turn
+	metaTargetCron                      // cron row (informational; jump to definition turn)
+)
 
 func (t inspectorTab) String() string {
 	switch t {
