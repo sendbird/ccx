@@ -298,3 +298,168 @@ func TestInspectorFacetPickerUsesSessionScope(t *testing.T) {
 		t.Fatalf("files picker rendered %q", app.conv.inspector.Rendered)
 	}
 }
+
+func setupDecisionFlowApp(t *testing.T) *App {
+	t.Helper()
+	root := t.TempDir()
+	sessID := "decision-flow"
+	sessPath := filepath.Join(root, sessID+".jsonl")
+	body := `{"type":"user","uuid":"u1","timestamp":"2026-07-01T10:00:00Z","message":{"role":"user","content":"plan the work"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-07-01T10:00:10Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"task-create","name":"TaskCreate","input":{"id":"T1","subject":"build the feature"}}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-07-01T10:00:15Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"task-create","content":"created"}]}}
+{"type":"assistant","uuid":"a2","timestamp":"2026-07-01T10:00:20Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"plan-1","name":"ExitPlanMode","input":{"plan":"do the thing","planFilePath":"/repo/plan.md"}}]}}
+`
+	if err := os.WriteFile(sessPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sess := session.Session{ID: sessID, ShortID: "decision", FilePath: sessPath, ProjectPath: root, ProjectName: "decision"}
+	app := NewApp([]session.Session{sess}, Config{})
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 150, Height: 45})
+	app = model.(*App)
+	app.openConversation(sess)
+	return app
+}
+
+func TestDecisionTaskEnterOpensTaskViewAndBackRestores(t *testing.T) {
+	app := setupDecisionFlowApp(t)
+	item := selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convDecision && strings.HasPrefix(item.decision.Key, "task:")
+	})
+	decisionID := convItemID(item)
+	app.conv.split.Focus = false
+
+	app = pressKey(app, "enter")
+	if app.conv.task.ID != "T1" {
+		t.Fatalf("enter on task decision opened task %q, want T1", app.conv.task.ID)
+	}
+	if len(app.navStack) != 1 {
+		t.Fatalf("navStack depth = %d, want 1", len(app.navStack))
+	}
+
+	model, _ := app.popNavFrame()
+	app = model.(*App)
+	if got := app.selectedConversationItemID(); got != decisionID {
+		t.Fatalf("back selection = %q, want the decision row %q", got, decisionID)
+	}
+}
+
+func TestDecisionPlanEnterZoomsOwnContent(t *testing.T) {
+	app := setupDecisionFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convDecision && strings.HasPrefix(item.decision.Key, "plan:")
+	})
+	app.conv.split.Focus = false
+
+	app = pressKey(app, "enter")
+	if !app.conv.inspector.Zoom || app.conv.inspector.Tab != inspectorOverview {
+		t.Fatalf("plan decision enter state = zoom:%t tab:%v", app.conv.inspector.Zoom, app.conv.inspector.Tab)
+	}
+	if !strings.Contains(app.conv.inspector.Rendered, "do the thing") {
+		t.Fatalf("plan decision inspector missing plan content: %q", app.conv.inspector.Rendered)
+	}
+}
+
+func TestSessionMetaEnterShowsRowSpecificContent(t *testing.T) {
+	app := setupDecisionFlowApp(t)
+	if len(app.conv.contextItems) < 2 {
+		t.Fatalf("expected summary + tasksplan context rows, got %d", len(app.conv.contextItems))
+	}
+	// Sticky facet tab from a previous node must not leak into the zoomed
+	// context rows — they all share the flow root node.
+	app.conv.inspector.Tab = inspectorStats
+	app.conv.split.Focus = false
+
+	app.selectConvContext(0)
+	app = pressKey(app, "enter")
+	summary := app.conv.inspector.Rendered
+	if app.conv.inspector.Tab != inspectorOverview || !strings.Contains(summary, "# Session Flow") {
+		t.Fatalf("summary row enter tab=%v rendered=%q", app.conv.inspector.Tab, summary)
+	}
+	app = pressKey(app, "esc")
+
+	app.conv.inspector.Tab = inspectorStats
+	app.selectConvContext(1)
+	app = pressKey(app, "enter")
+	tasks := app.conv.inspector.Rendered
+	if !strings.Contains(tasks, "build the feature") {
+		t.Fatalf("tasksplan row enter did not render the task board: %q", tasks)
+	}
+	if tasks == summary {
+		t.Fatal("context rows rendered identical inspector content")
+	}
+}
+
+func TestZoomExitRestoresJumpEntrySelection(t *testing.T) {
+	app := setupDecisionFlowApp(t)
+	item := selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convDecision && strings.HasPrefix(item.decision.Key, "plan:")
+	})
+	originID := convItemID(item)
+
+	var parent mergedMsg
+	found := false
+	for _, m := range app.conv.merged {
+		if m.entry.UUID == "a1" {
+			parent = m
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("merged turn a1 not found")
+	}
+	model, _ := app.openConversationInspectorForEntry(parent, -1)
+	app = model.(*App)
+	if app.selectedConversationItemID() == originID {
+		t.Fatal("inspector jump did not move the selection")
+	}
+	if app.conv.inspector.ReturnToID != originID {
+		t.Fatalf("ReturnToID = %q, want %q", app.conv.inspector.ReturnToID, originID)
+	}
+
+	app = pressKey(app, "esc")
+	if app.conv.inspector.Zoom {
+		t.Fatal("esc did not exit zoom")
+	}
+	if got := app.selectedConversationItemID(); got != originID {
+		t.Fatalf("zoom exit selection = %q, want entry row %q", got, originID)
+	}
+}
+
+func TestTabInZoomReturnsToFlowList(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a1"
+	})
+	app.conv.split.Focus = false
+	app = pressKey(app, "enter")
+	if !app.conv.inspector.Zoom {
+		t.Fatal("enter did not zoom")
+	}
+
+	app = pressKey(app, "tab")
+	if app.conv.inspector.Zoom || app.conv.split.PreviewOnly {
+		t.Fatalf("tab in zoom left zoom flags set: zoom:%t previewOnly:%t", app.conv.inspector.Zoom, app.conv.split.PreviewOnly)
+	}
+	if app.conv.split.Focus {
+		t.Fatal("tab in zoom did not focus the flow list")
+	}
+}
+
+func TestPhaseAndShellEnterZoomOwnInspector(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	item := selectInspectorItem(t, app, func(item convItem) bool { return item.kind == convAgent })
+	if item.agent.FilePath == "" {
+		t.Fatal("fixture agent has no transcript")
+	}
+	// Simulate the summary-only lifecycle path shared by phase/shell rows:
+	// enter must zoom the node's own overview without moving the selection.
+	before := app.selectedConversationItemID()
+	app.conv.split.Focus = false
+	app = pressKey(app, "enter")
+	// Full agents drill down instead; back must restore the same row.
+	model, _ := app.popNavFrame()
+	app = model.(*App)
+	if got := app.selectedConversationItemID(); got != before {
+		t.Fatalf("agent drill-down back selection = %q, want %q", got, before)
+	}
+}

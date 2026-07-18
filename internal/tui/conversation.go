@@ -116,6 +116,7 @@ func (a *App) pauseLiveTail() {
 // openConversationInspectorForEntry selects the exact unified-flow message row
 // and opens its Node-scoped Conversation facet in full-width zoom.
 func (a *App) openConversationInspectorForEntry(m mergedMsg, blockIdx int) (tea.Model, tea.Cmd) {
+	returnID := a.selectedConversationItemID()
 	for i, raw := range a.convList.Items() {
 		item, ok := raw.(convItem)
 		if !ok || item.kind != convMsg || item.merged.startIdx != m.startIdx {
@@ -132,6 +133,9 @@ func (a *App) openConversationInspectorForEntry(m mergedMsg, blockIdx int) (tea.
 			a.conv.rightPaneMode = previewHook
 		}
 		a.openInspector(inspectorConversation, session.ScopeNode, true)
+		if returnID != "" && returnID != a.selectedConversationItemID() {
+			a.conv.inspector.ReturnToID = returnID
+		}
 		if hasTargetBlock && a.conv.split.Folds != nil {
 			for renderedBlockIdx, block := range a.conv.split.Folds.Entry.Content {
 				if !sameConversationBlock(block, targetBlock) {
@@ -270,15 +274,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		// Fixed session context rows zoom their existing preview renderer.
+		// Fixed session context rows zoom their own overview renderer. The
+		// explicit Overview tab keeps the three rows distinct even when a
+		// sticky facet tab (they all share the root node) was active.
 		if item.kind == convSessionMeta {
-			sp.Show = true
-			sp.Focus = true
-			sp.PreviewOnly = true
-			a.conv.inspector.Zoom = true
-			a.conv.inspector.ZoomPrevFocus = false
-			sp.CacheKey = ""
-			a.updateConvPreview()
+			a.openInspector(inspectorOverview, session.ScopeSession, true)
 			return a, nil
 		}
 		// Toggle fold on expandable group headers; marker headers jump to agent
@@ -326,6 +326,18 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			a.pushNavFrame()
 			return a.openAgentConversation(item.agent)
+		case convPhase, convShell:
+			a.openInspector(inspectorOverview, session.ScopeNode, true)
+			return a, nil
+		case convDecision:
+			// Task decisions open the task's own view; the originating turn
+			// stays one J away.
+			if task, ok := a.decisionTask(item.decision); ok && len(extractTaskEntries(a.conv.messages, task.ID)) > 0 {
+				a.pushNavFrame()
+				return a.openTaskConversation(task)
+			}
+			a.openInspector(inspectorOverview, session.ScopeNode, true)
+			return a, nil
 		case convMsg:
 			// If preview focused on a block, check for actionable types
 			if sp.Focus && sp.Folds != nil {
@@ -395,6 +407,13 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Tab moves between the unified flow and inspector. Detail level remains
 	// available through the explicit detail commands and structured preview keys.
 	if key == "tab" || key == "shift+tab" {
+		// Zoom hides the flow list; Tab leaves zoom and lands on the list
+		// instead of focusing an invisible pane.
+		if a.conv.inspector.Zoom {
+			a.setInspectorZoom(false)
+			sp.Focus = false
+			return a, nil
+		}
 		if !sp.Show {
 			sp.Show = true
 			sp.Focus = false
@@ -616,7 +635,9 @@ func (a *App) updateConvPreview() {
 	if hasNode && a.conv.inspector.Tab != inspectorConversation {
 		content := a.renderInspector(item, node, a.renderInspectorTab(item, node))
 		a.conv.inspector.Rendered = content
-		cacheKey := fmt.Sprintf("inspector:%s:%d:%d:%t", node.ID, a.conv.inspector.Tab, a.conv.inspector.Scope, a.conv.inspector.Zoom)
+		// baseKey keeps rows that share a flow node distinct (all session
+		// context rows map to the root node; decisions map to their turn).
+		cacheKey := fmt.Sprintf("inspector:%s:%s:%d:%d:%t", baseKey, node.ID, a.conv.inspector.Tab, a.conv.inspector.Scope, a.conv.inspector.Zoom)
 		a.setConvPreviewTextKey(content, cacheKey)
 		return
 	}
@@ -641,7 +662,7 @@ func (a *App) updateConvPreview() {
 		a.setConvPreviewText(renderShellInspector(item.shell))
 		return
 	case convDecision:
-		a.setConvPreviewText(renderDecisionInspector(item.decision))
+		a.setConvPreviewText(a.renderDecisionInspector(item.decision))
 		return
 	case convSessionMeta:
 		switch item.sessionMeta {
@@ -838,16 +859,84 @@ func renderShellInspector(job session.ShellJob) string {
 	return b.String()
 }
 
-func renderDecisionInspector(artifact session.Artifact) string {
+func (a *App) renderDecisionInspector(artifact session.Artifact) string {
 	data, _ := artifact.Data.(session.DecisionData)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Decision: %s\n\nKind: %s\n", data.Label, data.Kind)
 	fmt.Fprintf(&b, "Origin: %s · entry %d · block %d\n", artifact.Origin.Transcript, artifact.Origin.EntryIndex+1, artifact.Origin.BlockIndex+1)
-	if data.Related != "" {
-		fmt.Fprintf(&b, "Related: %s\n", data.Related)
+	if a.conv.flow != nil && data.Related != "" {
+		if related, ok := a.conv.flow.ArtifactByID(data.Related); ok {
+			writeDecisionRelated(&b, related)
+		}
 	}
-	b.WriteString("\nPress J to jump to the originating turn.\n")
+	if _, ok := a.decisionTask(artifact); ok {
+		b.WriteString("\nEnter opens the task view · J jumps to the originating turn.\n")
+	} else {
+		b.WriteString("\nPress J to jump to the originating turn.\n")
+	}
 	return b.String()
+}
+
+// writeDecisionRelated inlines the artifact a decision derives from, so each
+// decision marker inspects to its own plan/task/memory content instead of a
+// generic stub.
+func writeDecisionRelated(b *strings.Builder, related session.Artifact) {
+	switch payload := related.Data.(type) {
+	case session.PlanData:
+		if payload.PlanFilePath != "" {
+			fmt.Fprintf(b, "Plan file: %s\n", payload.PlanFilePath)
+		}
+		if payload.Plan != "" {
+			fmt.Fprintf(b, "\n## Plan\n%s\n", payload.Plan)
+		}
+	case session.TaskEventData:
+		b.WriteString("\n## Task\n")
+		if payload.TaskID != "" {
+			fmt.Fprintf(b, "ID: %s\n", payload.TaskID)
+		}
+		if payload.Subject != "" {
+			fmt.Fprintf(b, "Subject: %s\n", payload.Subject)
+		}
+		if payload.Status != "" {
+			fmt.Fprintf(b, "Status: %s\n", payload.Status)
+		}
+	case session.ChangeData:
+		summary := payload.Summary
+		if summary == "" {
+			summary = changeInputSummary(payload.ToolName, payload.ToolInput)
+		}
+		fmt.Fprintf(b, "\n## Change\n%s %s", payload.ToolName, related.Key)
+		if summary != "" {
+			fmt.Fprintf(b, " · %s", summary)
+		}
+		b.WriteByte('\n')
+	}
+}
+
+// decisionTask resolves a task decision marker to the task it points at, so
+// Enter can open the task's own view instead of the originating turn.
+func (a *App) decisionTask(artifact session.Artifact) (session.TaskItem, bool) {
+	data, ok := artifact.Data.(session.DecisionData)
+	if !ok || data.Kind != session.DecisionTask {
+		return session.TaskItem{}, false
+	}
+	taskID := strings.TrimPrefix(artifact.Key, "task:")
+	if a.conv.flow != nil {
+		if related, ok := a.conv.flow.ArtifactByID(data.Related); ok {
+			if event, ok := related.Data.(session.TaskEventData); ok && event.TaskID != "" {
+				taskID = event.TaskID
+			}
+		}
+	}
+	if taskID == "" {
+		return session.TaskItem{}, false
+	}
+	for _, task := range a.conv.sess.Tasks {
+		if task.ID == taskID {
+			return task, true
+		}
+	}
+	return session.TaskItem{ID: taskID}, true
 }
 
 func (a *App) renderFlowSummary() string {

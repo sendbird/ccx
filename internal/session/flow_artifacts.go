@@ -232,6 +232,26 @@ func (b *flowBuilder) append(a Artifact) {
 
 func artifactID(i int) string { return "art:" + itoa(i) }
 
+// ArtifactByID resolves an artifact occurrence ID (the format produced by
+// artifactID and stored in DecisionData.Related) back to its artifact.
+func (fi *FlowIndex) ArtifactByID(id string) (Artifact, bool) {
+	digits, ok := strings.CutPrefix(id, "art:")
+	if !ok || digits == "" {
+		return Artifact{}, false
+	}
+	idx := 0
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return Artifact{}, false
+		}
+		idx = idx*10 + int(r-'0')
+	}
+	if idx >= len(fi.artifacts) {
+		return Artifact{}, false
+	}
+	return fi.artifacts[idx], true
+}
+
 // itoa avoids importing strconv for one call site (fmt is already imported in
 // flow.go; keep this tiny and allocation-free for hot paths).
 func itoa(i int) string {
