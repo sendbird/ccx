@@ -119,6 +119,7 @@ type rawEntry struct {
 type rawToolUseResult struct {
 	AgentID   string `json:"agentId"`
 	AgentType string `json:"agentType"`
+	RunID     string `json:"runId"`
 }
 
 type rawMessage struct {
@@ -150,19 +151,17 @@ func ParseEntry(line string) (Entry, error) {
 		return Entry{}, fmt.Errorf("unmarshal entry: %w", err)
 	}
 
-	agentID := raw.AgentID
-	// Prefer toolUseResult.agentId (Agent tool_result entries carry it here)
-	if agentID == "" && raw.ToolUseResult != nil && raw.ToolUseResult.AgentID != "" {
-		agentID = raw.ToolUseResult.AgentID
-	}
-
 	entry := Entry{
 		Type:     raw.Type,
 		IsMeta:   raw.IsMeta,
 		UUID:     raw.UUID,
 		ParentID: raw.ParentID,
-		AgentID:  agentID,
+		AgentID:  raw.AgentID,
 		RawJSON:  line,
+	}
+	if raw.ToolUseResult != nil {
+		entry.ToolResultAgentID = raw.ToolUseResult.AgentID
+		entry.ToolResultRunID = raw.ToolUseResult.RunID
 	}
 
 	if raw.Timestamp != "" {

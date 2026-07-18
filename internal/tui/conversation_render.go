@@ -710,10 +710,28 @@ func legacyAgentMessageIndex(merged []mergedMsg, timestamp time.Time) int {
 	return -1
 }
 
-// buildConvItems builds a flattened conversation item list from merged messages,
-// with inline task and agent sub-items under assistant messages.
-// A collapsible task group header appears at every task-touching message.
-// Individual task rows (expandable) are attached only under the LAST one.
+// buildConvContextItems builds the fixed, session-wide rows displayed above the
+// paginated chronological conversation body.
+func buildConvContextItems(sess session.Session, merged []mergedMsg, flow *session.FlowIndex) []convItem {
+	items := make([]convItem, 0, 3)
+	if flow != nil {
+		facets := flow.Facets(flow.RootID, session.ScopeSession)
+		decisions := flow.Decisions(session.ScopeSession)
+		label := fmt.Sprintf("Session Flow · %d turns · %d agents · %d wf · ▣%d decisions", len(merged), len(flow.Agents()), len(flow.Workflows()), len(decisions))
+		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "summary", label: label, facets: facets, aggregate: true})
+	}
+	if sess.HasMemory || len(sess.Todos) > 0 {
+		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "memory", label: "Session Memory"})
+	}
+	if sess.HasPlan || len(sess.Tasks) > 0 || len(sess.Crons) > 0 || sess.HasTasks || sess.HasCrons || sess.HasAgents {
+		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "tasksplan", label: "Session Tasks/Plan"})
+	}
+	return items
+}
+
+// buildConvItems builds only the chronological conversation spine, with inline
+// task and agent sub-items under assistant messages. Keeping session context out
+// of this slice preserves parentIdx in the body-only index space.
 func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.Subagent, tasks []session.TaskItem, crons []session.CronItem, flows ...*session.FlowIndex) []convItem {
 	var flow *session.FlowIndex
 	if len(flows) > 0 {
@@ -805,8 +823,14 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 		if isSystemAgent(agent) || workflowAgentIDs[agent.ID] || agent.WorkflowRunID != "" {
 			continue
 		}
+		// OriginEntryIndex is local to OriginTranscript. Never project an
+		// agent-owned spawn onto the root transcript (or another agent) merely
+		// because the numeric entry index happens to match.
+		if agent.OriginTranscript != "" && agent.OriginTranscript != sess.FilePath {
+			continue
+		}
 		messageIdx := mergedIndexForOrigin(merged, agent.OriginMessageUUID, agent.OriginEntryIndex)
-		if messageIdx < 0 && agent.SpawnToolUseID == "" {
+		if messageIdx < 0 && agent.SpawnToolUseID == "" && agent.ParentAgentID == "" {
 			messageIdx = legacyAgentMessageIndex(merged, agent.Timestamp)
 		}
 		if messageIdx >= 0 {
@@ -821,6 +845,9 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 	if flow != nil {
 		for _, run := range flow.Workflows() {
 			if node, ok := flow.Node(session.FlowWorkflowNodeID(run.RunID)); ok {
+				if node.Origin.Transcript != "" && node.Origin.Transcript != sess.FilePath {
+					continue
+				}
 				if messageIdx := mergedIndexForOrigin(merged, node.Origin.MessageUUID, node.Origin.EntryIndex); messageIdx >= 0 {
 					workflowByMsg[messageIdx] = append(workflowByMsg[messageIdx], run)
 				}
@@ -855,27 +882,6 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 	agentStatuses := inferAgentStatuses(merged)
 
 	var items []convItem
-	if flow != nil {
-		facets := flow.Facets(flow.RootID, session.ScopeSession)
-		decisions := flow.Decisions(session.ScopeSession)
-		label := fmt.Sprintf("Session Flow · %d turns · %d agents · %d wf · ▣%d decisions", len(merged), len(flow.Agents()), len(flow.Workflows()), len(decisions))
-		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "summary", label: label, facets: facets, aggregate: true})
-	}
-	if sess.HasMemory || len(sess.Todos) > 0 {
-		items = append(items, convItem{
-			kind:        convSessionMeta,
-			sessionMeta: "memory",
-			label:       "Session Memory",
-		})
-	}
-	if sess.HasPlan || sess.HasTasks || sess.HasCrons || sess.HasAgents {
-		items = append(items, convItem{
-			kind:        convSessionMeta,
-			sessionMeta: "tasksplan",
-			label:       "Session Tasks/Plan",
-		})
-	}
-
 	for mi, m := range merged {
 		parentIdx := len(items)
 		items = append(items, convItem{
@@ -932,11 +938,16 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 				}
 			}
 			for _, phase := range workflowPhases(run) {
+				phaseNodeID := session.FlowPhaseNodeID(run.RunID, phase.Index)
+				phaseFacets := flow.Facets(phaseNodeID, session.ScopeSubtree)
 				items = append(items, convItem{
 					kind:      convPhase,
 					workflow:  run,
 					phase:     phase,
 					label:     phase.Title,
+					facets:    phaseFacets,
+					aggregate: true,
+					count:     len(flow.Children(phaseNodeID)),
 					indent:    2,
 					parentIdx: parentIdx,
 				})
@@ -1444,14 +1455,18 @@ func visibleConvItems(items []convItem) []convItem {
 	return visible
 }
 
-func newConvList(items []convItem, width, height int) list.Model {
+func newConvList(items []convItem, width, height int, contextActive ...*bool) list.Model {
 	vis := visibleConvItems(items)
 	listItems := make([]list.Item, len(vis))
 	for i, ci := range vis {
 		listItems[i] = ci
 	}
+	var active *bool
+	if len(contextActive) > 0 {
+		active = contextActive[0]
+	}
 
-	l := list.New(listItems, convDelegate{}, width, height)
+	l := list.New(listItems, convDelegate{contextActive: active}, width, height)
 	initListBase(&l)
 	l.SetFilteringEnabled(true)
 	l.Filter = substringFilter

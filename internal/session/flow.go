@@ -38,6 +38,7 @@ type FlowOrigin struct {
 	BlockIndex  int
 	ToolUseID   string
 	Timestamp   time.Time
+	Transcript  string // transcript containing the spawning tool_use
 }
 
 // TranscriptRef points at the JSONL transcript backing a node. Nil Transcript
@@ -190,8 +191,15 @@ func (fi *FlowIndex) scopeNodeIDs(nodeID string, scope Scope) map[string]bool {
 	case ScopeSubtree:
 		fi.collectSubtree(nodeID, set)
 	default: // ScopeNode
-		if _, ok := fi.nodes[nodeID]; ok {
-			set[nodeID] = true
+		if node, ok := fi.nodes[nodeID]; ok {
+			// A phase is a grouping node whose content is its assigned agent
+			// subtrees. Treating it as an empty metadata row makes every phase
+			// appear identical in the inspector.
+			if node.Kind == FlowNodePhase {
+				fi.collectSubtree(nodeID, set)
+			} else {
+				set[nodeID] = true
+			}
 		}
 	}
 	return set
@@ -240,7 +248,7 @@ func (fi *FlowIndex) Facets(nodeID string, scope Scope) FacetSummary {
 	if !ok {
 		return FacetSummary{}
 	}
-	if scope == ScopeSubtree {
+	if scope == ScopeSubtree || n.Kind == FlowNodePhase {
 		return n.SubtreeFacets
 	}
 	return n.DirectFacets
@@ -384,54 +392,71 @@ func mergeIntMap(dst *map[string]int, src map[string]int) {
 
 // ---- exact spawn edges ------------------------------------------------------
 
-// BuildToolUseToAgentMap scans entries for tool_result entries that carry an
-// AgentID (from toolUseResult.agentId) and maps tool_use_id → agent ID. This is
-// the exact spawn edge between an Agent/Task tool call and its subagent.
+// BuildToolUseToAgentMap maps a result's tool_use_id to the child agent ID.
+// Entry.AgentID is the transcript owner and must never be used as the child.
 func BuildToolUseToAgentMap(entries []Entry) map[string]string {
 	m := make(map[string]string)
 	for _, e := range entries {
-		if e.AgentID == "" {
+		if e.ToolResultAgentID == "" {
 			continue
 		}
 		for _, b := range e.Content {
 			if b.Type == "tool_result" && b.ID != "" {
-				m[b.ID] = e.AgentID
+				m[b.ID] = e.ToolResultAgentID
 			}
 		}
 	}
 	return m
 }
 
-// AttachSpawnOrigins fills each subagent's exact spawn edge (SpawnToolUseID,
-// OriginMessageUUID, OriginEntryIndex) from the parent transcript entries.
-// Agents with no exact edge (legacy transcripts) are left untouched so
-// timestamp placement remains the fallback.
+// AttachSpawnOrigins fills exact root-transcript spawn edges. It remains the
+// public compatibility helper; BuildSessionFlow uses attachSessionSpawnOrigins
+// to repeat the same operation across every agent transcript.
 func AttachSpawnOrigins(agents []Subagent, entries []Entry) {
+	attachSpawnOrigins(agents, entries, "", "")
+}
+
+func attachSpawnOrigins(agents []Subagent, entries []Entry, parentAgentID, transcript string) {
 	if len(agents) == 0 {
 		return
 	}
-	toolUseToAgent := BuildToolUseToAgentMap(entries)
-	if len(toolUseToAgent) == 0 {
-		return
-	}
-	// Invert: agent ID → spawning tool_use ID.
-	spawnByAgent := make(map[string]string, len(toolUseToAgent))
-	for tuID, agID := range toolUseToAgent {
-		spawnByAgent[agID] = tuID
-	}
+	byID := make(map[string]*Subagent, len(agents))
 	for i := range agents {
-		tuID, ok := spawnByAgent[agents[i].ID]
-		if !ok {
+		byID[agents[i].ID] = &agents[i]
+	}
+	for toolUseID, childID := range BuildToolUseToAgentMap(entries) {
+		child := byID[childID]
+		if child == nil || child.SpawnToolUseID != "" {
 			continue
 		}
-		agents[i].SpawnToolUseID = tuID
-		agents[i].OriginEntryIndex = -1
-		// Locate the tool_use block itself for the message UUID + entry index.
-		if ei, _, e, found := findToolUseBlock(entries, tuID); found {
-			agents[i].OriginMessageUUID = e.UUID
-			agents[i].OriginEntryIndex = ei
+		child.ParentAgentID = parentAgentID
+		child.SpawnToolUseID = toolUseID
+		child.OriginEntryIndex = -1
+		child.OriginBlockIndex = -1
+		child.OriginTranscript = transcript
+		if ei, bi, e, found := findToolUseBlock(entries, toolUseID); found {
+			child.OriginMessageUUID = e.UUID
+			child.OriginEntryIndex = ei
+			child.OriginBlockIndex = bi
 		}
 	}
+}
+
+// attachSessionSpawnOrigins scans the root and every discovered agent
+// transcript. Ordinary nested agents are sibling files, so the parent relation
+// must come from these result edges rather than directory recursion.
+func attachSessionSpawnOrigins(agents []Subagent, rootEntries []Entry, rootPath string) map[string][]Entry {
+	entriesByAgent := make(map[string][]Entry, len(agents))
+	attachSpawnOrigins(agents, rootEntries, "", rootPath)
+	for i := range agents {
+		entries, err := LoadMessages(agents[i].FilePath)
+		if err != nil {
+			continue
+		}
+		entriesByAgent[agents[i].ID] = entries
+		attachSpawnOrigins(agents, entries, agents[i].ID, agents[i].FilePath)
+	}
+	return entriesByAgent
 }
 
 // findToolUseBlock locates the entry/block holding the tool_use with the given ID.
@@ -510,14 +535,16 @@ type flowBuilder struct {
 	sess    *Session
 	entries []Entry
 
-	turnByUUID map[string]string // entry UUID → turn node ID
-	turnByIdx  []string          // entry index → turn node ID
-	visited    map[string]bool   // agent transcript paths (recursion guard)
+	turnByUUID      map[string]string // root entry UUID → turn node ID
+	turnByIdx       []string          // root entry index → turn node ID
+	agentByID       map[string]Subagent
+	agentEntries    map[string][]Entry
+	workflowOrigins map[string]FlowOrigin
+	workflowParents map[string]string
 }
 
 func (b *flowBuilder) build(entries []Entry) {
 	b.entries = entries
-	b.visited = make(map[string]bool)
 
 	root := &FlowNode{
 		ID:   b.fi.RootID,
@@ -528,12 +555,17 @@ func (b *flowBuilder) build(entries []Entry) {
 		},
 	}
 	b.addNode(root)
-
 	b.buildTurns(entries)
 
-	// Discover agents + workflows, wire exact edges.
+	// Discover every transcript once, then derive exact parent edges from the
+	// root and all agent transcripts. Ordinary nested agents are sibling files.
 	agents, _ := FindSubagents(b.sess.FilePath)
-	AttachSpawnOrigins(agents, entries)
+	b.agentEntries = attachSessionSpawnOrigins(agents, entries, b.sess.FilePath)
+	b.agentByID = make(map[string]Subagent, len(agents))
+	for _, agent := range agents {
+		b.agentByID[agent.ID] = agent
+	}
+
 	runs, _ := FindWorkflows(b.sess.FilePath)
 	FillWorkflowAgentMeta(runs, agents)
 	b.fi.agents = agents
@@ -545,14 +577,15 @@ func (b *flowBuilder) build(entries []Entry) {
 			}
 		}
 	}
+	b.indexWorkflowOrigins(entries)
 
 	b.buildWorkflowNodes(runs)
 	b.buildAgentNodes(agents)
 	b.buildShellNodes(entries)
+	b.rebuildChildren()
 
-	// Artifacts: parent transcript owned by turn nodes; agent transcripts owned
-	// by their agent node. b.fi.agents includes nested agents discovered while
-	// building the agent subtrees; each transcript is emitted exactly once.
+	// Artifacts: root transcript occurrences belong to turns; every agent
+	// transcript belongs to its agent node and is emitted exactly once.
 	b.emitTranscriptArtifacts(b.sess.FilePath, entries, "", "", 0)
 	emitted := make(map[string]bool, len(b.fi.agents))
 	for _, a := range b.fi.agents {
@@ -622,9 +655,60 @@ func (b *flowBuilder) turnForEntry(i int) string {
 	return b.fi.RootID
 }
 
-// buildWorkflowNodes creates wf:<run> and phase:<run>:<n> nodes. The run node
-// attaches to the turn containing the Workflow tool_use whose result recorded
-// the runId; if that edge can't be found it attaches to the session root.
+// indexWorkflowOrigins locates workflow result edges in the root and every
+// agent transcript. A workflow started by an agent belongs beneath that agent;
+// a root workflow belongs beneath its exact spawning turn.
+func (b *flowBuilder) indexWorkflowOrigins(rootEntries []Entry) {
+	b.workflowOrigins = make(map[string]FlowOrigin)
+	b.workflowParents = make(map[string]string)
+	index := func(entries []Entry, transcript, parentAgentID string) {
+		for i := range entries {
+			e := &entries[i]
+			if e.ToolResultRunID == "" {
+				continue
+			}
+			for bi, blk := range e.Content {
+				if blk.Type != "tool_result" || blk.ID == "" {
+					continue
+				}
+				origin := FlowOrigin{
+					MessageUUID: e.UUID,
+					EntryIndex:  i,
+					BlockIndex:  bi,
+					ToolUseID:   blk.ID,
+					Timestamp:   e.Timestamp,
+					Transcript:  transcript,
+				}
+				parent := b.fi.RootID
+				if parentAgentID != "" {
+					parent = FlowAgentNodeID(parentAgentID)
+				} else {
+					parent = b.turnForEntry(i)
+				}
+				if ui, ubi, ue, ok := findToolUseBlock(entries, blk.ID); ok {
+					origin.MessageUUID = ue.UUID
+					origin.EntryIndex = ui
+					origin.BlockIndex = ubi
+					origin.Timestamp = ue.Timestamp
+					if parentAgentID == "" {
+						parent = b.turnForEntry(ui)
+					}
+				}
+				b.workflowOrigins[e.ToolResultRunID] = origin
+				b.workflowParents[e.ToolResultRunID] = parent
+			}
+		}
+	}
+	index(rootEntries, b.sess.FilePath, "")
+	for agentID, entries := range b.agentEntries {
+		if agent, ok := b.agentByID[agentID]; ok {
+			index(entries, agent.FilePath, agentID)
+		}
+	}
+}
+
+// buildWorkflowNodes creates run and phase grouping nodes. Only the run claims
+// the exact launch origin; phases are scopes defined by their assigned agents.
 func (b *flowBuilder) buildWorkflowNodes(runs []WorkflowRun) {
 	for _, r := range runs {
 		origin, parent := b.workflowOrigin(r.RunID)
@@ -641,79 +725,59 @@ func (b *flowBuilder) buildWorkflowNodes(runs []WorkflowRun) {
 				ID:       FlowPhaseNodeID(r.RunID, p.Index),
 				Kind:     FlowNodePhase,
 				ParentID: wfNode.ID,
-				Origin:   origin,
 				Label:    p.Title,
 			})
 		}
 	}
 }
 
-// workflowOrigin locates the exact edge for a workflow run: the tool_result
-// whose raw JSON recorded the runId (toolUseResult.runId). The spawn turn is
-// the assistant entry holding the matching Workflow tool_use.
 func (b *flowBuilder) workflowOrigin(runID string) (FlowOrigin, string) {
-	if runID == "" {
-		return FlowOrigin{}, b.fi.RootID
-	}
-	needle := `"` + runID + `"`
-	for i := range b.entries {
-		e := &b.entries[i]
-		if !contains(e.RawJSON, needle) {
-			continue
+	if origin, ok := b.workflowOrigins[runID]; ok {
+		parent := b.workflowParents[runID]
+		if parent == "" {
+			parent = b.fi.RootID
 		}
-		for bi, blk := range e.Content {
-			if blk.Type != "tool_result" || blk.ID == "" {
-				continue
-			}
-			origin := FlowOrigin{
-				MessageUUID: e.UUID,
-				EntryIndex:  i,
-				BlockIndex:  bi,
-				ToolUseID:   blk.ID,
-				Timestamp:   e.Timestamp,
-			}
-			// Prefer the turn of the tool_use (spawn point) over the result turn.
-			parent := b.turnForEntry(i)
-			if ui, ubi, ue, ok := findToolUseBlock(b.entries, blk.ID); ok {
-				origin.MessageUUID = ue.UUID
-				origin.EntryIndex = ui
-				origin.BlockIndex = ubi
-				origin.Timestamp = ue.Timestamp
-				parent = b.turnForEntry(ui)
-			}
-			return origin, parent
-		}
+		return origin, parent
 	}
 	return FlowOrigin{}, b.fi.RootID
 }
 
-// buildAgentNodes creates agent nodes for discovered subagents (recursively
-// loading nested subagents) plus summary-only nodes for workflow agents whose
-// transcripts are gone.
+// buildAgentNodes creates all transcript-backed agents from the session-wide
+// connection graph, plus summary-only workflow agents whose transcript is gone.
 func (b *flowBuilder) buildAgentNodes(agents []Subagent) {
 	transcribed := make(map[string]bool, len(agents))
 	for _, a := range agents {
 		transcribed[a.ID] = true
+		label := a.AgentType
+		if a.WorkflowLabel != "" {
+			label = a.WorkflowLabel
+		}
+		b.addNode(&FlowNode{
+			ID:       FlowAgentNodeID(a.ID),
+			Kind:     FlowNodeAgent,
+			ParentID: b.agentParent(a),
+			Label:    label,
+			Origin: FlowOrigin{
+				MessageUUID: a.OriginMessageUUID,
+				EntryIndex:  a.OriginEntryIndex,
+				BlockIndex:  a.OriginBlockIndex,
+				ToolUseID:   a.SpawnToolUseID,
+				Timestamp:   a.Timestamp,
+				Transcript:  a.OriginTranscript,
+			},
+			Transcript: &TranscriptRef{Path: a.FilePath, ID: a.ID},
+		})
 	}
 
-	for _, a := range agents {
-		parent := b.agentParent(a)
-		b.addAgentSubtree(a, parent, 0)
-	}
-
-	// Summary-only workflow agents: present in the run summary but without a
-	// transcript on disk. They still become nodes so the workflow shape stays
-	// complete; metrics for them come from the summary (Estimated).
 	for _, r := range b.fi.runs {
 		for _, wa := range r.Agents {
 			if wa.AgentID == "" || transcribed[wa.AgentID] {
 				continue
 			}
-			parent := b.workflowAgentParent(r.RunID, wa.PhaseIndex)
 			b.addNode(&FlowNode{
 				ID:        FlowAgentNodeID(wa.AgentID),
 				Kind:      FlowNodeAgent,
-				ParentID:  parent,
+				ParentID:  b.workflowAgentParent(r.RunID, wa.PhaseIndex),
 				Label:     wa.Label,
 				Estimated: true,
 			})
@@ -721,22 +785,42 @@ func (b *flowBuilder) buildAgentNodes(agents []Subagent) {
 	}
 }
 
-// agentParent resolves where a top-level agent hangs on the spine: workflow
-// phase/run for workflow agents; otherwise the exact origin turn; otherwise
-// the timestamp-fallback turn.
 func (b *flowBuilder) agentParent(a Subagent) string {
+	if a.ParentAgentID != "" && a.ParentAgentID != a.ID {
+		if _, ok := b.agentByID[a.ParentAgentID]; ok && !b.agentParentCycle(a.ID, a.ParentAgentID) {
+			return FlowAgentNodeID(a.ParentAgentID)
+		}
+	}
 	if a.WorkflowRunID != "" {
 		return b.workflowAgentParent(a.WorkflowRunID, a.WorkflowPhaseIndex)
 	}
-	if a.OriginMessageUUID != "" {
-		if id, ok := b.turnByUUID[a.OriginMessageUUID]; ok {
-			return id
+	if a.OriginTranscript == b.sess.FilePath {
+		if a.OriginMessageUUID != "" {
+			if id, ok := b.turnByUUID[a.OriginMessageUUID]; ok {
+				return id
+			}
+		}
+		if a.SpawnToolUseID != "" && a.OriginEntryIndex >= 0 {
+			return b.turnForEntry(a.OriginEntryIndex)
 		}
 	}
-	if a.SpawnToolUseID != "" && a.OriginEntryIndex >= 0 {
-		return b.turnForEntry(a.OriginEntryIndex)
-	}
 	return b.timestampFallbackTurn(a.Timestamp)
+}
+
+func (b *flowBuilder) agentParentCycle(childID, parentID string) bool {
+	seen := map[string]bool{childID: true}
+	for parentID != "" {
+		if seen[parentID] {
+			return true
+		}
+		seen[parentID] = true
+		parent, ok := b.agentByID[parentID]
+		if !ok {
+			return false
+		}
+		parentID = parent.ParentAgentID
+	}
+	return false
 }
 
 func (b *flowBuilder) workflowAgentParent(runID string, phaseIndex int) string {
@@ -751,8 +835,27 @@ func (b *flowBuilder) workflowAgentParent(runID string, phaseIndex int) string {
 	return b.fi.RootID
 }
 
-// timestampFallbackTurn is the legacy placement: the last assistant turn whose
-// timestamp does not exceed the agent's. Used only when no exact edge exists.
+// rebuildChildren makes parent linkage independent of node insertion order.
+// This is required when an agent launches a workflow that is indexed first.
+func (b *flowBuilder) rebuildChildren() {
+	for _, node := range b.fi.nodes {
+		node.Children = nil
+	}
+	for _, id := range b.fi.order {
+		if id == b.fi.RootID {
+			continue
+		}
+		node := b.fi.nodes[id]
+		parent, ok := b.fi.nodes[node.ParentID]
+		if !ok || node.ParentID == id {
+			node.ParentID = b.fi.RootID
+			parent = b.fi.nodes[b.fi.RootID]
+		}
+		parent.Children = append(parent.Children, id)
+	}
+}
+
+// timestampFallbackTurn is used only for legacy agents without an exact edge.
 func (b *flowBuilder) timestampFallbackTurn(ts time.Time) string {
 	if ts.IsZero() {
 		return b.fi.RootID
@@ -771,47 +874,6 @@ func (b *flowBuilder) timestampFallbackTurn(ts time.Time) string {
 		return b.fi.RootID
 	}
 	return best
-}
-
-// addAgentSubtree adds an agent node and recursively discovers its nested
-// subagents (agents spawned by agents).
-func (b *flowBuilder) addAgentSubtree(a Subagent, parent string, depth int) {
-	if depth > maxAgentDepth || b.visited[a.FilePath] {
-		return
-	}
-	b.visited[a.FilePath] = true
-
-	label := a.AgentType
-	if a.WorkflowLabel != "" {
-		label = a.WorkflowLabel
-	}
-	node := &FlowNode{
-		ID:       FlowAgentNodeID(a.ID),
-		Kind:     FlowNodeAgent,
-		ParentID: parent,
-		Label:    label,
-		Origin: FlowOrigin{
-			MessageUUID: a.OriginMessageUUID,
-			EntryIndex:  a.OriginEntryIndex,
-			ToolUseID:   a.SpawnToolUseID,
-			Timestamp:   a.Timestamp,
-		},
-		Transcript: &TranscriptRef{Path: a.FilePath, ID: a.ID},
-	}
-	b.addNode(node)
-
-	nested, err := FindSubagents(a.FilePath)
-	if err != nil || len(nested) == 0 {
-		return
-	}
-	agentEntries, err := LoadMessages(a.FilePath)
-	if err == nil {
-		AttachSpawnOrigins(nested, agentEntries)
-	}
-	for _, n := range nested {
-		b.fi.agents = append(b.fi.agents, n)
-		b.addAgentSubtree(n, node.ID, depth+1)
-	}
 }
 
 // buildShellNodes creates shell:<tool_use_id> nodes for the parent transcript's
@@ -906,16 +968,35 @@ func (b *flowBuilder) computeFacets() {
 		}
 	}
 
-	// Bottom-up subtree aggregation (children were always added after their
-	// parent, so reverse build order visits children first).
-	for i := len(b.fi.order) - 1; i >= 0; i-- {
-		n := b.fi.nodes[b.fi.order[i]]
-		n.SubtreeFacets.merge(n.DirectFacets)
-		for _, cid := range n.Children {
-			if c, ok := b.fi.nodes[cid]; ok {
-				n.SubtreeFacets.merge(c.SubtreeFacets)
-			}
+	// Aggregate by graph traversal rather than insertion order. Workflows may be
+	// indexed before the agent that launched them, and malformed legacy data can
+	// contain cycles; visiting guards keep both cases safe.
+	visited := make(map[string]bool, len(b.fi.nodes))
+	visiting := make(map[string]bool, len(b.fi.nodes))
+	var aggregate func(string) FacetSummary
+	aggregate = func(id string) FacetSummary {
+		n, ok := b.fi.nodes[id]
+		if !ok {
+			return FacetSummary{}
 		}
+		if visited[id] {
+			return n.SubtreeFacets
+		}
+		if visiting[id] {
+			return FacetSummary{}
+		}
+		visiting[id] = true
+		total := n.DirectFacets
+		for _, childID := range n.Children {
+			total.merge(aggregate(childID))
+		}
+		delete(visiting, id)
+		visited[id] = true
+		n.SubtreeFacets = total
+		return total
+	}
+	for _, id := range b.fi.order {
+		aggregate(id)
 	}
 }
 

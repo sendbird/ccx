@@ -50,7 +50,7 @@ func selectInspectorItem(t *testing.T, app *App, match func(convItem) bool) conv
 	for i, raw := range app.convList.Items() {
 		item, ok := raw.(convItem)
 		if ok && match(item) {
-			app.convList.Select(i)
+			app.selectConvBody(i)
 			app.conv.split.CacheKey = ""
 			app.updateConvPreview()
 			return item

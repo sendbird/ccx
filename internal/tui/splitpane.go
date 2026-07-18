@@ -25,6 +25,11 @@ type SplitPane struct {
 	// Item height for mouse click calculations (delegate Height + Spacing)
 	ItemHeight int
 
+	// Optional fixed content rendered above the paginated list. HeaderHeight is
+	// clamped so the list always retains at least one row.
+	Header       string
+	HeaderHeight int
+
 	// Optional fold support (nil = simple scroll-only preview)
 	Folds *FoldState
 
@@ -40,6 +45,7 @@ type SplitPane struct {
 	// Render cache: skip re-render when only block cursor moved
 	cachedRP    *renderedPreview
 	cachedFolds uint64 // hash of collapsed+formatted state at last render
+	headerInset int    // effective fixed-header height after terminal clamping
 }
 
 // FoldState holds fold/unfold and block cursor state for previews
@@ -162,6 +168,34 @@ func renderFixedSplit(left, right string, listW, previewW, contentH int, borderC
 	return out.String()
 }
 
+func (sp *SplitPane) listHeaderInset(contentH int) int {
+	if sp.Header == "" || sp.HeaderHeight <= 0 {
+		sp.headerInset = 0
+		return 0
+	}
+	sp.headerInset = min(sp.HeaderHeight, max(contentH-1, 0))
+	return sp.headerInset
+}
+
+func (sp *SplitPane) listContentHeight(contentH int) int {
+	return max(contentH-sp.listHeaderInset(contentH), 1)
+}
+
+func (sp *SplitPane) listView(contentH int) string {
+	inset := sp.listHeaderInset(contentH)
+	if inset == 0 {
+		return sp.List.View()
+	}
+	headerLines := strings.Split(sp.Header, "\n")
+	if len(headerLines) > inset {
+		headerLines = headerLines[:inset]
+	}
+	for len(headerLines) < inset {
+		headerLines = append(headerLines, "")
+	}
+	return strings.Join(headerLines, "\n") + "\n" + sp.List.View()
+}
+
 // Render draws the split layout: list | border | preview.
 // If Show is false or dimensions too small, returns list-only view.
 func (sp *SplitPane) Render(totalW, totalH, splitRatio int) string {
@@ -174,16 +208,22 @@ func (sp *SplitPane) Render(totalW, totalH, splitRatio int) string {
 		}
 		return sp.Preview.View()
 	}
+	contentH := ContentHeight(totalH)
 	if !sp.Show || totalW < 40 || totalH < 10 {
-		return sp.List.View()
+		listW := sp.ListWidth(totalW, splitRatio)
+		listH := sp.listContentHeight(contentH)
+		if sp.List.Width() > 0 && (sp.List.Width() != listW || sp.List.Height() != listH) {
+			sp.List.SetSize(listW, listH)
+		}
+		return sp.listView(contentH)
 	}
 
 	listW := sp.ListWidth(totalW, splitRatio)
 	previewW := sp.PreviewWidth(totalW, splitRatio)
-	contentH := ContentHeight(totalH)
+	listH := sp.listContentHeight(contentH)
 
-	if sp.List.Width() > 0 && (sp.List.Width() != listW || sp.List.Height() != contentH) {
-		sp.List.SetSize(listW, contentH)
+	if sp.List.Width() > 0 && (sp.List.Width() != listW || sp.List.Height() != listH) {
+		sp.List.SetSize(listW, listH)
 	}
 
 	if sp.Preview.Width != previewW || sp.Preview.Height != contentH {
@@ -197,7 +237,7 @@ func (sp *SplitPane) Render(totalW, totalH, splitRatio int) string {
 		borderColor = colorBorderFocused
 	}
 
-	left := sp.List.View()
+	left := sp.listView(contentH)
 	right := sp.Preview.View()
 
 	return renderFixedSplit(left, right, listW, previewW, contentH, borderColor)
@@ -229,7 +269,7 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 			sp.Focus = false
 			if sp.List.Width() > 0 {
 				contentH := ContentHeight(totalH)
-				sp.List.SetSize(sp.ListWidth(totalW, splitRatio), contentH)
+				sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
 				sp.List.Select(idx)
 			}
 			return splitKeyClosed
@@ -248,7 +288,7 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 		sp.Show = true
 		sp.CacheKey = ""
 		contentH := ContentHeight(totalH)
-		sp.List.SetSize(sp.ListWidth(totalW, splitRatio), contentH)
+		sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
 		sp.List.Select(idx)
 		return splitKeyOpened
 
@@ -267,7 +307,7 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 				sp.Show = false
 				if sp.List.Width() > 0 {
 					contentH := ContentHeight(totalH)
-					sp.List.SetSize(sp.ListWidth(totalW, splitRatio), contentH)
+					sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
 					sp.List.Select(idx)
 				}
 				return splitKeyClosed
@@ -296,7 +336,7 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 				sp.Show = true
 				sp.CacheKey = ""
 				contentH := ContentHeight(totalH)
-				sp.List.SetSize(sp.ListWidth(totalW, splitRatio), contentH)
+				sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
 				sp.List.Select(idx)
 			}
 			sp.Focus = true
@@ -430,7 +470,7 @@ func (sp *SplitPane) Resize(totalW, totalH, splitRatio int) {
 	}
 	idx := sp.List.Index()
 	contentH := ContentHeight(totalH)
-	sp.List.SetSize(sp.ListWidth(totalW, splitRatio), contentH)
+	sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
 	sp.List.Select(idx)
 	sp.cachedRP = nil
 	// Re-render preview at new dimensions, preserving fold state and scroll position
@@ -469,7 +509,7 @@ func (sp *SplitPane) HandleMouseClick(mouseX, contentY int, totalW, splitRatio i
 		}
 	} else {
 		sp.Focus = false
-		mouseClickList(sp.List, contentY, sp.ItemHeight)
+		mouseClickList(sp.List, contentY-sp.headerInset, sp.ItemHeight)
 	}
 }
 

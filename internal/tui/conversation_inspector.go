@@ -257,7 +257,7 @@ func (a *App) openInspector(tab inspectorTab, scope session.Scope, zoom bool) {
 	sp := &a.conv.split
 	a.conv.inspector.Scope = scope
 	a.conv.inspector.Tab = tab
-	if item, ok := a.convList.SelectedItem().(convItem); ok {
+	if item, ok := a.selectedConversationItem(); ok {
 		a.conv.inspector.Explicit = true
 		a.conv.inspector.ExplicitTab = tab
 		a.conv.inspector.ExplicitNodeID = convItemFlowNodeID(item, a.conv.flow)
@@ -303,7 +303,7 @@ func (a *App) setInspectorZoom(zoom bool) {
 }
 
 func (a *App) cycleInspectorTabBy(delta int) {
-	item, ok := a.convList.SelectedItem().(convItem)
+	item, ok := a.selectedConversationItem()
 	if !ok || a.conv.flow == nil {
 		return
 	}
@@ -396,7 +396,7 @@ func (a *App) renderInspectorOverview(item convItem, node session.FlowNode) stri
 	case convWorkflow:
 		content = renderWorkflowInspector(item.workflow, a.conv.flow.Facets(node.ID, a.conv.inspector.Scope))
 	case convPhase:
-		content = renderPhaseInspector(item.workflow, item.phase)
+		content = renderPhaseInspector(item.workflow, item.phase, a.conv.flow, node.ID, a.conv.inspector.Scope)
 	case convShell:
 		content = renderShellInspector(item.shell)
 	case convDecision:

@@ -112,8 +112,14 @@ type Entry struct {
 	Model     string
 	UUID      string
 	ParentID  string
-	AgentID   string
-	RawJSON   string
+	AgentID   string // owner of the transcript entry; empty for the root session
+
+	// ToolResultAgentID and ToolResultRunID identify work created by the tool
+	// result on this entry. They are intentionally separate from AgentID: in an
+	// agent transcript AgentID is the parent while ToolResultAgentID is its child.
+	ToolResultAgentID string
+	ToolResultRunID   string
+	RawJSON           string
 }
 
 type HookInfo struct {
@@ -160,13 +166,18 @@ type Subagent struct {
 	WorkflowPhaseIndex int
 	WorkflowPhaseTitle string
 
+	// ParentAgentID is empty for agents launched by the root session. Nested
+	// agents retain the ID of the transcript owner that launched them; ordinary
+	// nested transcripts are sibling files, so this cannot be inferred from paths.
+	ParentAgentID string
+
 	// Exact spawn edge into the parent transcript (see AttachSpawnOrigins):
 	// the Agent/Task tool_use block that launched this subagent. Empty when no
 	// exact edge exists (legacy transcripts) — timestamp placement is the
-	// fallback then. OriginEntryIndex is the index into the parent's
-	// LoadMessages slice; it is only meaningful when SpawnToolUseID is set
-	// (AttachSpawnOrigins stores -1 when the spawning block was not found).
+	// fallback then. OriginEntryIndex is local to OriginTranscript.
 	SpawnToolUseID    string
 	OriginMessageUUID string
 	OriginEntryIndex  int
+	OriginBlockIndex  int
+	OriginTranscript  string
 }

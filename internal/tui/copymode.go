@@ -34,7 +34,7 @@ func (a *App) enterCopyMode() {
 		if content := a.renderedInspectorText(); content != "" {
 			chunks = strings.Split(content, "\n")
 		} else if a.conv.rightPaneMode == previewText {
-			item, ok := a.convList.SelectedItem().(convItem)
+			item, ok := a.selectedConversationItem()
 			if !ok {
 				return
 			}
@@ -272,7 +272,7 @@ func (a *App) copyConvSelection() {
 // copyConvSelectedMessage copies the full text of the currently selected
 // conversation list item, used when there is no block-level selection.
 func (a *App) copyConvSelectedMessage() {
-	item, ok := a.convList.SelectedItem().(convItem)
+	item, ok := a.selectedConversationItem()
 	if !ok {
 		a.copiedMsg = "Nothing to copy"
 		return

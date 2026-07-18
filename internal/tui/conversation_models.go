@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"io"
 	"strings"
 
@@ -58,6 +59,7 @@ func convItemID(c convItem) string {
 		if c.merged.entry.UUID != "" {
 			return "msg:" + c.merged.entry.UUID
 		}
+		return fmt.Sprintf("msg-index:%d:%d", c.merged.startIdx, c.merged.endIdx)
 	case convTask:
 		if c.task.ID != "" {
 			return "task:" + c.task.ID
@@ -87,14 +89,6 @@ func convItemID(c convItem) string {
 		return "meta:" + c.sessionMeta
 	}
 	return "lbl:" + c.groupTag + ":" + c.label
-}
-
-func selectedConvItemID(l *list.Model) string {
-	ci, ok := l.SelectedItem().(convItem)
-	if !ok {
-		return ""
-	}
-	return convItemID(ci)
 }
 
 func (c convItem) FilterValue() string {
@@ -148,8 +142,11 @@ func (c convItem) FilterValue() string {
 	return strings.Join(parts, " ")
 }
 
-// convDelegate renders conversation list items.
-type convDelegate struct{}
+// convDelegate renders conversation list items. contextActive is optional so
+// standalone list tests retain the normal bubbles selection behavior.
+type convDelegate struct {
+	contextActive *bool
+}
 
 func (d convDelegate) Height() int                             { return 1 }
 func (d convDelegate) Spacing() int                            { return 0 }
@@ -160,7 +157,7 @@ func (d convDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	if !ok {
 		return
 	}
-	selected := index == m.Index()
+	selected := index == m.Index() && (d.contextActive == nil || !*d.contextActive)
 	width := m.Width()
 	clamp := lipgloss.NewStyle().MaxWidth(width)
 	filterTerm := listFilterTerm(m)

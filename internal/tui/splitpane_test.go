@@ -175,6 +175,20 @@ func TestRenderFixedSplit_DividerAligned_EmptyPanes(t *testing.T) {
 	}
 }
 
+func TestSplitPaneHeaderInsetKeepsOneBodyRow(t *testing.T) {
+	sp := SplitPane{
+		Header:       "flow\nmemory\ntasks\ntimeline",
+		HeaderHeight: 4,
+	}
+
+	if got := sp.listContentHeight(3); got != 1 {
+		t.Fatalf("list content height = %d, want one retained body row", got)
+	}
+	if sp.headerInset != 2 {
+		t.Fatalf("effective header inset = %d, want 2", sp.headerInset)
+	}
+}
+
 func TestTruncateExact_AmbiguousChars(t *testing.T) {
 	cases := []struct {
 		name   string

@@ -135,6 +135,10 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.conv.split.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+		if !scrolledPreview {
+			a.conv.contextActive = false
+			a.updateConvHeader()
+		}
 		if !scrolledPreview && a.conv.split.Show {
 			a.updateConvPreview()
 		}
@@ -209,7 +213,18 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		previewCmd = a.updateSessionPreview()
 
 	case viewConversation:
-		a.conv.split.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+		if !clickedPreview && contentY >= 0 && contentY < a.conv.split.headerInset {
+			if contentY < len(a.conv.contextItems) {
+				a.selectConvContext(contentY)
+			}
+			a.conv.split.Focus = false
+		} else {
+			a.conv.split.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+			if !clickedPreview {
+				a.conv.contextActive = false
+				a.updateConvHeader()
+			}
+		}
 		if a.conv.split.Show {
 			a.updateConvPreview()
 		}

@@ -428,6 +428,9 @@ type App struct {
 		messages       []session.Entry
 		merged         []mergedMsg
 		agents         []session.Subagent
+		contextItems   []convItem
+		contextIndex   int
+		contextActive  bool
 		items          []convItem
 		flow           *session.FlowIndex
 		inspector      conversationInspector
@@ -2108,7 +2111,7 @@ func (a *App) jumpToAgentConversation() (tea.Model, tea.Cmd, bool) {
 			continue
 		}
 		if ci.kind == convAgent && (ci.agent.ID == agent.ID || ci.agent.ShortID == agent.ShortID) {
-			a.convList.Select(i)
+			a.selectConvBody(i)
 			break
 		}
 	}
@@ -2309,7 +2312,7 @@ func (a *App) drillIntoWorkflowAgent() (tea.Model, tea.Cmd, bool) {
 			continue
 		}
 		if ci.kind == convAgent && (ci.agent.ID == agent.ID || ci.agent.ShortID == agent.ShortID) {
-			a.convList.Select(i)
+			a.selectConvBody(i)
 			break
 		}
 	}
@@ -3018,7 +3021,7 @@ func (a *App) openEditMenu(sess session.Session) (tea.Model, tea.Cmd) {
 
 	// If cursor is on a subagent item, offer its file
 	if a.state == viewConversation {
-		if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convAgent && item.groupTag == "" {
+		if item, ok := a.selectedConversationItem(); ok && item.kind == convAgent && item.groupTag == "" {
 			a.editChoices = append(a.editChoices,
 				editChoice{"a", "agent:" + item.agent.ShortID, item.agent.FilePath},
 			)
@@ -3032,7 +3035,7 @@ func (a *App) openEditMenu(sess session.Session) (tea.Model, tea.Cmd) {
 			entry = a.conv.split.Folds.Entry
 		}
 		if len(entry.Content) == 0 {
-			if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
+			if item, ok := a.selectedConversationItem(); ok && item.kind == convMsg {
 				entry = item.merged.entry
 			}
 		}
@@ -3560,7 +3563,7 @@ func (a *App) openMessageImage() (tea.Model, tea.Cmd) {
 		entry = a.conv.split.Folds.Entry
 	}
 	if len(entry.Content) == 0 {
-		if item, ok := a.convList.SelectedItem().(convItem); ok && item.kind == convMsg {
+		if item, ok := a.selectedConversationItem(); ok && item.kind == convMsg {
 			entry = item.merged.entry
 		}
 	}
@@ -4395,7 +4398,7 @@ func (a *App) handleLiveTail() {
 				break
 			}
 		}
-		a.convList.Select(lastMsg)
+		a.selectConvBody(lastMsg)
 
 		debugLog.Printf("handleLiveTail: oldIdx=%d newIdx=%d visItems=%d show=%v oldCK=%q",
 			oldIdx, lastMsg, len(visItems), sp.Show, oldCK)
@@ -5105,7 +5108,7 @@ func (a *App) jumpToConvMessage() (tea.Model, tea.Cmd) {
 	}
 
 	if bestIdx < len(items) {
-		a.convList.Select(bestIdx)
+		a.selectConvBody(bestIdx)
 	}
 	// Don't auto-snap for targeted jumps
 	a.liveTail = false
@@ -5141,7 +5144,7 @@ func (a *App) handleJumpFromPicker() (tea.Model, tea.Cmd) {
 				}
 				for idx := ci.merged.startIdx; idx <= ci.merged.endIdx && idx < len(a.conv.messages); idx++ {
 					if a.conv.messages[idx].UUID == targetUUID {
-						a.convList.Select(j)
+						a.selectConvBody(j)
 						a.liveTail = false
 						a.conv.split.BottomAlign = false
 						a.updateConvPreview()
@@ -6782,13 +6785,17 @@ func (a *App) resetActiveFilter() {
 		// Falling back to the (filtered) index would land on an unrelated
 		// item because the index space shifts when ResetFilter expands the
 		// visible items back to the full set.
-		selID := selectedConvItemID(&a.convList)
+		selID := a.selectedConversationItemID()
+		wasContext := a.conv.contextActive
 		idx := a.convList.Index()
 		a.convList.ResetFilter()
+		if wasContext && a.restoreConvSelection(selID) {
+			return
+		}
 		if selID != "" {
 			for i, item := range a.convList.Items() {
 				if ci, ok := item.(convItem); ok && convItemID(ci) == selID {
-					a.convList.Select(i)
+					a.selectConvBody(i)
 					return
 				}
 			}
@@ -6799,7 +6806,7 @@ func (a *App) resetActiveFilter() {
 			idx = total - 1
 		}
 		if idx >= 0 {
-			a.convList.Select(idx)
+			a.selectConvBody(idx)
 		}
 	case viewConfig:
 		a.clearCfgSearch()
@@ -6824,6 +6831,11 @@ func (a *App) updateActiveList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.listReady(&a.convList) {
 			var cmd tea.Cmd
 			a.convList, cmd = a.convList.Update(msg)
+			if _, ok := msg.(list.FilterMatchesMsg); ok {
+				a.conv.contextActive = false
+				a.updateConvHeader()
+				a.updateConvPreview()
+			}
 			return a, cmd
 		}
 		return a, nil
@@ -6913,6 +6925,11 @@ func (a *App) updateActiveComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.listReady(&a.convList) {
 			var cmd tea.Cmd
 			a.convList, cmd = a.convList.Update(msg)
+			if _, ok := msg.(list.FilterMatchesMsg); ok {
+				a.conv.contextActive = false
+				a.updateConvHeader()
+				a.updateConvPreview()
+			}
 			return a, cmd
 		}
 		return a, nil
@@ -7069,9 +7086,10 @@ func (a *App) resizeAll() tea.Cmd {
 	}
 	// Conversation split view
 	if a.convList.Width() > 0 {
-		idx := a.convList.Index()
-		a.convList.SetSize(a.conv.split.ListWidth(a.width, a.splitRatio), contentH)
-		a.convList.Select(idx)
+		selectedID := a.selectedConversationItemID()
+		a.updateConvHeader()
+		a.conv.split.Resize(a.width, a.height, a.splitRatio)
+		a.restoreConvSelection(selectedID)
 		// Re-render preview content at new dimensions (preserves folds/scroll)
 		if a.conv.split.Show {
 			a.conv.split.cachedRP = nil

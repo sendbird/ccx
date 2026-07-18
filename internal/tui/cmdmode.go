@@ -415,7 +415,7 @@ func (a *App) setSessPreviewMode(mode sessPreview) tea.Cmd {
 func (a *App) setConvDetailLevel(level int) {
 	sp := &a.conv.split
 	baseKey := ""
-	if item, ok := a.convList.SelectedItem().(convItem); ok {
+	if item, ok := a.selectedConversationItem(); ok {
 		baseKey = convPreviewBaseKey(item)
 	}
 	anchor := captureConvPreviewAnchor(sp, baseKey)
