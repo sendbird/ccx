@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -213,6 +214,107 @@ func (a *App) renderTodosBlock(todos []session.TodoItem) string {
 		b.WriteString("\n" + style.Render(fmt.Sprintf("  %s %s", icon, t.Content)))
 	}
 	return b.String()
+}
+
+// currentMetaTarget returns the jump/drill target bound to the focused block of
+// a session-meta preview, or (zero, false) when there is none (non-meta preview,
+// header row, or out-of-range cursor).
+func (a *App) currentMetaTarget() (metaEntryTarget, bool) {
+	sp := &a.conv.split
+	if sp.Folds == nil {
+		return metaEntryTarget{}, false
+	}
+	targets := a.conv.inspector.MetaTargets
+	bc := sp.Folds.BlockCursor
+	if bc < 0 || bc >= len(targets) {
+		return metaEntryTarget{}, false
+	}
+	return targets[bc], true
+}
+
+// handleMetaEntryEnter acts on Enter over a focused session-meta block: memory
+// rows drill into the file, other targets jump to the originating turn. Returns
+// handled=false when the block has no actionable target so the caller falls
+// back to the default zoom behavior.
+func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
+	target, ok := a.currentMetaTarget()
+	if !ok {
+		return false, a, nil
+	}
+	switch target.kind {
+	case metaTargetMemoryFile:
+		if a.conv.inspector.MetaDrill == "" && target.fileName != "" {
+			// List → detail: drill into the selected memory note.
+			a.enterMemoryDrill(target.fileName)
+			return true, a, nil
+		}
+		// Already in detail (or no file): fall through to a jump if we have one.
+		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
+			return true, m, cmd
+		}
+		return true, a, nil
+	default:
+		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
+			return true, m, cmd
+		}
+	}
+	return false, a, nil
+}
+
+// enterMemoryDrill switches the memory row from list mode to single-file detail
+// for fileName and re-renders, keeping the inspector zoomed.
+func (a *App) enterMemoryDrill(fileName string) {
+	a.conv.inspector.MetaDrill = fileName
+	a.conv.split.CacheKey = ""
+	if a.conv.split.Folds != nil {
+		a.conv.split.Folds.BlockCursor = 0
+	}
+	a.updateConvPreview()
+}
+
+// exitMemoryDrill returns from single-file detail to the memory file list.
+// Returns true when it consumed the key (was in drill mode).
+func (a *App) exitMemoryDrill() bool {
+	if a.conv.inspector.MetaDrill == "" {
+		return false
+	}
+	a.conv.inspector.MetaDrill = ""
+	a.conv.split.CacheKey = ""
+	if a.conv.split.Folds != nil {
+		a.conv.split.Folds.BlockCursor = 0
+	}
+	a.updateConvPreview()
+	return true
+}
+
+// jumpToMetaTarget jumps to the conversation turn that produced a meta entry,
+// reusing the exact-block inspector jump. Returns ok=false when the target has
+// no locatable origin turn.
+func (a *App) jumpToMetaTarget(target metaEntryTarget) (tea.Model, tea.Cmd, bool) {
+	if target.messageUUID == "" {
+		return a, nil, false
+	}
+	m, ok := a.mergedByUUID(target.messageUUID)
+	if !ok {
+		a.copiedMsg = "origin turn not found"
+		return a, nil, true
+	}
+	model, cmd := a.openConversationInspectorForEntry(m, target.blockIdx)
+	return model, cmd, true
+}
+
+// mergedByUUID finds the merged conversation turn whose entry UUID matches, so
+// a meta entry's origin (recorded on the flow artifact) can be jumped to.
+func (a *App) mergedByUUID(uuid string) (mergedMsg, bool) {
+	if uuid == "" {
+		return mergedMsg{}, false
+	}
+	for _, m := range a.conv.merged {
+		if m.entry.UUID == uuid {
+			return m, true
+		}
+	}
+	return mergedMsg{}, false
 }
 
 // textMeta wraps a rendered string as a non-selectable-target metaEntry.

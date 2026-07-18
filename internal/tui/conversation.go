@@ -204,6 +204,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.setInspectorZoom(!a.conv.inspector.Zoom)
 		return a, nil
 	}
+	if key == "esc" && a.conv.inspector.MetaDrill != "" {
+		// Back out of a memory file detail to the file list before unzooming.
+		a.exitMemoryDrill()
+		return a, nil
+	}
 	if key == "esc" && a.conv.inspector.Zoom {
 		a.setInspectorZoom(false)
 		return a, nil
@@ -278,6 +283,13 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// explicit Overview tab keeps the three rows distinct even when a
 		// sticky facet tab (they all share the root node) was active.
 		if item.kind == convSessionMeta {
+			// When focused on a selectable block, act on its target: drill into
+			// a memory file, or jump to the turn that produced the entry.
+			if sp.Focus && sp.Folds != nil {
+				if handled, m, cmd := a.handleMetaEntryEnter(); handled {
+					return m, cmd
+				}
+			}
 			a.openInspector(inspectorOverview, session.ScopeSession, true)
 			return a, nil
 		}
@@ -384,7 +396,17 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a.openLiveInput(a.currentSess.ProjectPath, a.currentSess.ID)
 	case a.keymap.Conversation.JumpToTree:
-		if item, ok := a.selectedConversationItem(); ok && item.kind != convMsg {
+		item, ok := a.selectedConversationItem()
+		if ok && item.kind == convSessionMeta {
+			if target, has := a.currentMetaTarget(); has {
+				if m, cmd, jumped := a.jumpToMetaTarget(target); jumped {
+					return m, cmd
+				}
+			}
+			a.copiedMsg = "no origin turn for this entry"
+			return a, nil
+		}
+		if ok && item.kind != convMsg {
 			return a.jumpToOriginMessage()
 		}
 		if a.config.TmuxEnabled {
@@ -625,6 +647,13 @@ func (a *App) updateConvPreview() {
 	item, ok := a.selectedConversationItem()
 	if !ok {
 		return
+	}
+
+	// Memory drill state only belongs to the memory row; leaving it (to another
+	// meta row or any other item) drops back to the file list so re-entry is
+	// clean.
+	if a.conv.inspector.MetaDrill != "" && !(item.kind == convSessionMeta && item.sessionMeta == "memory") {
+		a.conv.inspector.MetaDrill = ""
 	}
 
 	baseKey := convPreviewBaseKey(item)

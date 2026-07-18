@@ -60,3 +60,84 @@ func TestMemoryListRowIndexHasNoTypeTag(t *testing.T) {
 		t.Errorf("index row should not carry a type tag: %q", row)
 	}
 }
+
+func TestMemoryDrillFallbackWhenFileMissing(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.currentSess.HasMemory = true
+	app.conv.sess = app.currentSess
+	app.conv.contextItems = buildConvContextItems(app.conv.sess, app.conv.merged, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
+	app.rebuildConversationList(0)
+	for i, item := range app.conv.contextItems {
+		if item.sessionMeta == "memory" {
+			app.selectConvContext(i)
+			break
+		}
+	}
+	// Drilling into a note that does not exist on disk must fall back to the
+	// file list rather than leaving a dangling drill state.
+	app.enterMemoryDrill("does-not-exist.md")
+	if app.conv.inspector.MetaDrill != "" {
+		t.Fatalf("drill into missing file should reset, got %q", app.conv.inspector.MetaDrill)
+	}
+}
+
+func TestExitMemoryDrillNoop(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	if app.exitMemoryDrill() {
+		t.Fatal("exitMemoryDrill should be a no-op when not drilled")
+	}
+	// Set drill directly and confirm exit clears it and reports handled.
+	app.conv.inspector.MetaDrill = "kiro.md"
+	if !app.exitMemoryDrill() {
+		t.Fatal("exitMemoryDrill should report handled while drilled")
+	}
+	if app.conv.inspector.MetaDrill != "" {
+		t.Fatalf("exitMemoryDrill did not clear drill state: %q", app.conv.inspector.MetaDrill)
+	}
+}
+
+func TestMergedByUUID(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	// testEntries includes a user turn; find any real UUID to look up.
+	if len(app.conv.merged) == 0 {
+		t.Skip("no merged turns")
+	}
+	want := app.conv.merged[0].entry.UUID
+	if want == "" {
+		t.Skip("first turn has no UUID")
+	}
+	m, ok := app.mergedByUUID(want)
+	if !ok || m.entry.UUID != want {
+		t.Fatalf("mergedByUUID(%q) = %q,%v", want, m.entry.UUID, ok)
+	}
+	if _, ok := app.mergedByUUID("no-such-uuid"); ok {
+		t.Fatal("mergedByUUID should miss on unknown UUID")
+	}
+}
+
+func TestCurrentMetaTargetRespectsCursor(t *testing.T) {
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.conv.inspector.MetaTargets = []metaEntryTarget{
+		{blockIdx: -1},
+		{kind: metaTargetMemoryFile, fileName: "a.md"},
+		{kind: metaTargetDecision, messageUUID: "u9", blockIdx: 2},
+	}
+	app.conv.split.Folds.Entry = session.Entry{Content: []session.ContentBlock{
+		{Type: "text", Text: "h"}, {Type: "text", Text: "a"}, {Type: "text", Text: "b"},
+	}}
+
+	app.conv.split.Folds.BlockCursor = 1
+	if tgt, ok := app.currentMetaTarget(); !ok || tgt.fileName != "a.md" {
+		t.Fatalf("cursor 1 target = %+v ok=%v", tgt, ok)
+	}
+	app.conv.split.Folds.BlockCursor = 2
+	if tgt, ok := app.currentMetaTarget(); !ok || tgt.messageUUID != "u9" {
+		t.Fatalf("cursor 2 target = %+v ok=%v", tgt, ok)
+	}
+	// Out of range → no target.
+	app.conv.split.Folds.BlockCursor = 9
+	if _, ok := app.currentMetaTarget(); ok {
+		t.Fatal("out-of-range cursor should yield no target")
+	}
+}
