@@ -76,8 +76,20 @@ const (
 	metaTargetDecision                  // flow-summary decision → jump to origin turn
 	metaTargetTask                      // task row → open task view / definition turn
 	metaTargetPlan                      // plan row → jump to ExitPlanMode turn
-	metaTargetCron                      // cron row (informational; jump to definition turn)
+	metaTargetCron                      // cron row (informational; no origin to jump to)
 )
+
+// jumpable reports whether a target kind can jump to a conversation turn. None,
+// separators, and crons (which have no recorded origin) cannot, so Enter/J on
+// those rows must not fall back to a bare entry-index of 0.
+func (t metaTargetKind) jumpable() bool {
+	switch t {
+	case metaTargetMemoryFile, metaTargetDecision, metaTargetTask, metaTargetPlan:
+		return true
+	default:
+		return false
+	}
+}
 
 func (t inspectorTab) String() string {
 	switch t {

@@ -42,7 +42,7 @@ func (a *App) buildSessionMetaEntry(item convItem) (session.Entry, []metaEntryTa
 	}
 	if len(blocks) == 0 {
 		blocks = append(blocks, session.ContentBlock{Type: "text", Text: dimStyle.Render("(nothing to show)")})
-		targets = append(targets, metaEntryTarget{blockIdx: -1})
+		targets = append(targets, metaEntryTarget{entryIndex: -1, blockIdx: -1})
 	}
 	return session.Entry{Content: blocks}, targets
 }
@@ -92,9 +92,17 @@ func (a *App) metaMemoryEntries() []metaEntry {
 	header := dimStyle.Render(fmt.Sprintf("══ Memory · %d file(s) · ↵ open ══", len(notes)))
 	out = append(out, textMeta(header))
 	for _, note := range notes {
+		// Enter drills into the file; J jumps to its last write turn, so bind the
+		// write origin here too (entryIndex defaults to -1 when never written).
+		target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, entryIndex: -1, blockIdx: -1}
+		if origin, ok := a.lastMemoryWriteOrigin(note.FileName); ok {
+			t := a.originTarget(metaTargetMemoryFile, origin)
+			t.fileName = note.FileName
+			target = t
+		}
 		out = append(out, metaEntry{
 			block:  session.ContentBlock{Type: "text", Text: memoryListRow(note, hist[note.FileName])},
-			target: metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName},
+			target: target,
 		})
 	}
 	return out
@@ -319,6 +327,12 @@ func (a *App) exitMemoryDrill() bool {
 // the turn by UUID first and fall back to the entry-index range (matching
 // mergedIndexForOrigin), not a bare UUID equality on the merged turn head.
 func (a *App) jumpToMetaTarget(target metaEntryTarget) (tea.Model, tea.Cmd, bool) {
+	// Only rows bound to a real origin jump. Header/todo/separator rows carry
+	// metaTargetNone and must NOT fall through to a bare entry-index of 0, which
+	// would jump to the first turn.
+	if !target.kind.jumpable() {
+		return a, nil, false
+	}
 	if target.messageUUID == "" && target.entryIndex < 0 {
 		return a, nil, false
 	}
@@ -554,5 +568,5 @@ func planRow(key string, data session.PlanData, hist session.TouchHistory) strin
 
 // textMeta wraps a rendered string as a non-selectable-target metaEntry.
 func textMeta(text string) metaEntry {
-	return metaEntry{block: session.ContentBlock{Type: "text", Text: text}, target: metaEntryTarget{blockIdx: -1}}
+	return metaEntry{block: session.ContentBlock{Type: "text", Text: text}, target: metaEntryTarget{entryIndex: -1, blockIdx: -1}}
 }

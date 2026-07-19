@@ -135,3 +135,72 @@ func TestMetaJumpFallsBackToEntryIndex(t *testing.T) {
 		t.Fatal("entry-index fallback should have located the origin turn")
 	}
 }
+
+// TestMetaTargetKindJumpable pins which target kinds may jump. None and cron
+// must not, so a bare entry-index of 0 never sends a header/todo/cron row to the
+// first turn.
+func TestMetaTargetKindJumpable(t *testing.T) {
+	jump := map[metaTargetKind]bool{
+		metaTargetNone:       false,
+		metaTargetMemoryFile: true,
+		metaTargetDecision:   true,
+		metaTargetTask:       true,
+		metaTargetPlan:       true,
+		metaTargetCron:       false,
+	}
+	for kind, want := range jump {
+		if got := kind.jumpable(); got != want {
+			t.Errorf("kind %d jumpable = %v, want %v", kind, got, want)
+		}
+	}
+}
+
+// TestNonTargetRowEnterDoesNotJump guards the reported bug: pressing Enter on a
+// non-target session-meta row (header/label, metaTargetNone with entryIndex 0)
+// must not fall back to jumping to the first conversation turn.
+func TestNonTargetRowEnterDoesNotJump(t *testing.T) {
+	// entryIndex 0 with a non-jumpable kind must be rejected outright.
+	app := setupDecisionFlowApp(t)
+	selectMetaContextRow(t, app, "summary")
+	if _, _, jumped := app.jumpToMetaTarget(metaEntryTarget{kind: metaTargetNone, entryIndex: 0}); jumped {
+		t.Fatal("metaTargetNone with entryIndex 0 must not jump")
+	}
+	if _, _, jumped := app.jumpToMetaTarget(metaEntryTarget{kind: metaTargetCron, entryIndex: 0}); jumped {
+		t.Fatal("metaTargetCron must not jump")
+	}
+}
+
+// TestMetaJumpEscRestoresMetaRow verifies that after Enter-jumping from a
+// session-meta decision into a conversation turn, esc returns to the originating
+// meta context row rather than the first item.
+func TestMetaJumpEscRestoresMetaRow(t *testing.T) {
+	app := setupDecisionFlowApp(t)
+	selectMetaContextRow(t, app, "summary")
+	origin := app.selectedConversationItemID()
+
+	var tgt metaEntryTarget
+	found := false
+	for _, m := range app.conv.inspector.MetaTargets {
+		if m.kind == metaTargetDecision && (m.messageUUID != "" || m.entryIndex >= 0) {
+			tgt = m
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Skip("no jumpable decision target")
+	}
+
+	model, _, jumped := app.jumpToMetaTarget(tgt)
+	if !jumped {
+		t.Fatal("decision jump did not happen")
+	}
+	app = model.(*App)
+	if app.selectedConversationItemID() == origin {
+		t.Fatal("jump did not move the selection off the meta row")
+	}
+	app = pressKey(app, "esc")
+	if got := app.selectedConversationItemID(); got != origin {
+		t.Fatalf("esc restored %q, want origin meta row %q", got, origin)
+	}
+}
