@@ -97,3 +97,41 @@ func TestPlanTouchHistoryShownInRow(t *testing.T) {
 		t.Errorf("plan row should show basename: %q", row)
 	}
 }
+
+// TestMetaJumpFallsBackToEntryIndex reproduces the "origin turn not found" bug:
+// a decision origin points at a transcript entry that mergeConversationTurns
+// folded into a multi-entry turn, so the turn's head UUID differs from the
+// origin UUID. Jump must resolve via the entry-index range, not head-UUID
+// equality.
+func TestMetaJumpFallsBackToEntryIndex(t *testing.T) {
+	app := setupDecisionFlowApp(t)
+	selectMetaContextRow(t, app, "summary")
+
+	// Find any decision target and pick the entry index it points at.
+	var tgt metaEntryTarget
+	found := false
+	for _, m := range app.conv.inspector.MetaTargets {
+		if m.kind == metaTargetDecision && m.entryIndex >= 0 {
+			tgt = m
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Skip("no decision target with a root-transcript entry index")
+	}
+
+	// Corrupt the UUID so only the entry-index fallback can locate the turn.
+	tgt.messageUUID = "does-not-exist-uuid"
+	model, _, jumped := app.jumpToMetaTarget(tgt)
+	if !jumped {
+		t.Fatal("jumpToMetaTarget should handle a target with a valid entry index")
+	}
+	app = model.(*App)
+	if !app.conv.inspector.Zoom {
+		t.Fatal("entry-index fallback jump should open the inspector zoomed (turn found)")
+	}
+	if app.copiedMsg == "origin turn not found" {
+		t.Fatal("entry-index fallback should have located the origin turn")
+	}
+}

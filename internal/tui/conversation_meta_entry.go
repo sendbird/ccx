@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -105,8 +104,13 @@ func (a *App) metaMemoryEntries() []metaEntry {
 // row plus the note body. J on any row jumps to the note's last write turn.
 func (a *App) metaMemoryDrillEntries(note session.MemoryNote) []metaEntry {
 	hist := a.conv.flow.MemoryTouchHistory()[note.FileName]
-	uuid, blockIdx := a.lastMemoryWriteOrigin(note.FileName)
-	target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, messageUUID: uuid, blockIdx: blockIdx}
+	origin, hasOrigin := a.lastMemoryWriteOrigin(note.FileName)
+	target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, entryIndex: -1, blockIdx: -1}
+	if hasOrigin {
+		t := a.originTarget(metaTargetMemoryFile, origin)
+		t.fileName = note.FileName
+		target = t
+	}
 
 	var head strings.Builder
 	title := note.Name
@@ -119,7 +123,7 @@ func (a *App) metaMemoryDrillEntries(note session.MemoryNote) []metaEntry {
 	}
 	head.WriteString("\n")
 	head.WriteString(dimStyle.Render(memoryHistoryLine(hist)))
-	if uuid != "" {
+	if hasOrigin {
 		head.WriteString(dimStyle.Render("  · J: jump to last write"))
 	}
 
@@ -166,28 +170,25 @@ func memoryHistoryLine(h session.TouchHistory) string {
 	return fmt.Sprintf("%s → %s (×%d)", h.First.Format(layout), h.Last.Format(layout), h.Count)
 }
 
-// lastMemoryWriteOrigin returns the message UUID and block index of the most
-// recent Edit/Write to the given memory note basename, for J-jump. Empty UUID
-// when the flow index has no such write (e.g. file present but never written
-// this session).
-func (a *App) lastMemoryWriteOrigin(fileName string) (string, int) {
+// lastMemoryWriteOrigin returns the origin of the most recent Edit/Write to the
+// given memory note basename, for J-jump. ok=false when the flow index has no
+// such write (e.g. file present but never written this session).
+func (a *App) lastMemoryWriteOrigin(fileName string) (session.ArtifactOrigin, bool) {
 	if a.conv.flow == nil {
-		return "", -1
+		return session.ArtifactOrigin{}, false
 	}
-	uuid := ""
-	blockIdx := -1
-	var latest time.Time
+	var best session.ArtifactOrigin
+	found := false
 	for _, art := range a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactChange, session.ScopeSession) {
 		if filepath.Base(art.Key) != fileName {
 			continue
 		}
-		if uuid == "" || !art.Origin.Timestamp.Before(latest) {
-			uuid = art.Origin.MessageUUID
-			blockIdx = art.Origin.BlockIndex
-			latest = art.Origin.Timestamp
+		if !found || !art.Origin.Timestamp.Before(best.Timestamp) {
+			best = art.Origin
+			found = true
 		}
 	}
-	return uuid, blockIdx
+	return best, found
 }
 
 // renderTodosBlock renders the session todo list as one text block.
@@ -312,32 +313,35 @@ func (a *App) exitMemoryDrill() bool {
 	return true
 }
 
-// jumpToMetaTarget jumps to the conversation turn that produced a meta entry,
-// reusing the exact-block inspector jump. Returns ok=false when the target has
-// no locatable origin turn.
+// jumpToMetaTarget jumps to the conversation turn that produced a meta entry.
+// Origins recorded on flow artifacts point at a specific transcript entry, which
+// mergeConversationTurns may have folded into a multi-entry turn — so we resolve
+// the turn by UUID first and fall back to the entry-index range (matching
+// mergedIndexForOrigin), not a bare UUID equality on the merged turn head.
 func (a *App) jumpToMetaTarget(target metaEntryTarget) (tea.Model, tea.Cmd, bool) {
-	if target.messageUUID == "" {
+	if target.messageUUID == "" && target.entryIndex < 0 {
 		return a, nil, false
 	}
-	m, ok := a.mergedByUUID(target.messageUUID)
-	if !ok {
+	idx := mergedIndexForOrigin(a.conv.merged, target.messageUUID, target.entryIndex)
+	if idx < 0 {
 		a.copiedMsg = "origin turn not found"
 		return a, nil, true
 	}
-	model, cmd := a.openConversationInspectorForEntry(m, target.blockIdx)
+	// Jump at turn granularity: origin.BlockIndex is relative to the source
+	// entry, which does not line up with the merged turn's concatenated blocks.
+	model, cmd := a.openConversationInspectorForEntry(a.conv.merged[idx], -1)
 	return model, cmd, true
 }
 
-// mergedByUUID finds the merged conversation turn whose entry UUID matches, so
-// a meta entry's origin (recorded on the flow artifact) can be jumped to.
+// mergedByUUID finds the merged conversation turn whose head entry UUID matches.
+// Prefer jumpToMetaTarget for origin jumps (it also handles the entry-index
+// fallback); this remains for callers that only have a head UUID.
 func (a *App) mergedByUUID(uuid string) (mergedMsg, bool) {
 	if uuid == "" {
 		return mergedMsg{}, false
 	}
-	for _, m := range a.conv.merged {
-		if m.entry.UUID == uuid {
-			return m, true
-		}
+	if idx := mergedIndexForOrigin(a.conv.merged, uuid, -1); idx >= 0 {
+		return a.conv.merged[idx], true
 	}
 	return mergedMsg{}, false
 }
@@ -362,15 +366,28 @@ func (a *App) metaSummaryEntries() []metaEntry {
 	for _, d := range decisions {
 		dd, _ := d.Data.(session.DecisionData)
 		out = append(out, metaEntry{
-			block: session.ContentBlock{Type: "text", Text: decisionRow(dd)},
-			target: metaEntryTarget{
-				kind:        metaTargetDecision,
-				messageUUID: d.Origin.MessageUUID,
-				blockIdx:    d.Origin.BlockIndex,
-			},
+			block:  session.ContentBlock{Type: "text", Text: decisionRow(dd)},
+			target: a.originTarget(metaTargetDecision, d.Origin),
 		})
 	}
 	return out
+}
+
+// originTarget builds a jump target from an artifact origin. The entry-index
+// fallback is only meaningful for origins in the root transcript (entry indices
+// are transcript-local), so it is dropped for agent-owned origins — those still
+// jump by UUID when the turn is visible.
+func (a *App) originTarget(kind metaTargetKind, origin session.ArtifactOrigin) metaEntryTarget {
+	entryIndex := -1
+	if origin.Transcript == "" || origin.Transcript == a.conv.sess.FilePath {
+		entryIndex = origin.EntryIndex
+	}
+	return metaEntryTarget{
+		kind:        kind,
+		messageUUID: origin.MessageUUID,
+		entryIndex:  entryIndex,
+		blockIdx:    origin.BlockIndex,
+	}
 }
 
 // flowSummaryHeader is the non-decision preamble of the flow summary (counts,
@@ -411,14 +428,11 @@ func (a *App) metaTasksPlanEntries() []metaEntry {
 		out = append(out, textMeta(dimStyle.Render(fmt.Sprintf("── Tasks [%d/%d] · ↵/J jump ──", completed, len(sess.Tasks)))))
 		for _, task := range sess.Tasks {
 			origin := taskOrigins[task.ID]
+			target := a.originTarget(metaTargetTask, origin)
+			target.taskID = task.ID
 			out = append(out, metaEntry{
-				block: session.ContentBlock{Type: "text", Text: taskRow(task)},
-				target: metaEntryTarget{
-					kind:        metaTargetTask,
-					taskID:      task.ID,
-					messageUUID: origin.MessageUUID,
-					blockIdx:    origin.BlockIndex,
-				},
+				block:  session.ContentBlock{Type: "text", Text: taskRow(task)},
+				target: target,
 			})
 		}
 	}
@@ -428,7 +442,7 @@ func (a *App) metaTasksPlanEntries() []metaEntry {
 		for _, cron := range sess.Crons {
 			out = append(out, metaEntry{
 				block:  session.ContentBlock{Type: "text", Text: cronRow(cron)},
-				target: metaEntryTarget{kind: metaTargetCron, blockIdx: -1},
+				target: metaEntryTarget{kind: metaTargetCron, entryIndex: -1, blockIdx: -1},
 			})
 		}
 	}
@@ -461,12 +475,8 @@ func (a *App) planEntries() []metaEntry {
 		seen[art.Key] = true
 		data, _ := art.Data.(session.PlanData)
 		out = append(out, metaEntry{
-			block: session.ContentBlock{Type: "text", Text: planRow(art.Key, data, hist[art.Key])},
-			target: metaEntryTarget{
-				kind:        metaTargetPlan,
-				messageUUID: art.Origin.MessageUUID,
-				blockIdx:    art.Origin.BlockIndex,
-			},
+			block:  session.ContentBlock{Type: "text", Text: planRow(art.Key, data, hist[art.Key])},
+			target: a.originTarget(metaTargetPlan, art.Origin),
 		})
 	}
 	return out

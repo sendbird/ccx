@@ -63,6 +63,7 @@ type metaEntryTarget struct {
 	kind        metaTargetKind
 	fileName    string // memory note filename (memory-file drill target)
 	messageUUID string // originating turn to jump to (empty = no jump)
+	entryIndex  int    // origin entry index in the parent transcript (fallback locator)
 	blockIdx    int    // block within that turn to focus (-1 = none)
 	taskID      string // task ID (task targets)
 }
