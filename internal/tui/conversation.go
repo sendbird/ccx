@@ -204,6 +204,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.setInspectorZoom(!a.conv.inspector.Zoom)
 		return a, nil
 	}
+	if key == "esc" && a.conv.inspector.MetaDrill != "" {
+		// Back out of a memory file detail to the file list before unzooming.
+		a.exitMemoryDrill()
+		return a, nil
+	}
 	if key == "esc" && a.conv.inspector.Zoom {
 		a.setInspectorZoom(false)
 		return a, nil
@@ -278,6 +283,13 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// explicit Overview tab keeps the three rows distinct even when a
 		// sticky facet tab (they all share the root node) was active.
 		if item.kind == convSessionMeta {
+			// When focused on a selectable block, act on its target: drill into
+			// a memory file, or jump to the turn that produced the entry.
+			if sp.Focus && sp.Folds != nil {
+				if handled, m, cmd := a.handleMetaEntryEnter(); handled {
+					return m, cmd
+				}
+			}
 			a.openInspector(inspectorOverview, session.ScopeSession, true)
 			return a, nil
 		}
@@ -384,7 +396,17 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a.openLiveInput(a.currentSess.ProjectPath, a.currentSess.ID)
 	case a.keymap.Conversation.JumpToTree:
-		if item, ok := a.selectedConversationItem(); ok && item.kind != convMsg {
+		item, ok := a.selectedConversationItem()
+		if ok && item.kind == convSessionMeta {
+			if target, has := a.currentMetaTarget(); has {
+				if m, cmd, jumped := a.jumpToMetaTarget(target); jumped {
+					return m, cmd
+				}
+			}
+			a.copiedMsg = "no origin turn for this entry"
+			return a, nil
+		}
+		if ok && item.kind != convMsg {
 			return a.jumpToOriginMessage()
 		}
 		if a.config.TmuxEnabled {
@@ -627,12 +649,28 @@ func (a *App) updateConvPreview() {
 		return
 	}
 
+	// Memory drill state only belongs to the memory row; leaving it (to another
+	// meta row or any other item) drops back to the file list so re-entry is
+	// clean.
+	if a.conv.inspector.MetaDrill != "" && !(item.kind == convSessionMeta && item.sessionMeta == "memory") {
+		a.conv.inspector.MetaDrill = ""
+	}
+
 	baseKey := convPreviewBaseKey(item)
+	// Memory drill-down is a distinct view of the same meta row; fold it into
+	// baseKey so list↔detail transitions are treated as new entries (reset fold
+	// state + scroll) rather than a cache hit that keeps the old blocks.
+	if item.kind == convSessionMeta && a.conv.inspector.MetaDrill != "" {
+		baseKey += ":drill:" + a.conv.inspector.MetaDrill
+	}
 	oldCacheKey := sp.CacheKey
 	anchor := captureConvPreviewAnchor(sp, baseKey)
 	node, hasNode := a.syncInspectorSelection(item)
 	a.conv.inspector.Rendered = ""
-	if hasNode && a.conv.inspector.Tab != inspectorConversation {
+	// Session-meta rows (memory/tasks-plan/summary) render as a selectable
+	// synthetic entry so each item can be cursor-selected and jumped from, even
+	// though they map to the root flow node. Handled below via the fold path.
+	if hasNode && item.kind != convSessionMeta && a.conv.inspector.Tab != inspectorConversation {
 		content := a.renderInspector(item, node, a.renderInspectorTab(item, node))
 		a.conv.inspector.Rendered = content
 		// baseKey keeps rows that share a flow node distinct (all session
@@ -643,6 +681,11 @@ func (a *App) updateConvPreview() {
 	}
 
 	var build previewBuild
+	// metaEntry, when set, is a pre-built selectable synthetic entry (session
+	// meta rows) that bypasses the previewBuild → transformer pipeline. Its
+	// MetaTargets are stored on the inspector so Enter/J can act per block.
+	var metaEntry *session.Entry
+	var metaTargets []metaEntryTarget
 	switch item.kind {
 	case convMsg:
 		build.Fallback = item.merged.entry
@@ -665,15 +708,9 @@ func (a *App) updateConvPreview() {
 		a.setConvPreviewText(a.renderDecisionInspector(item.decision))
 		return
 	case convSessionMeta:
-		switch item.sessionMeta {
-		case "summary":
-			a.setConvPreviewText(a.renderFlowSummary())
-		case "memory":
-			a.setConvPreviewText(a.buildMemoryContent(a.conv.sess))
-		default:
-			a.setConvPreviewText(a.buildTasksPlanContent(a.conv.sess))
-		}
-		return
+		e, targets := a.buildSessionMetaEntry(item)
+		metaEntry = &e
+		metaTargets = targets
 	case convTask:
 		pw := sp.PreviewWidth(a.width, a.splitRatio)
 		if item.groupTag == "agents" && item.count > 0 {
@@ -701,20 +738,34 @@ func (a *App) updateConvPreview() {
 
 	// Mode transformation is uniform: every preview kind expresses itself as
 	// a previewBuild, and the three transformers consume it the same way.
+	// Session-meta rows skip the transformer — they arrive as a pre-built
+	// selectable synthetic entry with parallel jump targets.
 	var entry session.Entry
 	var blockSrcIdx []int
-	switch a.conv.rightPaneMode {
-	case previewText:
-		entry, blockSrcIdx = compactPreview(build)
-	case previewTool:
-		entry, blockSrcIdx = standardPreview(build)
-	default:
-		entry, blockSrcIdx = verbosePreview(build)
+	if metaEntry != nil {
+		entry = *metaEntry
+		blockSrcIdx = nil
+		a.conv.inspector.MetaTargets = metaTargets
+	} else {
+		a.conv.inspector.MetaTargets = nil
+		switch a.conv.rightPaneMode {
+		case previewText:
+			entry, blockSrcIdx = compactPreview(build)
+		case previewTool:
+			entry, blockSrcIdx = standardPreview(build)
+		default:
+			entry, blockSrcIdx = verbosePreview(build)
+		}
 	}
 	if hasNode {
 		header := a.inspectorHeader(item, node)
 		entry.Content = append([]session.ContentBlock{{Type: "text", Text: header}}, entry.Content...)
 		blockSrcIdx = append([]int{-1}, blockSrcIdx...)
+		// Keep MetaTargets aligned with the (now header-prefixed) blocks so
+		// block cursor i indexes the same target slot.
+		if a.conv.inspector.MetaTargets != nil {
+			a.conv.inspector.MetaTargets = append([]metaEntryTarget{{blockIdx: -1}}, a.conv.inspector.MetaTargets...)
+		}
 	}
 
 	cacheKey := fmt.Sprintf("%s:%d:%d:%t:%d:%x", baseKey, a.conv.inspector.Tab, a.conv.inspector.Scope, a.conv.inspector.Zoom, len(entry.Content), entryContentHash(entry.Content))
@@ -724,6 +775,18 @@ func (a *App) updateConvPreview() {
 	}
 
 	isNewEntry := oldCacheKey == "" || !strings.HasPrefix(oldCacheKey, baseKey+":")
+	// Session-meta rows can be the very first preview rendered (a context row
+	// selected before any Render pass), where the viewport still has zero
+	// dimensions and the fold renderer would produce a blank pane. Fill them in
+	// for the meta path only, so convMsg/agent scroll math is untouched.
+	if metaEntry != nil {
+		if sp.Preview.Height <= 0 {
+			sp.Preview.Height = ContentHeight(a.height)
+		}
+		if sp.Preview.Width <= 0 {
+			sp.Preview.Width = sp.PreviewWidth(a.width, a.splitRatio)
+		}
+	}
 	if isNewEntry {
 		sp.CacheKey = cacheKey
 		if sp.Folds != nil {

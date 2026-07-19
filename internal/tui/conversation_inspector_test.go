@@ -371,8 +371,8 @@ func TestSessionMetaEnterShowsRowSpecificContent(t *testing.T) {
 
 	app.selectConvContext(0)
 	app = pressKey(app, "enter")
-	summary := app.conv.inspector.Rendered
-	if app.conv.inspector.Tab != inspectorOverview || !strings.Contains(summary, "# Session Flow") {
+	summary := app.conv.split.Preview.View()
+	if app.conv.inspector.Tab != inspectorOverview || !strings.Contains(summary, "Session Flow") {
 		t.Fatalf("summary row enter tab=%v rendered=%q", app.conv.inspector.Tab, summary)
 	}
 	app = pressKey(app, "esc")
@@ -380,7 +380,7 @@ func TestSessionMetaEnterShowsRowSpecificContent(t *testing.T) {
 	app.conv.inspector.Tab = inspectorStats
 	app.selectConvContext(1)
 	app = pressKey(app, "enter")
-	tasks := app.conv.inspector.Rendered
+	tasks := app.conv.split.Preview.View()
 	if !strings.Contains(tasks, "build the feature") {
 		t.Fatalf("tasksplan row enter did not render the task board: %q", tasks)
 	}
