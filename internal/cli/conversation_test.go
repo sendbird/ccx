@@ -37,6 +37,70 @@ func TestExtractConversationWithContext(t *testing.T) {
 	}
 }
 
+func TestExtractRefsWithContextCanonicalizesPRs(t *testing.T) {
+	base := time.Date(2026, 7, 19, 3, 0, 0, 0, time.UTC)
+	entries := []session.Entry{
+		{
+			Role:      "user",
+			UUID:      "u1",
+			Timestamp: base,
+			Content: []session.ContentBlock{{Type: "text", Text: strings.Join([]string{
+				"https://github.com/sendbird/argodiff/pull/73",
+				// Raw JSON/prose can be absorbed into the URL candidate. It is the
+				// same PR and must count only once within this entry.
+				"https://github.com/sendbird/argodiff/pull/73reviewDecision",
+			}, " ")}},
+		},
+		{
+			Role:      "assistant",
+			UUID:      "a1",
+			Timestamp: base.Add(time.Minute),
+			Content: []session.ContentBlock{{Type: "text", Text: strings.Join([]string{
+				"https://github.com/sendbird/argodiff/pull/73#discussion_r1",
+				"https://github.com/sendbird/argodiff/pull/73?notification_referrer_id=1",
+			}, " ")}},
+		},
+		{
+			Role:      "assistant",
+			UUID:      "a2",
+			Timestamp: base.Add(2 * time.Minute),
+			Content: []session.ContentBlock{{Type: "text", Text: strings.Join([]string{
+				// These are GitHub pull-related paths, but not existing PRs.
+				"https://github.com/sendbird/argodiff/pull/review",
+				"https://github.com/sendbird/argodiff/pull/new/feature-branch",
+			}, " ")}},
+		},
+	}
+
+	items := extractRefsWithContext(entries, "sess-1")
+	if len(items) != 1 {
+		t.Fatalf("expected one canonical PR, got %d: %#v", len(items), items)
+	}
+	got := items[0]
+	if got.Item.URL != "https://github.com/sendbird/argodiff/pull/73" {
+		t.Errorf("canonical URL = %q", got.Item.URL)
+	}
+	if !strings.HasPrefix(got.Item.Label, "sendbird/argodiff#73  ") {
+		t.Errorf("label = %q, want canonical PR label plus timestamp", got.Item.Label)
+	}
+	if got.Item.Category != "pr" {
+		t.Errorf("category = %q, want pr", got.Item.Category)
+	}
+	if len(got.Refs) != 2 {
+		t.Errorf("occurrences = %d, want 2 (one per entry)", len(got.Refs))
+	}
+}
+
+func TestCanonicalRefURLPreservesJiraHost(t *testing.T) {
+	ref, ok := session.ClassifyURLRef("https://company.atlassian.net/browse/CPLAT-10998Follow-up?x=1")
+	if !ok {
+		t.Fatal("expected Jira URL to classify")
+	}
+	if got, want := canonicalRefURL(ref), "https://company.atlassian.net/browse/CPLAT-10998"; got != want {
+		t.Fatalf("canonical Jira URL = %q, want %q", got, want)
+	}
+}
+
 func TestConversationLabelIncludesDedupedToolSummary(t *testing.T) {
 	e := session.Entry{
 		Role: "assistant",

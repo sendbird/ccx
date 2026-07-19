@@ -364,18 +364,74 @@ func extractURLsWithContext(entries []session.Entry, sessID string) []PickerItem
 	return items
 }
 
-// extractRefsWithContext returns only the session's PR and Jira URL references,
-// reusing the URL extractor and filtering to the pr/jira categories. The refs
-// picker resolves their status inline the same way the urls picker does.
+// extractRefsWithContext returns the session's canonical PR and Jira
+// references. Unlike the general URL picker, refs are deduplicated by their
+// logical identity (owner/repo#number or Jira key), not by the raw URL. This
+// collapses anchors, query strings, and JSON/prose suffixes into one row and
+// rejects non-numeric GitHub pull paths such as /pull/new and /pull/review.
 func extractRefsWithContext(entries []session.Entry, sessID string) []PickerItem {
-	all := extractURLsWithContext(entries, sessID)
-	refs := make([]PickerItem, 0, len(all))
-	for _, it := range all {
-		if it.Item.Category == "pr" || it.Item.Category == "jira" {
-			refs = append(refs, it)
+	index := make(map[string]int) // kind + canonical label → item index
+	var items []PickerItem
+	for _, e := range entries {
+		ctx := entryContext(e)
+		seenInEntry := make(map[string]bool)
+		for _, item := range extract.BlockURLs(e.Content) {
+			refInfo, ok := session.ClassifyURLRef(item.URL)
+			if !ok {
+				continue
+			}
+			key := string(refInfo.Kind) + ":" + refInfo.Label
+			// Multiple URL forms for the same ref in one message are one
+			// occurrence, not several identical preview entries.
+			if seenInEntry[key] {
+				continue
+			}
+			seenInEntry[key] = true
+
+			ref := ItemRef{
+				EntryUUID: e.UUID,
+				Timestamp: e.Timestamp,
+				Role:      e.Role,
+				Preview:   ctx,
+			}
+			if idx, exists := index[key]; exists {
+				items[idx].Refs = append(items[idx].Refs, ref)
+				continue
+			}
+			index[key] = len(items)
+			items = append(items, PickerItem{
+				Item: extract.Item{
+					URL:       canonicalRefURL(refInfo),
+					Label:     refInfo.Label,
+					Category:  string(refInfo.Kind),
+					Timestamp: e.Timestamp,
+				},
+				SessionID: sessID,
+				Refs:      []ItemRef{ref},
+			})
 		}
 	}
-	return refs
+	sortAndStampItems(items)
+	return items
+}
+
+// canonicalRefURL returns a stable open/resolve target for a classified ref.
+// ClassifyURLRef intentionally preserves its input URL for the general URL
+// picker; the refs picker instead strips anchors, queries, and glued suffixes.
+func canonicalRefURL(ref session.SessionRef) string {
+	switch ref.Kind {
+	case session.RefPR:
+		if hash := strings.LastIndexByte(ref.Label, '#'); hash > 0 && hash < len(ref.Label)-1 {
+			return "https://github.com/" + ref.Label[:hash] + "/pull/" + ref.Label[hash+1:]
+		}
+	case session.RefJira:
+		if ref.Label != "" {
+			if i := strings.Index(strings.ToLower(ref.URL), "/browse/"); i >= 0 {
+				return ref.URL[:i] + "/browse/" + ref.Label
+			}
+		}
+	}
+	return ref.URL
 }
 
 func extractFilesWithContext(entries []session.Entry, sessID string) []PickerItem {
