@@ -42,10 +42,11 @@ type conversationInspector struct {
 	ExplicitTab    inspectorTab
 	ExplicitNodeID string
 	Explicit       bool
-	// ReturnToID is the item selected when a zoom entry jumped the list
-	// selection elsewhere (e.g. a marker opening its parent turn); leaving
-	// zoom restores it so "back" lands where the user entered from.
+	// ReturnToID is retained as a compatibility/debug mirror of the top history
+	// frame. Navigation restoration uses History so nested jumps can unwind one
+	// exact step at a time.
 	ReturnToID string
+	History    []inspectorNavFrame
 
 	// MetaTargets is parallel to the synthetic Entry.Content blocks rendered for
 	// a session-meta row (memory/tasks-plan/summary). Index i describes what
@@ -71,7 +72,7 @@ type metaEntryTarget struct {
 type metaTargetKind int
 
 const (
-	metaTargetNone      metaTargetKind = iota
+	metaTargetNone       metaTargetKind = iota
 	metaTargetMemoryFile                // file-list row → Enter drills into the file
 	metaTargetDecision                  // flow-summary decision → jump to origin turn
 	metaTargetTask                      // task row → open task view / definition turn
@@ -304,7 +305,6 @@ func (a *App) openInspector(tab inspectorTab, scope session.Scope, zoom bool) {
 	sp := &a.conv.split
 	a.conv.inspector.Scope = scope
 	a.conv.inspector.Tab = tab
-	a.conv.inspector.ReturnToID = ""
 	if item, ok := a.selectedConversationItem(); ok {
 		a.conv.inspector.Explicit = true
 		a.conv.inspector.ExplicitTab = tab
@@ -348,15 +348,6 @@ func (a *App) setInspectorZoom(zoom bool) {
 	}
 	maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
 	sp.Preview.YOffset = min(oldOffset, maxOffset)
-	if !zoom {
-		if id := a.conv.inspector.ReturnToID; id != "" {
-			a.conv.inspector.ReturnToID = ""
-			if id != a.selectedConversationItemID() && a.restoreConvSelection(id) {
-				sp.CacheKey = ""
-				a.updateConvPreview()
-			}
-		}
-	}
 }
 
 func (a *App) cycleInspectorTabBy(delta int) {

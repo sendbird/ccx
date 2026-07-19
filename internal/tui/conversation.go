@@ -116,12 +116,12 @@ func (a *App) pauseLiveTail() {
 // openConversationInspectorForEntry selects the exact unified-flow message row
 // and opens its Node-scoped Conversation facet in full-width zoom.
 func (a *App) openConversationInspectorForEntry(m mergedMsg, blockIdx int) (tea.Model, tea.Cmd) {
-	returnID := a.selectedConversationItemID()
 	for i, raw := range a.convList.Items() {
 		item, ok := raw.(convItem)
 		if !ok || item.kind != convMsg || item.merged.startIdx != m.startIdx {
 			continue
 		}
+		a.pushInspectorHistory()
 		a.pauseLiveTail()
 		a.selectConvBody(i)
 		// Exact block jumps use the verbose representation because compact and
@@ -133,9 +133,6 @@ func (a *App) openConversationInspectorForEntry(m mergedMsg, blockIdx int) (tea.
 			a.conv.rightPaneMode = previewHook
 		}
 		a.openInspector(inspectorConversation, session.ScopeNode, true)
-		if returnID != "" && returnID != a.selectedConversationItemID() {
-			a.conv.inspector.ReturnToID = returnID
-		}
 		if hasTargetBlock && a.conv.split.Folds != nil {
 			for renderedBlockIdx, block := range a.conv.split.Folds.Entry.Content {
 				if !sameConversationBlock(block, targetBlock) {
@@ -179,6 +176,110 @@ func (a *App) openParentConversationInspector(item convItem) (tea.Model, tea.Cmd
 	return a.openConversationInspectorForEntry(parent.merged, -1)
 }
 
+// handleConversationEnter dispatches Enter from the region that owns focus.
+// The inspector never falls back to a list action: a focused block either has
+// an explicit target or Enter is a no-op.
+func (a *App) handleConversationEnter() (tea.Model, tea.Cmd) {
+	sp := &a.conv.split
+	item, ok := a.selectedConversationItem()
+	if !ok {
+		return a, nil
+	}
+
+	if sp.Show && sp.Focus {
+		if item.kind == convSessionMeta {
+			target, hasTarget := a.currentMetaTarget()
+			if !hasTarget || target.kind == metaTargetNone || target.kind == metaTargetCron {
+				a.copiedMsg = "No action for this inspector row"
+				return a, nil
+			}
+			if target.kind == metaTargetMemoryFile && a.conv.inspector.MetaDrill == "" && target.fileName != "" {
+				a.pushInspectorHistory()
+			}
+			if handled, m, cmd := a.handleMetaEntryEnter(); handled {
+				return m, cmd
+			}
+			a.copiedMsg = "No action for this inspector row"
+			return a, nil
+		}
+
+		if sp.Folds != nil {
+			bc := sp.Folds.BlockCursor
+			entry := sp.Folds.Entry
+			if bc >= 0 && bc < len(entry.Content) {
+				block := entry.Content[bc]
+				if block.Type == "image" && block.ImagePasteID > 0 {
+					return a.openCachedImage(block.ImagePasteID)
+				}
+				if block.Type == "tool_use" && (block.ToolName == "Agent" || block.ToolName == "Task") {
+					if agent, found := a.findAgentForToolUse(block.ID); found {
+						return a.drillIntoAgentConversation(agent)
+					}
+				}
+			}
+		}
+		a.copiedMsg = "No action for this inspector block"
+		return a, nil
+	}
+
+	if item.kind == convSessionMeta {
+		a.pushInspectorHistory()
+		a.openInspector(inspectorOverview, session.ScopeSession, true)
+		return a, nil
+	}
+	if item.groupTag != "" {
+		if item.count > 0 {
+			a.toggleConvGroupFold(item)
+			return a, nil
+		}
+		if agent, found := a.findAgentInParentMsg(item); found {
+			return a.drillIntoAgentConversation(agent)
+		}
+		return a.openParentConversationInspector(item)
+	}
+
+	switch item.kind {
+	case convTask:
+		if item.bgTaskID != "" {
+			if m, blockIdx, found := a.findBgTaskResultMsg(item.bgTaskID); found {
+				return a.openConversationInspectorForEntry(m, blockIdx)
+			}
+			return a.openParentConversationInspector(item)
+		}
+		if agents := a.findTaskAgents(); item.groupTag == "" && len(agents) == 1 {
+			return a.drillIntoAgentConversation(agents[0])
+		}
+		if item.task.ID == "" {
+			return a.openParentConversationInspector(item)
+		}
+		return a.drillIntoTaskConversation(item.task)
+	case convAgent:
+		if item.summaryOnly || item.agent.FilePath == "" {
+			a.pushInspectorHistory()
+			a.openInspector(inspectorOverview, session.ScopeNode, true)
+			return a, nil
+		}
+		return a.drillIntoAgentConversation(item.agent)
+	case convPhase, convShell:
+		a.pushInspectorHistory()
+		a.openInspector(inspectorOverview, session.ScopeNode, true)
+		return a, nil
+	case convDecision:
+		if task, found := a.decisionTask(item.decision); found {
+			if _, _, ok := a.taskConversationData(task); ok {
+				return a.drillIntoTaskConversation(task)
+			}
+		}
+		a.pushInspectorHistory()
+		a.openInspector(inspectorOverview, session.ScopeNode, true)
+		return a, nil
+	case convMsg:
+		a.pushInspectorHistory()
+		a.openInspector(inspectorConversation, session.ScopeNode, true)
+	}
+	return a, nil
+}
+
 // handleConversationKeys handles keyboard input for the conversation split view.
 func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	sp := &a.conv.split
@@ -202,15 +303,6 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// cycle facets rather than resize while the inspector is focused.
 	if key == "z" {
 		a.setInspectorZoom(!a.conv.inspector.Zoom)
-		return a, nil
-	}
-	if key == "esc" && a.conv.inspector.MetaDrill != "" {
-		// Back out of a memory file detail to the file list before unzooming.
-		a.exitMemoryDrill()
-		return a, nil
-	}
-	if key == "esc" && a.conv.inspector.Zoom {
-		a.setInspectorZoom(false)
 		return a, nil
 	}
 	if sp.Show && sp.Focus {
@@ -247,135 +339,40 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return a.quit()
 	case "esc":
-		// Clear block filter first
 		if sp.Folds != nil && sp.Folds.BlockFilter != "" {
 			a.clearBlockFilter()
 			return a, nil
 		}
-		if !sp.Show {
-			a.liveTail = false
-			a.conv.split.BottomAlign = false
-			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
-				// Pop one level back into the originating conv view and
-				// re-open the preview pane. The next ESC will close that
-				// preview before considering further navigation, so the
-				// user lands cleanly in the parent conv view instead of
-				// skipping past it to the session list.
-				m, cmd := a.popNavFrame()
-				if app, ok := m.(*App); ok {
-					app.conv.split.Show = true
-					app.conv.split.CacheKey = ""
-					app.updateConvPreview()
-				}
-				return m, cmd
-			}
-			// Plain conv view (no drilldown, preview already closed): ESC
-			// exits back to the session list, matching `left`.
-			a.state = viewSessions
+		if a.conv.inspector.MetaDrill != "" && len(a.conv.inspector.History) == 0 {
+			a.exitMemoryDrill()
 			return a, nil
 		}
-	case "enter":
-		item, ok := a.selectedConversationItem()
-		if !ok {
+		if a.popInspectorHistory() {
 			return a, nil
 		}
-		// Fixed session context rows zoom their own overview renderer. The
-		// explicit Overview tab keeps the three rows distinct even when a
-		// sticky facet tab (they all share the root node) was active.
-		if item.kind == convSessionMeta {
-			// When focused on a selectable block, act on its target: drill into
-			// a memory file, or jump to the turn that produced the entry.
-			if sp.Focus && sp.Folds != nil {
-				if handled, m, cmd := a.handleMetaEntryEnter(); handled {
-					return m, cmd
-				}
-			}
-			a.openInspector(inspectorOverview, session.ScopeSession, true)
+		if a.conv.inspector.Zoom {
+			a.setInspectorZoom(false)
 			return a, nil
 		}
-		// Toggle fold on expandable group headers; marker headers jump to agent
-		if item.groupTag != "" {
-			if item.count > 0 {
-				a.toggleConvGroupFold(item)
-				return a, nil
-			}
-			// Marker header (count==0): try to jump to an agent referenced in parent message
-			if agent, ok := a.findAgentInParentMsg(item); ok {
-				a.pushNavFrame()
-				return a.openAgentConversation(agent)
-			}
-			// No agent found (background task) — inspect the exact parent turn.
-			return a.openParentConversationInspector(item)
-		}
-		switch item.kind {
-		case convTask:
-			// Background task sub-item: find the message with TaskOutput result and open it
-			if item.bgTaskID != "" {
-				if m, blockIdx, ok := a.findBgTaskResultMsg(item.bgTaskID); ok {
-					return a.openConversationInspectorForEntry(m, blockIdx)
-				}
-				return a.openParentConversationInspector(item)
-			}
-			// If this task has a corresponding agent (via TaskOutput), jump to it
-			if item.groupTag == "" {
-				if agents := a.findTaskAgents(); len(agents) == 1 {
-					a.pushNavFrame()
-					return a.openAgentConversation(agents[0])
-				}
-			}
-			// Tasks without a real ID cannot be filtered safely; inspect the
-			// exact turn that defined the task instead.
-			if item.task.ID == "" {
-				return a.openParentConversationInspector(item)
-			}
-			// Otherwise drill into task — show conversation entries related to this task
-			a.pushNavFrame()
-			return a.openTaskConversation(item.task)
-		case convAgent:
-			if item.summaryOnly || item.agent.FilePath == "" {
-				a.openInspector(inspectorOverview, session.ScopeNode, true)
-				return a, nil
-			}
-			a.pushNavFrame()
-			return a.openAgentConversation(item.agent)
-		case convPhase, convShell:
-			a.openInspector(inspectorOverview, session.ScopeNode, true)
-			return a, nil
-		case convDecision:
-			// Task decisions open the task's own view; the originating turn
-			// stays one J away.
-			if task, ok := a.decisionTask(item.decision); ok && len(extractTaskEntries(a.conv.messages, task.ID)) > 0 {
-				a.pushNavFrame()
-				return a.openTaskConversation(task)
-			}
-			a.openInspector(inspectorOverview, session.ScopeNode, true)
-			return a, nil
-		case convMsg:
-			// If preview focused on a block, check for actionable types
-			if sp.Focus && sp.Folds != nil {
-				bc := sp.Folds.BlockCursor
-				entry := sp.Folds.Entry
-				if bc >= 0 && bc < len(entry.Content) {
-					block := entry.Content[bc]
-					// Open cached image
-					if block.Type == "image" && block.ImagePasteID > 0 {
-						return a.openCachedImage(block.ImagePasteID)
-					}
-					// Jump to agent for Agent/Task tool_use blocks
-					if block.Type == "tool_use" && (block.ToolName == "Agent" || block.ToolName == "Task") {
-						if agent, found := a.findAgentForToolUse(block.ID); found {
-							a.pushNavFrame()
-							return a.openAgentConversation(agent)
-						}
-					}
-				}
-			}
-			// Conversation detail is the same inspector in full-width zoom; keep
-			// the selected flow node and fold state instead of switching views.
-			a.openInspector(inspectorConversation, session.ScopeNode, true)
+		if sp.Show && sp.Focus {
+			sp.Focus = false
+			a.updateConvHeader()
 			return a, nil
 		}
+		if len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
+			return a.popNavFrame()
+		}
+		if sp.Show {
+			a.clearInspectorHistory()
+			sp.HandleSplitKey("esc", a.width, a.height, a.splitRatio, a.adjustSplitRatio)
+			return a, nil
+		}
+		a.liveTail = false
+		a.conv.split.BottomAlign = false
+		a.state = viewSessions
 		return a, nil
+	case "enter":
+		return a.handleConversationEnter()
 	case a.keymap.Conversation.LiveToggle:
 		return a.toggleConvLiveTail()
 	case a.keymap.Session.Refresh:
@@ -432,7 +429,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Zoom hides the flow list; Tab leaves zoom and lands on the list
 		// instead of focusing an invisible pane.
 		if a.conv.inspector.Zoom {
-			a.setInspectorZoom(false)
+			a.popInspectorHistory()
+			if a.conv.inspector.Zoom {
+				a.setInspectorZoom(false)
+			}
 			sp.Focus = false
 			return a, nil
 		}
@@ -453,6 +453,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, a.adjustSplitRatio)
 	switch result {
 	case splitKeyClosed:
+		a.clearInspectorHistory()
 		return a, nil
 	case splitKeyFocused, splitKeyOpened:
 		a.updateConvPreview()
@@ -468,7 +469,8 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if key == "left" {
 			a.liveTail = false
 			a.conv.split.BottomAlign = false
-			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
+			a.clearInspectorHistory()
+			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" || len(a.navStack) > 0 {
 				return a.popNavFrame()
 			}
 			a.state = viewSessions
@@ -507,9 +509,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// filter, which felt like `/` was broken inside the preview.
 			if sp.Folds != nil {
 				a.startBlockFilter()
-				if a.conv.inspector.Zoom {
-					sp.Focus = true
-				}
+				sp.Focus = true
 				return a, nil
 			}
 			a.conv.contextActive = false
@@ -2764,9 +2764,8 @@ func (a *App) openCronConversation(cron session.CronItem) (tea.Model, tea.Cmd) {
 	a.conv.agent = session.Subagent{}
 	a.conv.task = session.TaskItem{}
 	a.conv.cron = cron
+	a.resetDrilldownInspector()
 
-	a.conv.split.Focus = false
-	a.conv.split.CacheKey = ""
 	a.rebuildConversationList(0)
 
 	a.state = viewConversation
@@ -2774,15 +2773,23 @@ func (a *App) openCronConversation(cron session.CronItem) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+func (a *App) taskConversationData(task session.TaskItem) ([]session.Entry, []mergedMsg, bool) {
+	entries := extractTaskEntries(a.conv.messages, task.ID)
+	if len(entries) == 0 {
+		return nil, nil, false
+	}
+	merged := filterConversation(mergeConversationTurns(entries))
+	return entries, merged, len(merged) > 0
+}
+
 // openTaskConversation opens a conversation view filtered to entries related to a task.
 func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
-	taskEntries := extractTaskEntries(a.conv.messages, task.ID)
-	if len(taskEntries) == 0 {
-		a.copiedMsg = "No entries for task " + task.ID
+	taskEntries, merged, ok := a.taskConversationData(task)
+	if !ok {
+		a.copiedMsg = "No visible entries for task " + task.ID
 		return a, nil
 	}
 
-	merged := filterConversation(mergeConversationTurns(taskEntries))
 	agents, _ := session.FindSubagents(a.conv.sess.FilePath)
 	items := buildConvItems(a.currentSess, merged, agents, nil, nil, a.conv.flow)
 
@@ -2797,9 +2804,8 @@ func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 	a.conv.agent = session.Subagent{}
 	a.conv.task = task
 	a.conv.cron = session.CronItem{}
+	a.resetDrilldownInspector()
 
-	a.conv.split.Focus = false
-	a.conv.split.CacheKey = ""
 	a.rebuildConversationList(0)
 
 	a.state = viewConversation
@@ -2822,6 +2828,10 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	// For side-question agents, collapse the parent session context
 	if agent.AgentType == "aside_question" {
 		entries = filterSideQuestionContext(entries)
+	}
+	if len(entries) == 0 {
+		a.copiedMsg = "No agent messages"
+		return a, nil
 	}
 
 	merged := filterConversation(mergeConversationTurns(entries))
@@ -2854,9 +2864,8 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	a.conv.agent = agent
 	a.conv.task = session.TaskItem{}
 	a.conv.cron = session.CronItem{}
+	a.resetDrilldownInspector()
 
-	a.conv.split.Focus = false
-	a.conv.split.CacheKey = ""
 	a.rebuildConversationList(0)
 
 	a.state = viewConversation

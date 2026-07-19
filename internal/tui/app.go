@@ -1186,6 +1186,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		// Nested conversation filters unwind from the focused preview outward:
+		// block filter first, then the chronological list filter on the next Esc.
+		if msg.String() == "esc" && a.state == viewConversation && a.conv.split.Folds != nil && a.conv.split.Folds.BlockFilter != "" {
+			a.clearBlockFilter()
+			return a, nil
+		}
+
 		// Esc clears an applied search filter before doing normal navigation
 		if msg.String() == "esc" && a.hasFilterApplied() {
 			a.resetActiveFilter()
@@ -1662,18 +1669,21 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.clearMultiSelection()
 			return a, nil
 		}
-		if sp.Show {
-			// If in a non-default preview mode, go back to messages first
-			if a.sessPreviewMode != sessPreviewConversation {
-				a.closePaneProxy()
-				if a.sessPreviewMode == sessPreviewRefs {
-					clear(a.sessRefsSelected)
-				}
-				a.sessPreviewMode = sessPreviewConversation
-				sp.CacheKey = ""
-				sp.Focus = false
-				return a, nil
+		if sp.Show && a.sessPreviewMode != sessPreviewConversation {
+			a.closePaneProxy()
+			if a.sessPreviewMode == sessPreviewRefs {
+				clear(a.sessRefsSelected)
 			}
+			a.sessPreviewMode = sessPreviewConversation
+			sp.CacheKey = ""
+			sp.Focus = false
+			return a, nil
+		}
+		if sp.Show && sp.Focus {
+			sp.Focus = false
+			return a, nil
+		}
+		if sp.Show {
 			idx := a.sessionList.Index()
 			sp.Show = false
 			sp.Focus = false

@@ -214,8 +214,15 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	case viewConversation:
 		if !clickedPreview && contentY >= 0 && contentY < a.conv.split.headerInset {
-			if contentY < len(a.conv.contextItems) {
-				a.selectConvContext(contentY)
+			switch {
+			case contentY == 0 && len(a.conv.contextItems) > 0:
+				a.selectConvContext(min(max(a.conv.contextIndex, 0), len(a.conv.contextItems)-1))
+			case contentY == len(a.conv.contextItems)+1 && len(a.convList.Items()) > 0:
+				a.selectConvBody(min(max(a.convList.Index(), 0), len(a.convList.Items())-1))
+			default:
+				if index, ok := a.convContextIndexAtHeaderLine(contentY); ok {
+					a.selectConvContext(index)
+				}
 			}
 			a.conv.split.Focus = false
 		} else {

@@ -90,9 +90,20 @@ func (a *App) sessHelpLine() string {
 		default:
 			h += " ↑↓:scroll ←:unfocus tab:mode"
 		}
+		if a.sessPreviewMode != sessPreviewConversation {
+			h += " esc:messages"
+		} else {
+			h += " esc:list"
+		}
 		h += " " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	} else {
-		h += " g/G:top/end tab/S-tab:preview →:focus ←:close " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
+		h += " g/G:top/end tab/S-tab:preview →:focus ←:close "
+		if a.sessPreviewMode != sessPreviewConversation {
+			h += "esc:messages "
+		} else {
+			h += "esc:close "
+		}
+		h += displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	}
 	if a.config.TmuxEnabled && tmux.InTmux() {
 		h += " " + fmtKey(sk.Live, "live") + " " + fmtKey(sk.Switch, "switch")
@@ -113,6 +124,7 @@ func (a *App) convHelpLine(badges string) string {
 
 	sp := &a.conv.split
 	h := interactionHelpText(a.conversationPrimaryHelpActions()...)
+	escLabel := "sessions"
 	if sp.Show {
 		if sp.Focus {
 			next := previewModeLabels[(a.conv.rightPaneMode+1)%len(previewModeLabels)]
@@ -124,18 +136,33 @@ func (a *App) convHelpLine(badges string) string {
 		} else {
 			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions("inspector")...))
 		}
-		h = joinHelpSections(h, interactionHelpText(labelAction("", "esc", "close"), resizeHelpAction(a)))
+		switch {
+		case sp.Folds != nil && sp.Folds.BlockFilter != "":
+			escLabel = "clear filter"
+		case len(a.conv.inspector.History) > 0 || a.conv.inspector.Zoom || a.conv.inspector.MetaDrill != "":
+			escLabel = "back"
+		case sp.Focus:
+			escLabel = "list"
+		case len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "":
+			escLabel = "parent"
+		default:
+			escLabel = "close"
+		}
+		h = joinHelpSections(h, interactionHelpText(labelAction("", "esc", escLabel), resizeHelpAction(a)))
+	} else if len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
+		escLabel = "parent"
+		h = joinHelpSections(h, interactionHelpText(a.conversationPreviewHiddenHelpActions()...), "esc:"+escLabel)
 	} else {
-		h = joinHelpSections(h, interactionHelpText(a.conversationPreviewHiddenHelpActions()...))
+		h = joinHelpSections(h, interactionHelpText(a.conversationPreviewHiddenHelpActions()...), "esc:"+escLabel)
 	}
 
 	if sp.Folds != nil && sp.Folds.BlockFilter != "" {
 		vis := countVisibleBlocks(sp.Folds.BlockVisible)
 		total := len(sp.Folds.Entry.Content)
 		filterInfo := filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, sp.Folds.BlockFilter))
-		return filterInfo + " " + badges + formatHelp(joinHelpSections(h, "/:search", "esc:back", "q:quit"))
+		return filterInfo + " " + badges + formatHelp(joinHelpSections(h, "/:search", "q:quit"))
 	}
-	return badges + formatHelp(joinHelpSections(h, "/:search", "esc:back", "q:quit"))
+	return badges + formatHelp(joinHelpSections(h, "/:search", "q:quit"))
 }
 
 // --- Config view help ---

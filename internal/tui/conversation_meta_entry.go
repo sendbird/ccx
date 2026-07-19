@@ -261,18 +261,21 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
 			return true, m, cmd
 		}
+		a.copiedMsg = "No origin turn for this memory"
 		return true, a, nil
 	case metaTargetTask:
 		// Prefer opening the task's own view (matches decision-task Enter); fall
 		// back to jumping to its definition turn.
-		if task, ok := a.taskByID(target.taskID); ok && len(extractTaskEntries(a.conv.messages, task.ID)) > 0 {
-			a.pushNavFrame()
-			m, cmd := a.openTaskConversation(task)
-			return true, m, cmd
+		if task, ok := a.taskByID(target.taskID); ok {
+			if _, _, visible := a.taskConversationData(task); visible {
+				m, cmd := a.drillIntoTaskConversation(task)
+				return true, m, cmd
+			}
 		}
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
 			return true, m, cmd
 		}
+		a.copiedMsg = "No conversation or origin turn for this task"
 		return true, a, nil
 	default:
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
@@ -441,9 +444,11 @@ func (a *App) metaTasksPlanEntries() []metaEntry {
 		}
 		out = append(out, textMeta(dimStyle.Render(fmt.Sprintf("── Tasks [%d/%d] · ↵/J jump ──", completed, len(sess.Tasks)))))
 		for _, task := range sess.Tasks {
-			origin := taskOrigins[task.ID]
-			target := a.originTarget(metaTargetTask, origin)
-			target.taskID = task.ID
+			target := metaEntryTarget{kind: metaTargetTask, taskID: task.ID, entryIndex: -1, blockIdx: -1}
+			if origin, ok := taskOrigins[task.ID]; ok {
+				target = a.originTarget(metaTargetTask, origin)
+				target.taskID = task.ID
+			}
 			out = append(out, metaEntry{
 				block:  session.ContentBlock{Type: "text", Text: taskRow(task)},
 				target: target,

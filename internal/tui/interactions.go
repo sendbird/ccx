@@ -130,9 +130,68 @@ func copyConfirmHelpAction(a *App) interactionAction {
 	return labelAction("", displayKey(a.keymap.Preview.CopyAll)+"/↵", "copy")
 }
 
+func (a *App) conversationEnterHelpAction() interactionAction {
+	action := bindAction("", a.keymap.Session.Open, "open")
+	item, ok := a.selectedConversationItem()
+	if !ok {
+		action.Enabled = false
+		return action
+	}
+	if !a.conv.split.Show || !a.conv.split.Focus {
+		return action
+	}
+
+	action.Enabled = false
+	if item.kind == convSessionMeta {
+		if target, ok := a.currentMetaTarget(); ok {
+			switch target.kind {
+			case metaTargetMemoryFile:
+				if a.conv.inspector.MetaDrill == "" {
+					action.Enabled = target.fileName != ""
+					action.Label = "open"
+				} else {
+					action.Enabled = target.messageUUID != "" || target.entryIndex >= 0
+					action.Label = "jump"
+				}
+			case metaTargetTask:
+				action.Enabled = target.messageUUID != "" || target.entryIndex >= 0
+				if task, ok := a.taskByID(target.taskID); ok {
+					if _, _, visible := a.taskConversationData(task); visible {
+						action.Enabled = true
+						action.Label = "open"
+					} else {
+						action.Label = "jump"
+					}
+				} else {
+					action.Label = "jump"
+				}
+			case metaTargetDecision, metaTargetPlan:
+				action.Enabled = target.messageUUID != "" || target.entryIndex >= 0
+				action.Label = "jump"
+			}
+		}
+		return action
+	}
+	if a.conv.split.Folds == nil {
+		return action
+	}
+	bc := a.conv.split.Folds.BlockCursor
+	entry := a.conv.split.Folds.Entry
+	if bc < 0 || bc >= len(entry.Content) {
+		return action
+	}
+	block := entry.Content[bc]
+	action.Enabled = block.Type == "image" && block.ImagePasteID > 0
+	if block.Type == "tool_use" && (block.ToolName == "Agent" || block.ToolName == "Task") {
+		_, action.Enabled = a.findAgentForToolUse(block.ID)
+		action.Label = "open"
+	}
+	return action
+}
+
 func (a *App) conversationPrimaryHelpActions() []interactionAction {
 	actions := []interactionAction{
-		bindAction("", a.keymap.Session.Open, "open"),
+		a.conversationEnterHelpAction(),
 		bindAction("", a.keymap.Conversation.Edit, "edit"),
 		labelAction("", "p", "page"),
 		bindAction("", a.keymap.Conversation.Actions, "actions"),
