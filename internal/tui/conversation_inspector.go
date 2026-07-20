@@ -55,6 +55,9 @@ type conversationInspector struct {
 	// MetaDrill is the memory note filename currently drilled into (file detail
 	// mode); empty means the file-list mode. Only meaningful for the memory row.
 	MetaDrill string
+	// MetaPlanDrill is the artifact key of the plan currently shown in detail.
+	// Empty means the combined tasks/plans list is shown.
+	MetaPlanDrill string
 }
 
 // metaEntryTarget describes the jump/drill action bound to one selectable block
@@ -67,6 +70,7 @@ type metaEntryTarget struct {
 	entryIndex  int    // origin entry index in the parent transcript (fallback locator)
 	blockIdx    int    // block within that turn to focus (-1 = none)
 	taskID      string // task ID (task targets)
+	planKey     string // plan artifact key (plan-detail target)
 }
 
 type metaTargetKind int
@@ -76,7 +80,7 @@ const (
 	metaTargetMemoryFile                // file-list row → Enter drills into the file
 	metaTargetDecision                  // flow-summary decision → jump to origin turn
 	metaTargetTask                      // task row → open task view / definition turn
-	metaTargetPlan                      // plan row → jump to ExitPlanMode turn
+	metaTargetPlan                      // plan row → Enter opens data; J jumps to origin
 	metaTargetCron                      // cron row (informational; no origin to jump to)
 )
 

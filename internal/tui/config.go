@@ -196,9 +196,9 @@ func (a *App) keymapConfigItems() []session.ConfigItem {
 			{"stats", km.Views.Stats}, {"config", km.Views.Config}, {"plugins", km.Views.Plugins},
 		}},
 		{"conversation", []kv{
-			{"jump_to_tree", km.Conversation.JumpToTree}, {"live_toggle", km.Conversation.LiveToggle},
-			{"edit", km.Conversation.Edit}, {"actions", km.Conversation.Actions},
-			{"input", km.Conversation.Input},
+			{"jump_to_tree", km.Conversation.JumpToTree}, {"switch_region", km.Conversation.SwitchRegion},
+			{"live_toggle", km.Conversation.LiveToggle}, {"edit", km.Conversation.Edit},
+			{"actions", km.Conversation.Actions}, {"input", km.Conversation.Input},
 		}},
 		{"preview", []kv{
 			{"fold_all", km.Preview.FoldAll}, {"expand_all", km.Preview.ExpandAll},

@@ -165,7 +165,10 @@ func (a *App) conversationEnterHelpAction() interactionAction {
 				} else {
 					action.Label = "jump"
 				}
-			case metaTargetDecision, metaTargetPlan:
+			case metaTargetPlan:
+				action.Enabled = a.conv.inspector.MetaPlanDrill == "" && target.planKey != ""
+				action.Label = "open"
+			case metaTargetDecision:
 				action.Enabled = target.messageUUID != "" || target.entryIndex >= 0
 				action.Label = "jump"
 			}
@@ -190,19 +193,30 @@ func (a *App) conversationEnterHelpAction() interactionAction {
 }
 
 func (a *App) conversationPrimaryHelpActions() []interactionAction {
+	regionLabel := "pinned"
+	if a.conv.contextActive {
+		regionLabel = "conversation"
+	}
 	actions := []interactionAction{
 		a.conversationEnterHelpAction(),
+		bindAction("", a.keymap.Conversation.SwitchRegion, regionLabel),
 		bindAction("", a.keymap.Conversation.Edit, "edit"),
 		labelAction("", "p", "page"),
 		bindAction("", a.keymap.Conversation.Actions, "actions"),
 		bindAction("", a.keymap.Conversation.LiveToggle, "live"),
 		bindAction("", a.keymap.Session.Refresh, "refresh"),
 	}
+	item, isMeta := a.selectedConversationItem()
+	if isMeta && item.kind == convSessionMeta {
+		if target, ok := a.currentMetaTarget(); ok && target.kind.jumpable() && (target.messageUUID != "" || target.entryIndex >= 0) {
+			actions = append(actions, bindAction("", a.keymap.Conversation.JumpToTree, "jump"))
+		}
+	}
 	if a.config.TmuxEnabled && tmux.InTmux() && a.currentSess.IsLive {
-		actions = append(actions,
-			bindAction("", a.keymap.Conversation.Input, "input"),
-			bindAction("", a.keymap.Conversation.JumpToTree, "jump"),
-		)
+		actions = append(actions, bindAction("", a.keymap.Conversation.Input, "input"))
+		if !isMeta || item.kind != convSessionMeta {
+			actions = append(actions, bindAction("", a.keymap.Conversation.JumpToTree, "jump"))
+		}
 	}
 	return actions
 }

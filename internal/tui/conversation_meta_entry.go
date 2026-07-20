@@ -277,6 +277,12 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 		}
 		a.copiedMsg = "No conversation or origin turn for this task"
 		return true, a, nil
+	case metaTargetPlan:
+		if a.conv.inspector.MetaPlanDrill == "" && target.planKey != "" {
+			a.enterPlanDrill(target.planKey)
+			return true, a, nil
+		}
+		return true, a, nil
 	default:
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
 			return true, m, cmd
@@ -303,10 +309,8 @@ func (a *App) taskByID(id string) (session.TaskItem, bool) {
 func (a *App) enterMemoryDrill(fileName string) {
 	a.conv.inspector.MetaDrill = fileName
 	a.conv.split.CacheKey = ""
-	if a.conv.split.Folds != nil {
-		a.conv.split.Folds.BlockCursor = 0
-	}
 	a.updateConvPreview()
+	a.focusFirstActionableMetaTarget()
 }
 
 // exitMemoryDrill returns from single-file detail to the memory file list.
@@ -316,6 +320,42 @@ func (a *App) exitMemoryDrill() bool {
 		return false
 	}
 	a.conv.inspector.MetaDrill = ""
+	a.conv.split.CacheKey = ""
+	if a.conv.split.Folds != nil {
+		a.conv.split.Folds.BlockCursor = 0
+	}
+	a.updateConvPreview()
+	return true
+}
+
+func (a *App) enterPlanDrill(planKey string) {
+	a.conv.inspector.MetaPlanDrill = planKey
+	a.conv.split.CacheKey = ""
+	a.updateConvPreview()
+	a.focusFirstActionableMetaTarget()
+}
+
+func (a *App) focusFirstActionableMetaTarget() {
+	sp := &a.conv.split
+	if sp.Folds == nil {
+		return
+	}
+	for i, target := range a.conv.inspector.MetaTargets {
+		if target.kind == metaTargetNone {
+			continue
+		}
+		sp.Folds.BlockCursor = i
+		sp.RefreshFoldCursor(a.width, a.splitRatio)
+		sp.ScrollToBlock()
+		return
+	}
+}
+
+func (a *App) exitPlanDrill() bool {
+	if a.conv.inspector.MetaPlanDrill == "" {
+		return false
+	}
+	a.conv.inspector.MetaPlanDrill = ""
 	a.conv.split.CacheKey = ""
 	if a.conv.split.Folds != nil {
 		a.conv.split.Folds.BlockCursor = 0
@@ -428,9 +468,16 @@ func decisionRow(dd session.DecisionData) string {
 }
 
 // metaTasksPlanEntries renders tasks, cron jobs, and plans as selectable rows.
-// Tasks jump to their definition turn (when known), plans to the ExitPlanMode
-// turn, crons to their create turn.
+// Plan detail is an inspector-local drill view; J still jumps to its latest
+// ExitPlanMode turn.
 func (a *App) metaTasksPlanEntries() []metaEntry {
+	if a.conv.inspector.MetaPlanDrill != "" {
+		if art, ok := a.latestPlanArtifact(a.conv.inspector.MetaPlanDrill); ok {
+			return a.metaPlanDrillEntries(art)
+		}
+		a.conv.inspector.MetaPlanDrill = ""
+	}
+
 	sess := a.conv.sess
 	var out []metaEntry
 
@@ -467,7 +514,7 @@ func (a *App) metaTasksPlanEntries() []metaEntry {
 	}
 
 	if plans := a.planEntries(); len(plans) > 0 {
-		out = append(out, textMeta(dimStyle.Render(fmt.Sprintf("── Plans [%d] · ↵/J jump ──", len(plans)))))
+		out = append(out, textMeta(dimStyle.Render(fmt.Sprintf("── Plans [%d] · ↵ open · J jump ──", len(plans)))))
 		out = append(out, plans...)
 	}
 
@@ -477,28 +524,81 @@ func (a *App) metaTasksPlanEntries() []metaEntry {
 	return out
 }
 
-// planEntries builds one selectable row per ExitPlanMode plan occurrence, in
-// chronological order, jumping to the turn that wrote it.
+// planEntries builds one selectable row per plan file. The first occurrence
+// establishes list order; the latest occurrence supplies its data and J target.
 func (a *App) planEntries() []metaEntry {
 	if a.conv.flow == nil {
 		return nil
 	}
 	arts := a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactPlan, session.ScopeSession)
 	hist := a.conv.flow.PlanTouchHistory()
-	seen := make(map[string]bool)
-	var out []metaEntry
+	order := make([]string, 0, len(arts))
+	latest := make(map[string]session.Artifact, len(arts))
 	for _, art := range arts {
-		if seen[art.Key] {
-			continue
+		if _, seen := latest[art.Key]; !seen {
+			order = append(order, art.Key)
 		}
-		seen[art.Key] = true
+		latest[art.Key] = art
+	}
+	out := make([]metaEntry, 0, len(order))
+	for _, key := range order {
+		art := latest[key]
 		data, _ := art.Data.(session.PlanData)
+		target := a.originTarget(metaTargetPlan, art.Origin)
+		target.planKey = key
 		out = append(out, metaEntry{
-			block:  session.ContentBlock{Type: "text", Text: planRow(art.Key, data, hist[art.Key])},
-			target: a.originTarget(metaTargetPlan, art.Origin),
+			block:  session.ContentBlock{Type: "text", Text: planRow(key, data, hist[key])},
+			target: target,
 		})
 	}
 	return out
+}
+
+func (a *App) latestPlanArtifact(key string) (session.Artifact, bool) {
+	if a.conv.flow == nil || key == "" {
+		return session.Artifact{}, false
+	}
+	arts := a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactPlan, session.ScopeSession)
+	for i := len(arts) - 1; i >= 0; i-- {
+		if arts[i].Key == key {
+			return arts[i], true
+		}
+	}
+	return session.Artifact{}, false
+}
+
+func (a *App) metaPlanDrillEntries(art session.Artifact) []metaEntry {
+	data, _ := art.Data.(session.PlanData)
+	target := a.originTarget(metaTargetPlan, art.Origin)
+	target.planKey = art.Key
+
+	name := filepath.Base(art.Key)
+	if data.PlanFilePath != "" {
+		name = filepath.Base(data.PlanFilePath)
+	}
+	var head strings.Builder
+	head.WriteString(dimStyle.Render("← esc: back") + "  " + planBadge.Render("▤ "+name))
+	if h := memoryHistoryLine(a.conv.flow.PlanTouchHistory()[art.Key]); h != "" {
+		head.WriteString(dimStyle.Render("  " + h))
+	}
+	if target.messageUUID != "" || target.entryIndex >= 0 {
+		head.WriteString(dimStyle.Render("  · J: jump to latest write"))
+	}
+	if data.PlanFilePath != "" {
+		head.WriteString("\n" + dimStyle.Render(data.PlanFilePath))
+	}
+
+	body := strings.TrimSpace(data.Plan)
+	if body == "" {
+		body = dimStyle.Render("(plan data unavailable)")
+	} else {
+		previewW := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+		body = strings.TrimRight(renderMarkdownText(body, previewW), "\n")
+	}
+	return []metaEntry{
+		{block: session.ContentBlock{Type: "text", Text: head.String()}, target: target},
+		{block: session.ContentBlock{Type: "text", Text: body}, target: target},
+	}
 }
 
 // taskOriginByID maps each task ID to the origin of its most recent

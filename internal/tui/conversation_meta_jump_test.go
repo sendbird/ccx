@@ -91,6 +91,56 @@ func TestTasksPlanRowsAreSelectable(t *testing.T) {
 	}
 }
 
+func TestPinnedPlanEnterOpensDetailEscRestoresAndJumps(t *testing.T) {
+	app := setupDecisionFlowApp(t)
+	selectMetaContextRow(t, app, "tasksplan")
+	app.conv.split.Focus = true
+
+	planCursor := -1
+	for i, target := range app.conv.inspector.MetaTargets {
+		if target.kind == metaTargetPlan {
+			planCursor = i
+			break
+		}
+	}
+	if planCursor < 0 {
+		t.Fatal("no plan target in tasks/plan preview")
+	}
+	app.conv.split.Folds.BlockCursor = planCursor
+	originID := app.selectedConversationItemID()
+
+	app = pressKey(app, "enter")
+	if app.conv.inspector.MetaPlanDrill == "" {
+		t.Fatal("Enter on plan row did not open plan detail")
+	}
+	if got := app.selectedConversationItemID(); got != originID {
+		t.Fatalf("Enter moved to conversation item %q, want pinned item %q", got, originID)
+	}
+	if detail := stripANSI(app.conv.split.Preview.View()); !strings.Contains(detail, "do the thing") {
+		t.Fatalf("plan detail missing stored plan data: %q", detail)
+	}
+
+	app = pressKey(app, "esc")
+	if app.conv.inspector.MetaPlanDrill != "" {
+		t.Fatalf("Esc left plan detail active: %q", app.conv.inspector.MetaPlanDrill)
+	}
+	if got := app.selectedConversationItemID(); got != originID {
+		t.Fatalf("Esc restored item %q, want %q", got, originID)
+	}
+	if app.conv.split.Folds == nil || app.conv.split.Folds.BlockCursor != planCursor {
+		t.Fatalf("Esc restored block cursor %d, want %d", app.conv.split.Folds.BlockCursor, planCursor)
+	}
+
+	app = pressKey(app, "enter")
+	app = pressKey(app, "J")
+	if app.conv.contextActive {
+		t.Fatal("J from plan detail did not switch selection to the origin conversation turn")
+	}
+	if got := app.selectedConversationItemID(); got == originID {
+		t.Fatalf("J kept pinned selection %q instead of jumping to origin", got)
+	}
+}
+
 func TestPlanTouchHistoryShownInRow(t *testing.T) {
 	row := planRow("/repo/plan.md", session.PlanData{PlanFilePath: "/repo/plan.md"}, session.TouchHistory{})
 	if !strings.Contains(stripANSI(row), "plan.md") {

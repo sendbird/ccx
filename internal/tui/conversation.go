@@ -192,7 +192,8 @@ func (a *App) handleConversationEnter() (tea.Model, tea.Cmd) {
 				a.copiedMsg = "No action for this inspector row"
 				return a, nil
 			}
-			if target.kind == metaTargetMemoryFile && a.conv.inspector.MetaDrill == "" && target.fileName != "" {
+			if (target.kind == metaTargetMemoryFile && a.conv.inspector.MetaDrill == "" && target.fileName != "") ||
+				(target.kind == metaTargetPlan && a.conv.inspector.MetaPlanDrill == "" && target.planKey != "") {
 				a.pushInspectorHistory()
 			}
 			if handled, m, cmd := a.handleMetaEntryEnter(); handled {
@@ -342,9 +343,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.clearBlockFilter()
 			return a, nil
 		}
-		if a.conv.inspector.MetaDrill != "" && len(a.conv.inspector.History) == 0 {
-			a.exitMemoryDrill()
-			return a, nil
+		if len(a.conv.inspector.History) == 0 {
+			if a.exitMemoryDrill() || a.exitPlanDrill() {
+				return a, nil
+			}
 		}
 		if a.popInspectorHistory() {
 			return a, nil
@@ -372,6 +374,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case "enter":
 		return a.handleConversationEnter()
+	case a.keymap.Conversation.SwitchRegion:
+		if a.switchConversationRegion() {
+			a.pauseLiveTail()
+		}
+		return a, nil
 	case a.keymap.Conversation.LiveToggle:
 		return a.toggleConvLiveTail()
 	case a.keymap.Session.Refresh:
@@ -586,8 +593,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// convPreviewBoundaryCross advances through pinned rows and visible timeline
-// messages when the block cursor reaches the current preview boundary.
+// convPreviewBoundaryCross advances to the adjacent item only within the
+// active region when the block cursor reaches the current preview boundary.
+// Pinned and timeline selections never cross implicitly.
 func (a *App) convPreviewBoundaryCross(key string) (tea.Model, tea.Cmd) {
 	sp := &a.conv.split
 	items := a.convList.VisibleItems()
@@ -616,12 +624,6 @@ func (a *App) convPreviewBoundaryCross(key string) (tea.Model, tea.Cmd) {
 				a.selectConvContext(a.conv.contextIndex + 1)
 				return finish(true)
 			}
-			for i, raw := range items {
-				if item, ok := raw.(convItem); ok && item.kind == convMsg {
-					a.selectConvBody(i)
-					return finish(true)
-				}
-			}
 			return a, nil
 		}
 		for i := a.convList.Index() + 1; i < len(items); i++ {
@@ -644,10 +646,6 @@ func (a *App) convPreviewBoundaryCross(key string) (tea.Model, tea.Cmd) {
 				return finish(false)
 			}
 		}
-		if len(a.conv.contextItems) > 0 {
-			a.selectConvContext(len(a.conv.contextItems) - 1)
-			return finish(false)
-		}
 	}
 	return a, nil
 }
@@ -665,19 +663,23 @@ func (a *App) updateConvPreview() {
 		return
 	}
 
-	// Memory drill state only belongs to the memory row; leaving it (to another
-	// meta row or any other item) drops back to the file list so re-entry is
-	// clean.
+	// Drill state belongs to its owning pinned row. Leaving that row returns it to
+	// list mode so re-entry is deterministic.
 	if a.conv.inspector.MetaDrill != "" && !(item.kind == convSessionMeta && item.sessionMeta == "memory") {
 		a.conv.inspector.MetaDrill = ""
 	}
+	if a.conv.inspector.MetaPlanDrill != "" && !(item.kind == convSessionMeta && item.sessionMeta == "tasksplan") {
+		a.conv.inspector.MetaPlanDrill = ""
+	}
 
 	baseKey := convPreviewBaseKey(item)
-	// Memory drill-down is a distinct view of the same meta row; fold it into
-	// baseKey so list↔detail transitions are treated as new entries (reset fold
-	// state + scroll) rather than a cache hit that keeps the old blocks.
+	// Drill-down is a distinct view of the same meta row; include it in the cache
+	// identity so list↔detail transitions reset fold state and scroll.
 	if item.kind == convSessionMeta && a.conv.inspector.MetaDrill != "" {
-		baseKey += ":drill:" + a.conv.inspector.MetaDrill
+		baseKey += ":memory-drill:" + a.conv.inspector.MetaDrill
+	}
+	if item.kind == convSessionMeta && a.conv.inspector.MetaPlanDrill != "" {
+		baseKey += ":plan-drill:" + a.conv.inspector.MetaPlanDrill
 	}
 	oldCacheKey := sp.CacheKey
 	anchor := captureConvPreviewAnchor(sp, baseKey)

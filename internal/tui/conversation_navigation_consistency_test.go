@@ -520,9 +520,13 @@ func TestFilteredConversationEndAndEnterUseVisibleSelection(t *testing.T) {
 		t.Fatalf("filtered row = %#v, want conversation message", visible[0])
 	}
 
+	app = pressKey(app, "P")
+	if app.conv.contextActive {
+		t.Fatal("P did not activate the conversation region")
+	}
 	app = pressKey(app, "end")
 	if app.conv.contextActive {
-		t.Fatal("end left the pinned region active")
+		t.Fatal("end left the conversation region")
 	}
 	if got := app.selectedConversationItemID(); got != convItemID(want) {
 		t.Fatalf("end selected %q, want visible row %q", got, convItemID(want))
@@ -554,7 +558,7 @@ func TestFilteredConversationEndAndEnterUseVisibleSelection(t *testing.T) {
 	}
 }
 
-func TestPreviewBoundaryCrossesPinnedAndFilteredTimeline(t *testing.T) {
+func TestPreviewBoundaryStaysWithinActiveRegion(t *testing.T) {
 	app := setupFixedContextConvApp(t, 120, 24)
 	applyListFilter(&app.convList, "fixed-context-message-12")
 	visible := app.convList.VisibleItems()
@@ -573,28 +577,34 @@ func TestPreviewBoundaryCrossesPinnedAndFilteredTimeline(t *testing.T) {
 	app.updateConvPreview()
 	model, _ := app.convPreviewBoundaryCross("down")
 	app = model.(*App)
-	if app.conv.contextActive || app.convList.Index() != 0 {
-		t.Fatalf("down did not cross into filtered timeline: pinned=%t index=%d", app.conv.contextActive, app.convList.Index())
-	}
-	if got := app.selectedConversationItemID(); got != convItemID(message) {
-		t.Fatalf("down selected %q, want %q", got, convItemID(message))
+	if !app.conv.contextActive || app.conv.contextIndex != lastPinned {
+		t.Fatalf("down crossed pinned boundary: pinned=%t index=%d", app.conv.contextActive, app.conv.contextIndex)
 	}
 
+	if !app.switchConversationRegion() {
+		t.Fatal("explicit switch to filtered timeline failed")
+	}
+	if app.conv.contextActive || app.convList.Index() != 0 || app.selectedConversationItemID() != convItemID(message) {
+		t.Fatalf("switch selected pinned=%t index=%d id=%q", app.conv.contextActive, app.convList.Index(), app.selectedConversationItemID())
+	}
 	model, _ = app.convPreviewBoundaryCross("up")
 	app = model.(*App)
-	if !app.conv.contextActive || app.conv.contextIndex != lastPinned {
-		t.Fatalf("up did not return to last pinned row: pinned=%t index=%d want=%d", app.conv.contextActive, app.conv.contextIndex, lastPinned)
+	if app.conv.contextActive || app.convList.Index() != 0 {
+		t.Fatalf("up crossed timeline boundary: pinned=%t index=%d", app.conv.contextActive, app.convList.Index())
 	}
 
+	if !app.switchConversationRegion() {
+		t.Fatal("explicit switch back to pinned failed")
+	}
 	model, _ = app.convPreviewBoundaryCross("up")
 	app = model.(*App)
 	if !app.conv.contextActive || app.conv.contextIndex != lastPinned-1 {
-		t.Fatalf("up did not move within pinned rows: pinned=%t index=%d want=%d", app.conv.contextActive, app.conv.contextIndex, lastPinned-1)
+		t.Fatalf("up did not move within pinned: pinned=%t index=%d", app.conv.contextActive, app.conv.contextIndex)
 	}
 	model, _ = app.convPreviewBoundaryCross("down")
 	app = model.(*App)
 	if !app.conv.contextActive || app.conv.contextIndex != lastPinned {
-		t.Fatalf("down did not move within pinned rows: pinned=%t index=%d want=%d", app.conv.contextActive, app.conv.contextIndex, lastPinned)
+		t.Fatalf("down did not move within pinned: pinned=%t index=%d", app.conv.contextActive, app.conv.contextIndex)
 	}
 }
 
