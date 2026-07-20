@@ -53,10 +53,11 @@ func TestConversationFixedHeaderAndBodyMouseClicks(t *testing.T) {
 		t.Fatalf("header inset = %d, want at least %d context rows", app.conv.split.headerInset, len(app.conv.contextItems))
 	}
 
-	// Screen Y includes the title bar, so Y=2 targets context row index 1.
+	// Screen Y includes the title bar and the PINNED section label, so Y=3
+	// targets context row index 1.
 	m, _ := app.handleMouseClick(tea.MouseMsg{
 		X:      1,
-		Y:      2,
+		Y:      3,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionPress,
 	})
