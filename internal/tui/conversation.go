@@ -116,7 +116,7 @@ func (a *App) pauseLiveTail() {
 // openConversationInspectorForEntry selects the exact unified-flow message row
 // and opens its Node-scoped Conversation facet in full-width zoom.
 func (a *App) openConversationInspectorForEntry(m mergedMsg, blockIdx int) (tea.Model, tea.Cmd) {
-	for i, raw := range a.convList.Items() {
+	for i, raw := range a.convList.VisibleItems() {
 		item, ok := raw.(convItem)
 		if !ok || item.kind != convMsg || item.merged.startIdx != m.startIdx {
 			continue
@@ -165,12 +165,11 @@ func sameConversationBlock(a, b session.ContentBlock) bool {
 // openParentConversationInspector opens the exact parent message for a
 // lifecycle/task marker without introducing a separate navigation frame.
 func (a *App) openParentConversationInspector(item convItem) (tea.Model, tea.Cmd) {
-	items := a.convList.Items()
-	if item.parentIdx < 0 || item.parentIdx >= len(items) {
+	if item.parentIdx < 0 || item.parentIdx >= len(a.conv.items) {
 		return a, nil
 	}
-	parent, ok := items[item.parentIdx].(convItem)
-	if !ok || parent.kind != convMsg {
+	parent := a.conv.items[item.parentIdx]
+	if parent.kind != convMsg {
 		return a, nil
 	}
 	return a.openConversationInspectorForEntry(parent.merged, -1)
@@ -587,50 +586,67 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// convPreviewBoundaryCross advances to the next/prev list item when the block
-// cursor hits the top or bottom boundary of the current preview.
+// convPreviewBoundaryCross advances through pinned rows and visible timeline
+// messages when the block cursor reaches the current preview boundary.
 func (a *App) convPreviewBoundaryCross(key string) (tea.Model, tea.Cmd) {
 	sp := &a.conv.split
-	idx := a.convList.Index()
-	items := a.convList.Items()
-	n := len(items)
+	items := a.convList.VisibleItems()
+
+	finish := func(first bool) (tea.Model, tea.Cmd) {
+		sp.CacheKey = ""
+		a.updateConvPreview()
+		if sp.Folds != nil {
+			block := sp.Folds.lastVisibleBlock()
+			if first {
+				block = sp.Folds.firstVisibleBlock()
+			}
+			if block >= 0 {
+				sp.Folds.BlockCursor = block
+			}
+			sp.RefreshFoldCursor(a.width, a.splitRatio)
+			sp.ScrollToBlock()
+		}
+		return a, nil
+	}
 
 	switch key {
 	case "down":
-		// Find next convMsg item after current index
-		for i := idx + 1; i < n; i++ {
-			if ci, ok := items[i].(convItem); ok && ci.kind == convMsg {
-				a.selectConvBody(i)
-				sp.CacheKey = ""
-				a.updateConvPreview()
-				// Position cursor at first block
-				if sp.Folds != nil {
-					if first := sp.Folds.firstVisibleBlock(); first >= 0 {
-						sp.Folds.BlockCursor = first
-					}
+		if a.conv.contextActive {
+			if a.conv.contextIndex+1 < len(a.conv.contextItems) {
+				a.selectConvContext(a.conv.contextIndex + 1)
+				return finish(true)
+			}
+			for i, raw := range items {
+				if item, ok := raw.(convItem); ok && item.kind == convMsg {
+					a.selectConvBody(i)
+					return finish(true)
 				}
-				sp.RefreshFoldCursor(a.width, a.splitRatio)
-				sp.ScrollToBlock()
-				return a, nil
+			}
+			return a, nil
+		}
+		for i := a.convList.Index() + 1; i < len(items); i++ {
+			if item, ok := items[i].(convItem); ok && item.kind == convMsg {
+				a.selectConvBody(i)
+				return finish(true)
 			}
 		}
 	case "up":
-		// Find prev convMsg item before current index
-		for i := idx - 1; i >= 0; i-- {
-			if ci, ok := items[i].(convItem); ok && ci.kind == convMsg {
-				a.selectConvBody(i)
-				sp.CacheKey = ""
-				a.updateConvPreview()
-				// Position cursor at last block
-				if sp.Folds != nil {
-					if last := sp.Folds.lastVisibleBlock(); last >= 0 {
-						sp.Folds.BlockCursor = last
-					}
-				}
-				sp.RefreshFoldCursor(a.width, a.splitRatio)
-				sp.ScrollToBlock()
-				return a, nil
+		if a.conv.contextActive {
+			if a.conv.contextIndex > 0 {
+				a.selectConvContext(a.conv.contextIndex - 1)
+				return finish(false)
 			}
+			return a, nil
+		}
+		for i := a.convList.Index() - 1; i >= 0; i-- {
+			if item, ok := items[i].(convItem); ok && item.kind == convMsg {
+				a.selectConvBody(i)
+				return finish(false)
+			}
+		}
+		if len(a.conv.contextItems) > 0 {
+			a.selectConvContext(len(a.conv.contextItems) - 1)
+			return finish(false)
 		}
 	}
 	return a, nil
@@ -1890,12 +1906,11 @@ func (a *App) findTaskAgents() []session.Subagent {
 // findAgentInParentMsg finds a subagent referenced by Agent tool_use blocks
 // in the parent message. Used for jumping to agents from marker lines.
 func (a *App) findAgentInParentMsg(item convItem) (session.Subagent, bool) {
-	items := a.convList.Items()
-	if item.parentIdx < 0 || item.parentIdx >= len(items) {
+	if item.parentIdx < 0 || item.parentIdx >= len(a.conv.items) {
 		return session.Subagent{}, false
 	}
-	parent, ok := items[item.parentIdx].(convItem)
-	if !ok || parent.kind != convMsg {
+	parent := a.conv.items[item.parentIdx]
+	if parent.kind != convMsg {
 		return session.Subagent{}, false
 	}
 
@@ -2032,9 +2047,9 @@ func (a *App) jumpToOriginMessage() (tea.Model, tea.Cmd) {
 		a.copiedMsg = "no origin turn found"
 		return a, nil
 	}
-	for i, li := range a.convList.Items() {
-		ci, ok := li.(convItem)
-		if ok && ci.kind == convMsg && ci.merged.entry.UUID == target.merged.entry.UUID {
+	for i, raw := range a.convList.VisibleItems() {
+		candidate, ok := raw.(convItem)
+		if ok && candidate.kind == convMsg && candidate.merged.entry.UUID == target.merged.entry.UUID {
 			a.selectConvBody(i)
 			a.updateConvPreview()
 			return a, nil
@@ -2051,7 +2066,7 @@ func (a *App) rebuildConversationList(selectIdx int) {
 	contentH = a.conv.split.listContentHeight(contentH)
 	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH, &a.conv.contextActive)
 	a.conv.split.List = &a.convList
-	if selectIdx >= 0 && selectIdx < len(a.convList.Items()) {
+	if selectIdx >= 0 && selectIdx < len(a.convList.VisibleItems()) {
 		a.convList.Select(selectIdx)
 	}
 	a.conv.split.CacheKey = ""
@@ -2154,8 +2169,8 @@ func (a *App) refreshConversation() tea.Cmd {
 	if !a.restoreConvSelection(selectedID) {
 		if len(a.conv.contextItems) > 0 {
 			a.selectConvContext(0)
-		} else if len(a.convList.Items()) > 0 {
-			a.selectConvBody(min(oldIdx, len(a.convList.Items())-1))
+		} else if len(a.convList.VisibleItems()) > 0 {
+			a.selectConvBody(min(oldIdx, len(a.convList.VisibleItems())-1))
 		}
 	}
 	a.conv.split.CacheKey = prevCacheKey

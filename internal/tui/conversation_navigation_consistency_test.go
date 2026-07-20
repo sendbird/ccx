@@ -507,3 +507,173 @@ func TestListSearchAndBlockFilterUnwindInsideOut(t *testing.T) {
 		t.Fatalf("second Esc changed pane state: show=%t focus=%t", app.conv.split.Show, app.conv.split.Focus)
 	}
 }
+
+func TestFilteredConversationEndAndEnterUseVisibleSelection(t *testing.T) {
+	app := setupFixedContextConvApp(t, 120, 24)
+	applyListFilter(&app.convList, "fixed-context-message-12")
+	visible := app.convList.VisibleItems()
+	if len(visible) != 1 {
+		t.Fatalf("filtered body rows = %d, want 1", len(visible))
+	}
+	want, ok := visible[0].(convItem)
+	if !ok || want.kind != convMsg {
+		t.Fatalf("filtered row = %#v, want conversation message", visible[0])
+	}
+
+	app = pressKey(app, "end")
+	if app.conv.contextActive {
+		t.Fatal("end left the pinned region active")
+	}
+	if got := app.selectedConversationItemID(); got != convItemID(want) {
+		t.Fatalf("end selected %q, want visible row %q", got, convItemID(want))
+	}
+
+	app = pressKey(app, "enter")
+	if !app.conv.inspector.Zoom || !app.conv.split.PreviewOnly {
+		t.Fatalf("Enter did not open the visible row: zoom=%t previewOnly=%t", app.conv.inspector.Zoom, app.conv.split.PreviewOnly)
+	}
+	if got := app.selectedConversationItemID(); got != convItemID(want) {
+		t.Fatalf("Enter changed selection to %q, want %q", got, convItemID(want))
+	}
+
+	// Applied list search unwinds before inspector history. Both steps must keep
+	// the same logical row selected as the visible coordinate space expands.
+	app = pressKey(app, "esc")
+	if app.hasFilterApplied() || !app.conv.inspector.Zoom {
+		t.Fatalf("first Esc state filter=%t zoom=%t", app.hasFilterApplied(), app.conv.inspector.Zoom)
+	}
+	if got := app.selectedConversationItemID(); got != convItemID(want) {
+		t.Fatalf("filter unwind selected %q, want %q", got, convItemID(want))
+	}
+	app = pressKey(app, "esc")
+	if app.conv.inspector.Zoom {
+		t.Fatal("second Esc did not restore the list")
+	}
+	if got := app.selectedConversationItemID(); got != convItemID(want) {
+		t.Fatalf("history restore selected %q, want %q", got, convItemID(want))
+	}
+}
+
+func TestPreviewBoundaryCrossesPinnedAndFilteredTimeline(t *testing.T) {
+	app := setupFixedContextConvApp(t, 120, 24)
+	applyListFilter(&app.convList, "fixed-context-message-12")
+	visible := app.convList.VisibleItems()
+	if len(visible) != 1 {
+		t.Fatalf("filtered body rows = %d, want 1", len(visible))
+	}
+	message, ok := visible[0].(convItem)
+	if !ok || message.kind != convMsg {
+		t.Fatalf("filtered row = %#v, want conversation message", visible[0])
+	}
+
+	lastPinned := len(app.conv.contextItems) - 1
+	if lastPinned < 0 || !app.selectConvContext(lastPinned) {
+		t.Fatal("fixture has no pinned row")
+	}
+	app.updateConvPreview()
+	model, _ := app.convPreviewBoundaryCross("down")
+	app = model.(*App)
+	if app.conv.contextActive || app.convList.Index() != 0 {
+		t.Fatalf("down did not cross into filtered timeline: pinned=%t index=%d", app.conv.contextActive, app.convList.Index())
+	}
+	if got := app.selectedConversationItemID(); got != convItemID(message) {
+		t.Fatalf("down selected %q, want %q", got, convItemID(message))
+	}
+
+	model, _ = app.convPreviewBoundaryCross("up")
+	app = model.(*App)
+	if !app.conv.contextActive || app.conv.contextIndex != lastPinned {
+		t.Fatalf("up did not return to last pinned row: pinned=%t index=%d want=%d", app.conv.contextActive, app.conv.contextIndex, lastPinned)
+	}
+
+	model, _ = app.convPreviewBoundaryCross("up")
+	app = model.(*App)
+	if !app.conv.contextActive || app.conv.contextIndex != lastPinned-1 {
+		t.Fatalf("up did not move within pinned rows: pinned=%t index=%d want=%d", app.conv.contextActive, app.conv.contextIndex, lastPinned-1)
+	}
+	model, _ = app.convPreviewBoundaryCross("down")
+	app = model.(*App)
+	if !app.conv.contextActive || app.conv.contextIndex != lastPinned {
+		t.Fatalf("down did not move within pinned rows: pinned=%t index=%d want=%d", app.conv.contextActive, app.conv.contextIndex, lastPinned)
+	}
+}
+
+func TestPreviewBoundaryMovesWithinFilteredTimeline(t *testing.T) {
+	app := setupFixedContextConvApp(t, 120, 24)
+	applyListFilter(&app.convList, "fixed-context-message-1")
+	visible := app.convList.VisibleItems()
+	if len(visible) < 3 {
+		t.Fatalf("filtered body rows = %d, want at least 3", len(visible))
+	}
+	first, ok := visible[0].(convItem)
+	if !ok || first.kind != convMsg {
+		t.Fatalf("first filtered row = %#v, want conversation message", visible[0])
+	}
+	second, ok := visible[1].(convItem)
+	if !ok || second.kind != convMsg {
+		t.Fatalf("second filtered row = %#v, want conversation message", visible[1])
+	}
+
+	app.selectConvBody(0)
+	model, _ := app.convPreviewBoundaryCross("down")
+	app = model.(*App)
+	if app.convList.Index() != 1 || app.selectedConversationItemID() != convItemID(second) {
+		t.Fatalf("down selected index=%d id=%q, want index=1 id=%q", app.convList.Index(), app.selectedConversationItemID(), convItemID(second))
+	}
+	model, _ = app.convPreviewBoundaryCross("up")
+	app = model.(*App)
+	if app.convList.Index() != 0 || app.selectedConversationItemID() != convItemID(first) {
+		t.Fatalf("up selected index=%d id=%q, want index=0 id=%q", app.convList.Index(), app.selectedConversationItemID(), convItemID(first))
+	}
+}
+
+func TestFilteredOriginJumpHonorsVisibleItems(t *testing.T) {
+	app := setupDecisionFlowApp(t)
+	const filterLabel = "origin-jump-probe"
+	var decision convItem
+	found := false
+	for i := range app.conv.items {
+		if app.conv.items[i].kind != convDecision {
+			continue
+		}
+		app.conv.items[i].label = filterLabel
+		decision = app.conv.items[i]
+		found = true
+		break
+	}
+	if !found {
+		t.Fatal("fixture has no decision row")
+	}
+	app.rebuildConversationList(0)
+	applyListFilter(&app.convList, filterLabel)
+	visible := app.convList.VisibleItems()
+	if len(visible) != 1 {
+		t.Fatalf("decision filter returned %d rows, want 1", len(visible))
+	}
+	filtered, ok := visible[0].(convItem)
+	if !ok || filtered.kind != convDecision {
+		t.Fatalf("filtered row = %#v, want decision", visible[0])
+	}
+	app.selectConvBody(0)
+	before := app.selectedConversationItemID()
+
+	model, _ := app.jumpToOriginMessage()
+	app = model.(*App)
+	if got := app.selectedConversationItemID(); got != before {
+		t.Fatalf("hidden origin jump moved selection to %q, want %q", got, before)
+	}
+	if !strings.Contains(app.copiedMsg, "hidden by filter") {
+		t.Fatalf("hidden origin jump feedback = %q", app.copiedMsg)
+	}
+
+	app.resetActiveFilter()
+	if !app.restoreConvSelection(convItemID(decision)) {
+		t.Fatal("could not restore decision after clearing filter")
+	}
+	model, _ = app.jumpToOriginMessage()
+	app = model.(*App)
+	item, ok := app.selectedConversationItem()
+	if !ok || item.kind != convMsg || item.merged.entry.UUID != app.conv.items[decision.parentIdx].merged.entry.UUID {
+		t.Fatalf("visible origin jump selected %#v", item)
+	}
+}

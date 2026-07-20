@@ -167,14 +167,16 @@ func (a *App) openSearchResult(result session.SearchResult) {
 			a.currentSess = sess
 			a.openConversation(sess)
 
-			// Jump to the message containing the search result
+			// Jump to the message containing the search result. Selection indices
+			// are always in the list's visible coordinate space.
 			targetUUID := result.Entry.UUID
-			for idx, item := range a.conv.items {
-				if item.kind != convMsg {
+			for idx, raw := range a.convList.VisibleItems() {
+				item, ok := raw.(convItem)
+				if !ok || item.kind != convMsg {
 					continue
 				}
 
-				// Check all entries in the merged range
+				// Check all entries in the merged range.
 				for j := item.merged.startIdx; j <= item.merged.endIdx; j++ {
 					if j < len(a.conv.messages) && a.conv.messages[j].UUID == targetUUID {
 						a.selectConvBody(idx)

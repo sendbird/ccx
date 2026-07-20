@@ -94,8 +94,11 @@ func (a *App) selectConvContext(index int) bool {
 	return true
 }
 
+// selectConvBody selects an item by its visible index. bubbles/list keeps
+// selection indices in filtered-list coordinates, so callers must never pass an
+// index from Items() while a filter is active.
 func (a *App) selectConvBody(index int) bool {
-	items := a.convList.Items()
+	items := a.convList.VisibleItems()
 	if index < 0 || index >= len(items) {
 		return false
 	}
@@ -114,7 +117,7 @@ func (a *App) restoreConvSelection(id string) bool {
 			return a.selectConvContext(i)
 		}
 	}
-	for i, raw := range a.convList.Items() {
+	for i, raw := range a.convList.VisibleItems() {
 		if item, ok := raw.(convItem); ok && convItemID(item) == id {
 			return a.selectConvBody(i)
 		}
@@ -138,13 +141,14 @@ func (a *App) restoreConversationLocation(loc conversationLocation) bool {
 	if loc.Region == conversationRegionPinned && len(a.conv.contextItems) > 0 {
 		return a.selectConvContext(min(max(loc.Index, 0), len(a.conv.contextItems)-1))
 	}
-	if loc.Region == conversationRegionTimeline && len(a.convList.Items()) > 0 {
-		return a.selectConvBody(min(max(loc.Index, 0), len(a.convList.Items())-1))
+	visible := a.convList.VisibleItems()
+	if loc.Region == conversationRegionTimeline && len(visible) > 0 {
+		return a.selectConvBody(min(max(loc.Index, 0), len(visible)-1))
 	}
 	if len(a.conv.contextItems) > 0 {
 		return a.selectConvContext(0)
 	}
-	if len(a.convList.Items()) > 0 {
+	if len(visible) > 0 {
 		return a.selectConvBody(0)
 	}
 	return false
@@ -260,7 +264,7 @@ func (a *App) convContextIndexAtHeaderLine(line int) (int, bool) {
 }
 
 func (a *App) selectLastConvMessage() bool {
-	items := a.convList.Items()
+	items := a.convList.VisibleItems()
 	for i := len(items) - 1; i >= 0; i-- {
 		if item, ok := items[i].(convItem); ok && item.kind == convMsg {
 			return a.selectConvBody(i)
@@ -276,7 +280,7 @@ func (a *App) handleConvListNavigation(key string) bool {
 		return false
 	}
 	contexts := len(a.conv.contextItems)
-	body := len(a.convList.Items())
+	body := len(a.convList.VisibleItems())
 	switch key {
 	case "home":
 		if contexts > 0 {

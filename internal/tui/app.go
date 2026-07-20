@@ -2115,7 +2115,7 @@ func (a *App) jumpToAgentConversation() (tea.Model, tea.Cmd, bool) {
 	a.currentSess = sess
 	cmd := a.openConversation(sess)
 
-	for i, item := range a.convList.Items() {
+	for i, item := range a.convList.VisibleItems() {
 		ci, ok := item.(convItem)
 		if !ok {
 			continue
@@ -2316,7 +2316,7 @@ func (a *App) drillIntoWorkflowAgent() (tea.Model, tea.Cmd, bool) {
 	a.currentSess = sess
 	cmd := a.openConversation(sess)
 
-	for i, item := range a.convList.Items() {
+	for i, item := range a.convList.VisibleItems() {
 		ci, ok := item.(convItem)
 		if !ok {
 			continue
@@ -4395,7 +4395,7 @@ func (a *App) handleLiveTail() {
 		oldIdx := a.convList.Index()
 
 		a.refreshConversation()
-		visItems := a.convList.Items()
+		visItems := a.convList.VisibleItems()
 		if len(visItems) == 0 {
 			debugLog.Printf("handleLiveTail: no visItems")
 			return
@@ -5086,7 +5086,7 @@ func (a *App) jumpToConvMessage() (tea.Model, tea.Cmd) {
 	// Find the target message in the visible list items by UUID or timestamp.
 	// Must search the list's items (visible only), not a.conv.items (includes folded).
 	bestIdx := 0
-	items := a.convList.Items()
+	items := a.convList.VisibleItems()
 	found := false
 
 	if target.entry.UUID != "" {
@@ -5146,7 +5146,7 @@ func (a *App) handleJumpFromPicker() (tea.Model, tea.Cmd) {
 
 		// Navigate to the target entry UUID
 		if targetUUID != "" {
-			items := a.convList.Items()
+			items := a.convList.VisibleItems()
 			for j, li := range items {
 				ci, ok := li.(convItem)
 				if !ok || ci.kind != convMsg {
@@ -6803,7 +6803,7 @@ func (a *App) resetActiveFilter() {
 			return
 		}
 		if selID != "" {
-			for i, item := range a.convList.Items() {
+			for i, item := range a.convList.VisibleItems() {
 				if ci, ok := item.(convItem); ok && convItemID(ci) == selID {
 					a.selectConvBody(i)
 					return
@@ -6811,7 +6811,7 @@ func (a *App) resetActiveFilter() {
 			}
 		}
 		// Fallback: clamp the previous index into the now-larger list.
-		total := len(a.convList.Items())
+		total := len(a.convList.VisibleItems())
 		if idx >= total {
 			idx = total - 1
 		}

@@ -425,7 +425,7 @@ func (sp *SplitPane) HandleFocusedKeys(key string) SplitKeyResult {
 // page-based navigation), snapping to first/last on edges.
 // Returns true if the key was handled.
 func (sp *SplitPane) HandleListBoundary(key string) bool {
-	items := sp.List.Items()
+	items := sp.List.VisibleItems()
 	if len(items) == 0 {
 		return false
 	}
