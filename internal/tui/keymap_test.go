@@ -46,9 +46,31 @@ func TestDefaultKeymap(t *testing.T) {
 		t.Error("DefaultKeymap() has empty Actions fields")
 	}
 
-	// Verify views keys
+	// Verify views and conversation keys
 	if km.Views.Stats == "" || km.Views.Config == "" {
 		t.Error("DefaultKeymap() has empty Views fields")
+	}
+	if km.Conversation.SwitchRegion != "P" {
+		t.Errorf("DefaultKeymap().Conversation.SwitchRegion=%q, want P", km.Conversation.SwitchRegion)
+	}
+}
+
+func TestLoadKeymapConversationSwitchRegionOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("conversation:\n  switch_region: ctrl+p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	km, err := LoadKeymap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if km.Conversation.SwitchRegion != "ctrl+p" {
+		t.Fatalf("Conversation.SwitchRegion=%q, want ctrl+p", km.Conversation.SwitchRegion)
+	}
+	if km.Conversation.JumpToTree != DefaultKeymap().Conversation.JumpToTree {
+		t.Fatal("partial conversation override changed unrelated defaults")
 	}
 }
 
@@ -250,8 +272,8 @@ func TestTranslateNav_VimKeys(t *testing.T) {
 	km.Navigation.PageDown = []string{"ctrl+d"}
 
 	cases := []struct {
-		key     string
-		wantNav string
+		key      string
+		wantNav  string
 		wantType tea.KeyType
 	}{
 		{"j", "down", tea.KeyDown},

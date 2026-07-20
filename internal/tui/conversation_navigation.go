@@ -40,6 +40,7 @@ type inspectorNavFrame struct {
 	blockCursor    int
 	previewOffset  int
 	metaDrill      string
+	metaPlanDrill  string
 	rightPaneMode  int
 }
 
@@ -171,6 +172,7 @@ func (a *App) captureInspectorNavFrame() inspectorNavFrame {
 		blockCursor:    -1,
 		previewOffset:  sp.Preview.YOffset,
 		metaDrill:      a.conv.inspector.MetaDrill,
+		metaPlanDrill:  a.conv.inspector.MetaPlanDrill,
 		rightPaneMode:  a.conv.rightPaneMode,
 	}
 	if sp.Folds != nil {
@@ -195,6 +197,7 @@ func (a *App) restoreInspectorFrame(frame inspectorNavFrame) {
 	a.conv.inspector.ExplicitNodeID = frame.explicitNodeID
 	a.conv.inspector.Explicit = frame.explicit
 	a.conv.inspector.MetaDrill = frame.metaDrill
+	a.conv.inspector.MetaPlanDrill = frame.metaPlanDrill
 	a.conv.rightPaneMode = frame.rightPaneMode
 	sp.Show = frame.splitShow
 	sp.Focus = frame.splitFocus
@@ -273,65 +276,76 @@ func (a *App) selectLastConvMessage() bool {
 	return false
 }
 
-// handleConvListNavigation implements one selection sequence spanning fixed
-// context rows and the paginated chronological body.
+// switchConversationRegion explicitly toggles between the fixed pinned rows and
+// the chronological timeline. Each region retains its own selection; ordinary
+// navigation never crosses this boundary.
+func (a *App) switchConversationRegion() bool {
+	if a.conv.contextActive {
+		body := a.convList.VisibleItems()
+		if len(body) == 0 {
+			a.copiedMsg = "No conversation items"
+			return false
+		}
+		index := min(max(a.convList.Index(), 0), len(body)-1)
+		a.selectConvBody(index)
+	} else {
+		if len(a.conv.contextItems) == 0 {
+			a.copiedMsg = "No pinned items"
+			return false
+		}
+		index := min(max(a.conv.contextIndex, 0), len(a.conv.contextItems)-1)
+		a.selectConvContext(index)
+	}
+	a.conv.split.CacheKey = ""
+	a.updateConvPreview()
+	return true
+}
+
+// handleConvListNavigation keeps navigation inside the active region. Switching
+// between pinned rows and the timeline is reserved for switchConversationRegion.
 func (a *App) handleConvListNavigation(key string) bool {
 	if a.convList.FilterState() == list.Filtering { // Filter input owns navigation keys.
 		return false
 	}
 	contexts := len(a.conv.contextItems)
 	body := len(a.convList.VisibleItems())
+	if a.conv.contextActive {
+		switch key {
+		case "home", "pgup":
+			if contexts > 0 {
+				a.selectConvContext(0)
+			}
+			return true
+		case "end", "pgdown":
+			if contexts > 0 {
+				a.selectConvContext(contexts - 1)
+			}
+			return true
+		case "down":
+			if a.conv.contextIndex+1 < contexts {
+				a.selectConvContext(a.conv.contextIndex + 1)
+			}
+			return true
+		case "up":
+			if a.conv.contextIndex > 0 {
+				a.selectConvContext(a.conv.contextIndex - 1)
+			}
+			return true
+		}
+		return false
+	}
+
 	switch key {
 	case "home":
-		if contexts > 0 {
-			a.selectConvContext(0)
-		} else if body > 0 {
+		if body > 0 {
 			a.selectConvBody(0)
 		}
 		return true
 	case "end":
 		if body > 0 {
 			a.selectConvBody(body - 1)
-		} else if contexts > 0 {
-			a.selectConvContext(contexts - 1)
 		}
 		return true
-	case "down":
-		if a.conv.contextActive {
-			if a.conv.contextIndex+1 < contexts {
-				a.selectConvContext(a.conv.contextIndex + 1)
-			} else if body > 0 {
-				a.selectConvBody(0)
-			}
-			return true
-		}
-	case "up":
-		if !a.conv.contextActive && a.convList.Index() == 0 && contexts > 0 {
-			a.selectConvContext(contexts - 1)
-			return true
-		}
-		if a.conv.contextActive {
-			if a.conv.contextIndex > 0 {
-				a.selectConvContext(a.conv.contextIndex - 1)
-			}
-			return true
-		}
-	case "pgdown":
-		if a.conv.contextActive {
-			if body > 0 {
-				a.selectConvBody(0)
-			}
-			return true
-		}
-	case "pgup":
-		if a.conv.contextActive {
-			a.selectConvContext(0)
-			return true
-		}
-		if a.convList.Index() == 0 && contexts > 0 {
-			a.selectConvContext(contexts - 1)
-			return true
-		}
 	}
 	return false
 }
@@ -355,6 +369,7 @@ func (a *App) clearInspectorHistory() {
 	a.conv.inspector.History = nil
 	a.conv.inspector.ReturnToID = ""
 	a.conv.inspector.MetaDrill = ""
+	a.conv.inspector.MetaPlanDrill = ""
 }
 
 func (a *App) pushNavFrame() {

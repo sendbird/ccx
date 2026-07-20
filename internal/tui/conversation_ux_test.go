@@ -2029,7 +2029,7 @@ func TestFixedContextRemainsVisibleAcrossBodyPages(t *testing.T) {
 	}
 }
 
-func TestFixedContextKeyboardCrossesBodyBoundary(t *testing.T) {
+func TestFixedContextKeyboardStaysWithinActiveRegion(t *testing.T) {
 	app := setupFixedContextConvApp(t, 120, 24)
 	item, ok := app.selectedConversationItem()
 	if !ok || item.sessionMeta != "summary" {
@@ -2048,33 +2048,39 @@ func TestFixedContextKeyboardCrossesBodyBoundary(t *testing.T) {
 	}
 	app = pressKey(app, "down")
 	item, _ = app.selectedConversationItem()
-	if app.conv.contextActive || item.kind != convMsg || app.convList.Index() != 0 {
-		t.Fatalf("third down did not cross into first body row: active=%t idx=%d item=%#v", app.conv.contextActive, app.convList.Index(), item)
-	}
-	app = pressKey(app, "up")
-	item, _ = app.selectedConversationItem()
 	if !app.conv.contextActive || item.sessionMeta != "tasksplan" {
-		t.Fatalf("up did not cross back into fixed context: %#v", item)
-	}
-	app = pressKey(app, "pgdown")
-	item, _ = app.selectedConversationItem()
-	if app.conv.contextActive || item.kind != convMsg || app.convList.Index() != 0 {
-		t.Fatalf("pgdown from context did not enter first body row: active=%t idx=%d item=%#v", app.conv.contextActive, app.convList.Index(), item)
+		t.Fatalf("down crossed the pinned boundary: active=%t item=%#v", app.conv.contextActive, item)
 	}
 	app = pressKey(app, "pgup")
 	item, _ = app.selectedConversationItem()
-	if !app.conv.contextActive || item.sessionMeta != "tasksplan" {
-		t.Fatalf("pgup from first body page did not return to context: %#v", item)
-	}
-	app = pressKey(app, "home")
-	item, _ = app.selectedConversationItem()
 	if item.sessionMeta != "summary" {
-		t.Fatalf("home selected %#v, want Session Flow", item)
+		t.Fatalf("pgup did not stay in pinned and select first row: %#v", item)
 	}
 	app = pressKey(app, "end")
 	item, _ = app.selectedConversationItem()
-	if app.conv.contextActive || item.kind != convMsg || app.convList.Index() != len(app.convList.Items())-1 {
-		t.Fatalf("end did not select final body row: active=%t idx=%d item=%#v", app.conv.contextActive, app.convList.Index(), item)
+	if item.sessionMeta != "tasksplan" {
+		t.Fatalf("end did not stay in pinned and select final row: %#v", item)
+	}
+
+	app = pressKey(app, "P")
+	item, _ = app.selectedConversationItem()
+	if app.conv.contextActive || item.kind != convMsg || app.convList.Index() != 0 {
+		t.Fatalf("P did not enter conversation at its saved selection: active=%t idx=%d item=%#v", app.conv.contextActive, app.convList.Index(), item)
+	}
+	app = pressKey(app, "up")
+	item, _ = app.selectedConversationItem()
+	if app.conv.contextActive || item.kind != convMsg || app.convList.Index() != 0 {
+		t.Fatalf("up crossed from conversation into pinned: active=%t idx=%d item=%#v", app.conv.contextActive, app.convList.Index(), item)
+	}
+	app = pressKey(app, "end")
+	if app.conv.contextActive || app.convList.Index() != len(app.convList.VisibleItems())-1 {
+		t.Fatalf("conversation end did not stay in timeline: active=%t idx=%d", app.conv.contextActive, app.convList.Index())
+	}
+
+	app = pressKey(app, "P")
+	item, _ = app.selectedConversationItem()
+	if !app.conv.contextActive || item.sessionMeta != "tasksplan" {
+		t.Fatalf("P did not restore pinned selection: active=%t item=%#v", app.conv.contextActive, item)
 	}
 }
 

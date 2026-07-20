@@ -139,7 +139,7 @@ func (a *App) convHelpLine(badges string) string {
 		switch {
 		case sp.Folds != nil && sp.Folds.BlockFilter != "":
 			escLabel = "clear filter"
-		case len(a.conv.inspector.History) > 0 || a.conv.inspector.Zoom || a.conv.inspector.MetaDrill != "":
+		case len(a.conv.inspector.History) > 0 || a.conv.inspector.Zoom || a.conv.inspector.MetaDrill != "" || a.conv.inspector.MetaPlanDrill != "":
 			escLabel = "back"
 		case sp.Focus:
 			escLabel = "list"

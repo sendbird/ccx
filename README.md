@@ -339,9 +339,10 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Inspect/zoom conversation turn, open artifact, or drill into agent/task |
+| `Enter` | Inspect/zoom conversation turn, open artifact, or drill into agent/task/plan |
+| `P` | Switch between PINNED and CONVERSATION (each preserves its selection) |
 | `Tab` | Switch focus between flow spine and inspector |
-| `↑` / `↓` | Navigate flow rows or inspector blocks |
+| `↑` / `↓` | Navigate only within the active region or inspector blocks |
 | `←` / `→` | Fold/unfold node or block |
 | `f` / `F` | Fold/unfold all blocks |
 | `[` / `]` | Previous/next non-empty inspector facet |
@@ -415,6 +416,8 @@ actions:
   delete: d
   import_mem: M
   remove_mem: X
+conversation:
+  switch_region: P          # PINNED ↔ CONVERSATION
 ```
 
 ### Preferences (auto-saved on quit)
