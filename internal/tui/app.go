@@ -1235,9 +1235,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// Number key shortcuts (1-9): view + focus scoped
+		// Number key shortcuts (0-9): view + focus scoped
 		if key := msg.String(); !a.isInTextInput() && !a.isInOverlay() &&
-			len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+			len(key) == 1 && key[0] >= '0' && key[0] <= '9' {
 			if m, cmd, handled := a.handleShortcutKey(key); handled {
 				return m, cmd
 			}
