@@ -297,9 +297,11 @@ func LoadShellJobsFromEntries(entries []Entry) []ShellJob {
 	return jobs
 }
 
-// shellStatusRe matches an explicit shell exit status embedded in a result or
-// notification body, e.g. "<status>completed</status>".
-var shellStatusRe = regexp.MustCompile(`<status>(completed|failed|stopped)</status>`)
+// shellStatusRe matches an explicit shell/monitor exit status embedded in a
+// result or notification body, e.g. "<status>completed</status>". "killed"
+// covers a Monitor stopped via TaskStop or a timeout (the runtime surfaces both
+// as <status>killed</status>), so those stop counting as active.
+var shellStatusRe = regexp.MustCompile(`<status>(completed|failed|stopped|killed)</status>`)
 
 // shellToolUseIDRe pulls the <tool-use-id> out of a task-notification body.
 var shellToolUseIDRe = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
@@ -340,8 +342,8 @@ func applyTaskNotification(text string, e Entry, byID map[string]int, jobs []She
 	if st == nil {
 		return
 	}
-	// "stopped" from a notification is already covered by the conservative
-	// status set; completed/failed are the new verifiable states.
+	// completed/failed/killed are all verifiable terminal states; promoting to
+	// any of them takes the job out of the active count.
 	jobs[idx].Status = st[1]
 	if !e.Timestamp.IsZero() {
 		jobs[idx].LastEventAt = e.Timestamp

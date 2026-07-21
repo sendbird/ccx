@@ -77,6 +77,39 @@ func TestLoadShellJobsFromEntries(t *testing.T) {
 	}
 }
 
+// TestMonitorKilledByNotificationStopsCounting verifies a Monitor stopped via
+// TaskStop/timeout — which the runtime records as <status>killed</status> in a
+// task-notification — is promoted out of the active set, so ActiveMonitorCount
+// no longer counts it.
+func TestMonitorKilledByNotificationStopsCounting(t *testing.T) {
+	t1 := time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC)
+	entries := []Entry{
+		{Timestamp: t1, Role: "assistant", Content: []ContentBlock{{
+			Type:      "tool_use",
+			ToolName:  "Monitor",
+			ID:        "toolu_mon_kill",
+			ToolInput: `{"command":"tail -f log","description":"watch","persistent":true}`,
+		}}},
+		{Timestamp: t1.Add(time.Minute), Role: "user", Content: []ContentBlock{{
+			Type: "text",
+			Text: "<task-notification><tool-use-id>toolu_mon_kill</tool-use-id><status>killed</status></task-notification>",
+		}}},
+	}
+
+	jobs := LoadShellJobsFromEntries(entries)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	if jobs[0].Status != "killed" {
+		t.Fatalf("monitor status: got %q, want killed", jobs[0].Status)
+	}
+
+	sess := Session{IsLive: true, HasShellJobs: true, HasMonitorJobs: true, ShellJobs: jobs}
+	if n := sess.ActiveMonitorCount(); n != 0 {
+		t.Fatalf("ActiveMonitorCount: got %d, want 0 (killed monitor should not count)", n)
+	}
+}
+
 func TestMonitorInputSummary(t *testing.T) {
 	// Prefers description.
 	desc, persistent, ok := MonitorInputSummary(`{"description":"watch PR #45","persistent":true,"command":"gh pr view 45\nsleep 30"}`)
