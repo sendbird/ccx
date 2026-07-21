@@ -39,7 +39,7 @@ const (
 	iconTrendUp       = "▴"
 	iconTrendDown     = "▾"
 	iconStatusDot     = "●" // live/busy status dot before the session ID
-	iconBadgePR       = "" // open pull request (code-fork glyph)
+	iconBadgePR       = ""  // open pull request (code-fork glyph)
 	iconBarFull       = "█"
 	iconBarLight      = "▓"
 	iconBarMid        = "▒"
@@ -111,12 +111,12 @@ var (
 	prBadgeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 	// Status dots that replace the LIVE/BUSY text badges: a single ● before the
 	// session ID. Green = live & idle, amber = busy/responding.
-	liveDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
-	busyDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
-	customBadgeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#84CC16")).Bold(true).Italic(true)
-	blockCursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
-	blockSelectedBg     = lipgloss.NewStyle().Background(lipgloss.Color("#1E293B"))
-	previewBorder       = lipgloss.NewStyle().
+	liveDotStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
+	busyDotStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
+	customBadgeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#84CC16")).Bold(true).Italic(true)
+	blockCursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+	blockSelectedBg  = lipgloss.NewStyle().Background(lipgloss.Color("#1E293B"))
+	previewBorder    = lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder(), true, false, false, false).
 				BorderForeground(colorDim)
 
@@ -158,6 +158,6 @@ var (
 	skillBlockStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 	// Monitor tool style — cyan, matching the shells preview Monitor color.
 	monitorBlockStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
-	hookBadgeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB923C"))
-	hookDetailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF")).Italic(true)
+	hookBadgeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB923C"))
+	hookDetailStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF")).Italic(true)
 )

@@ -110,9 +110,9 @@ func TestFilterPluginItemsIsAvailable(t *testing.T) {
 
 func TestFilterPluginItemsIsEnabled(t *testing.T) {
 	tree := testTree(
-		testPlugin("good", "m", true, false),    // enabled (installed + not blocked)
-		testPlugin("bad", "m", true, true),       // installed but blocked
-		testPlugin("avail", "m", false, false),   // not installed
+		testPlugin("good", "m", true, false),   // enabled (installed + not blocked)
+		testPlugin("bad", "m", true, true),     // installed but blocked
+		testPlugin("avail", "m", false, false), // not installed
 	)
 	items := buildPluginItems(tree)
 

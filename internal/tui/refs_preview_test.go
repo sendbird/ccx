@@ -45,8 +45,8 @@ func TestOpenInBrowserUsesConfiguredOpener(t *testing.T) {
 // flush, so a session could sit on "Resolving…" indefinitely.
 func TestSetRefsPreviewModeDispatchesExtract(t *testing.T) {
 	sessions := fakeSessions()
-	sessions[0].HasRefs = true                       // selected session has links to extract
-	sessions[0].FilePath = "/tmp/proj-a/aaa.jsonl"   // non-empty so the extract cmd is created (file need not exist)
+	sessions[0].HasRefs = true                     // selected session has links to extract
+	sessions[0].FilePath = "/tmp/proj-a/aaa.jsonl" // non-empty so the extract cmd is created (file need not exist)
 	a := newTestApp(sessions)
 	a.sessionList.Select(0)
 
@@ -337,4 +337,3 @@ func TestRefsPreviewSelectionClearedOnModeSwitch(t *testing.T) {
 		t.Errorf("expected selection cleared after leaving refs preview, got %v", got.sessRefsSelected)
 	}
 }
-
