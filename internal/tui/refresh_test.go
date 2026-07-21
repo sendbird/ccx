@@ -17,6 +17,11 @@ func newConfiguredTestApp(sessions []session.Session, cfg Config) *App {
 	a := m.(*App)
 	a.state = viewSessions
 	a.sessPreviewMode = sessPreviewConversation
+	// Hermetic: clear the default startup state filter so visible-item and
+	// selection assertions don't depend on the sessions' lifecycle.
+	a.config.SearchQuery = ""
+	a.sessionList.ResetFilter()
+	a.rebuildSessionList()
 	return a
 }
 

@@ -84,6 +84,12 @@ func TestMatches(t *testing.T) {
 		{"is:live is:busy", false},
 		{"proj:ccx branch", true},
 		{"nomatch", false},
+		// comma-OR within a term: any alternative matches
+		{"is:live,is:done", true},          // live matches
+		{"is:done,is:live", true},          // order-independent
+		{"is:done,is:wait", false},         // neither matches
+		{"is:live,is:done has:mem", true},  // OR-term AND plain-term
+		{"is:done,is:wait has:mem", false}, // OR-term fails → whole AND fails
 	}
 	for _, c := range cases {
 		if got := Matches(fv, c.q); got != c.want {

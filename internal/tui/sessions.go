@@ -99,6 +99,9 @@ func splitCurrentWindow(sessions []session.Session) (current, rest []session.Ses
 
 // substringFilter matches items whose FilterValue contains the search term as a substring.
 // Supports space-separated multi-term AND matching (e.g., "role=user bash").
+// Within a term, commas denote OR: "is:live,is:input" matches an item whose
+// FilterValue contains either alternative — used by the state-toggle menu to
+// express "live OR waiting-for-input" that plain AND cannot.
 func substringFilter(term string, targets []string) []list.Rank {
 	terms := strings.Fields(strings.ToLower(term))
 	if len(terms) == 0 {
@@ -109,7 +112,7 @@ func substringFilter(term string, targets []string) []list.Rank {
 		lower := strings.ToLower(t)
 		allMatch := true
 		for _, tt := range terms {
-			if !strings.Contains(lower, tt) {
+			if !termContains(lower, tt) {
 				allMatch = false
 				break
 			}
@@ -117,14 +120,62 @@ func substringFilter(term string, targets []string) []list.Rank {
 		if !allMatch {
 			continue
 		}
-		firstIdx := strings.Index(lower, terms[0])
-		matched := make([]int, len(terms[0]))
-		for j := range len(terms[0]) {
+		firstIdx := termFirstIndex(lower, terms[0])
+		hlLen := termHighlightLen(lower, terms[0], firstIdx)
+		matched := make([]int, hlLen)
+		for j := range hlLen {
 			matched[j] = firstIdx + j
 		}
 		ranks = append(ranks, list.Rank{Index: i, MatchedIndexes: matched})
 	}
 	return ranks
+}
+
+// termContains reports whether a single filter term matches lower, honoring
+// comma-OR within the term (any non-empty alternative is a substring).
+func termContains(lower, term string) bool {
+	if !strings.Contains(term, ",") {
+		return strings.Contains(lower, term)
+	}
+	matchedAny := false
+	for _, alt := range strings.Split(term, ",") {
+		if alt == "" {
+			continue
+		}
+		matchedAny = true
+		if strings.Contains(lower, alt) {
+			return true
+		}
+	}
+	return !matchedAny
+}
+
+// termFirstIndex returns the index of the first matching alternative of term in
+// lower (for highlight positioning), or 0 if none/empty.
+func termFirstIndex(lower, term string) int {
+	for _, alt := range strings.Split(term, ",") {
+		if alt == "" {
+			continue
+		}
+		if idx := strings.Index(lower, alt); idx >= 0 {
+			return idx
+		}
+	}
+	return 0
+}
+
+// termHighlightLen returns the length of the matched alternative at firstIdx, so
+// the highlight covers exactly the alternative that matched.
+func termHighlightLen(lower, term string, firstIdx int) int {
+	for _, alt := range strings.Split(term, ",") {
+		if alt == "" {
+			continue
+		}
+		if strings.Index(lower, alt) == firstIdx {
+			return len(alt)
+		}
+	}
+	return 0
 }
 
 type sessionItem struct {
@@ -1654,6 +1705,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{displayKey(km.Session.Select), "Multi-select"},
 			{"o / f / F", "Fold group / all / expand all"},
 			{"D", "Completed-only filter"},
+			{"S", "Toggle session states shown (live/done/…)"},
 		}
 	}
 }
