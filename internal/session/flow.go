@@ -596,7 +596,7 @@ func (b *flowBuilder) build(entries []Entry) {
 		b.emitAgentArtifacts(a)
 	}
 
-	b.markFirstChangeDecisions()
+	b.markChangeDecisions()
 	b.markSteeringDecisions(entries)
 
 	b.indexArtifacts()

@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -257,7 +258,8 @@ func TestBuildSessionFlow_Decisions(t *testing.T) {
 
 	decisions := fi.Decisions(ScopeSession)
 	kinds := make(map[DecisionKind]int)
-	firstChangeKeys := make(map[string]bool)
+	changeKeys := make(map[string]int)
+	firstChangeLabels := 0
 	for _, d := range decisions {
 		dd, ok := d.Data.(DecisionData)
 		if !ok {
@@ -265,7 +267,10 @@ func TestBuildSessionFlow_Decisions(t *testing.T) {
 		}
 		kinds[dd.Kind]++
 		if dd.Kind == DecisionFirstChange {
-			firstChangeKeys[d.Key] = true
+			changeKeys[d.Key]++
+			if strings.HasPrefix(dd.Label, "first change:") {
+				firstChangeLabels++
+			}
 		}
 	}
 
@@ -275,13 +280,19 @@ func TestBuildSessionFlow_Decisions(t *testing.T) {
 	if kinds[DecisionPlan] != 1 {
 		t.Errorf("plan decisions = %d, want 1", kinds[DecisionPlan])
 	}
-	// First change per file per session: main.go once (despite 2 edits),
-	// other.go, agent.go.
-	if kinds[DecisionFirstChange] != 3 {
-		t.Errorf("first-change decisions = %d, want 3 (%v)", kinds[DecisionFirstChange], firstChangeKeys)
+	// Every change occurrence is now marked: main.go twice, other.go, agent.go.
+	if kinds[DecisionFirstChange] != 4 {
+		t.Errorf("change decisions = %d, want 4 (%v)", kinds[DecisionFirstChange], changeKeys)
 	}
-	if !firstChangeKeys["first-change:/x/main.go"] || !firstChangeKeys["first-change:/x/agent.go"] {
-		t.Errorf("first-change keys = %v", firstChangeKeys)
+	if changeKeys["first-change:/x/main.go"] != 2 {
+		t.Errorf("main.go change markers = %d, want 2", changeKeys["first-change:/x/main.go"])
+	}
+	// Exactly one "first change:" label per distinct file (main/other/agent).
+	if firstChangeLabels != 3 {
+		t.Errorf("first-change labels = %d, want 3", firstChangeLabels)
+	}
+	if changeKeys["first-change:/x/agent.go"] != 1 {
+		t.Errorf("agent.go change markers = %d, want 1", changeKeys["first-change:/x/agent.go"])
 	}
 	// u1 is followed (before the next real user turn) by TaskCreate → steering.
 	if kinds[DecisionSteering] != 1 {
@@ -299,6 +310,24 @@ func TestBuildSessionFlow_Decisions(t *testing.T) {
 		if decisions[i].Origin.Timestamp.Before(decisions[i-1].Origin.Timestamp) {
 			t.Errorf("decisions out of order at %d", i)
 		}
+	}
+
+	// Each change marker points at a distinct occurrence: the two main.go
+	// markers must have different origins (first edit vs. second edit).
+	var mainOrigins []ArtifactOrigin
+	for _, d := range decisions {
+		dd := d.Data.(DecisionData)
+		if dd.Kind == DecisionFirstChange && d.Key == "first-change:/x/main.go" {
+			mainOrigins = append(mainOrigins, d.Origin)
+		}
+	}
+	if len(mainOrigins) != 2 {
+		t.Fatalf("main.go markers = %d, want 2", len(mainOrigins))
+	}
+	if mainOrigins[0].Transcript == mainOrigins[1].Transcript &&
+		mainOrigins[0].EntryIndex == mainOrigins[1].EntryIndex &&
+		mainOrigins[0].BlockIndex == mainOrigins[1].BlockIndex {
+		t.Errorf("main.go change markers share an origin %+v; each must point at its own edit", mainOrigins[0])
 	}
 }
 
