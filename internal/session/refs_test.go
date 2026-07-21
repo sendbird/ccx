@@ -267,3 +267,28 @@ func TestRollupChecks(t *testing.T) {
 		t.Errorf("one failure = %q, want FAILURE", got)
 	}
 }
+
+// TestClearRefCache verifies the manual-refresh cache invalidator empties the
+// process-wide TTL cache (and clears the Jira auth breaker) so a subsequent
+// lookup misses and would re-fetch.
+func TestClearRefCache(t *testing.T) {
+	// Seed a fresh cache entry and confirm it is a hit.
+	setCachedRef(SessionRef{URL: "https://example.test/pr/1", Resolved: true, State: RefStateOpen})
+	if _, ok := getCachedRef("https://example.test/pr/1"); !ok {
+		t.Fatal("precondition: seeded ref should be a cache hit")
+	}
+	// Trip the Jira breaker so we can confirm ClearRefCache resets it.
+	markJiraAuthFailed()
+	if !jiraAuthIsFailed() {
+		t.Fatal("precondition: jira auth breaker should be tripped")
+	}
+
+	ClearRefCache()
+
+	if _, ok := getCachedRef("https://example.test/pr/1"); ok {
+		t.Error("ClearRefCache did not drop the cached ref")
+	}
+	if jiraAuthIsFailed() {
+		t.Error("ClearRefCache did not reset the jira auth breaker")
+	}
+}

@@ -400,6 +400,17 @@ func markJiraAuthFailed() {
 	refCacheMu.Unlock()
 }
 
+// ClearRefCache drops all cached ref-resolution results and resets the Jira
+// auth circuit breaker, so the next ResolveRef makes a fresh network call
+// instead of returning a within-TTL cached status. The TUI's manual refresh
+// uses this to force a genuine re-fetch on demand.
+func ClearRefCache() {
+	refCacheMu.Lock()
+	refCache = map[string]refCacheEntry{}
+	jiraAuthFailed = false
+	refCacheMu.Unlock()
+}
+
 func initJiraAuth() {
 	jiraAuthOnce.Do(func() {
 		jiraToken = firstNonEmpty(os.Getenv("JIRA_API_TOKEN"), os.Getenv("JIRA_API_KEY"), os.Getenv("ATLASSIAN_TOKEN"))
