@@ -181,3 +181,88 @@ func TestRefreshRespondingStateRebuildsFilteredSessionItems(t *testing.T) {
 		t.Fatal("expected filtered selected session to reflect refreshed responding state")
 	}
 }
+
+// TestInvalidateOpenPreviewResetsRefsState verifies that a manual refresh while
+// the refs preview is open clears the selected session's resolution state, the
+// in-flight latch, and the render cache keys so the preview re-resolves.
+func TestInvalidateOpenPreviewResetsRefsState(t *testing.T) {
+	sess := session.Session{ID: "sess-r", ShortID: "sess-r", ProjectName: "proj", HasRefs: true, RefsResolved: true}
+	sess.Refs = []session.SessionRef{{URL: "https://example.test/pr/9", Resolved: true}}
+	app := newConfiguredTestApp([]session.Session{sess}, Config{})
+	app.sessPreviewMode = sessPreviewRefs
+	app.refsInFlight[sess.ID] = true
+	app.sessRefsCacheKey = "stale"
+	app.sessSplit.CacheKey = "stale"
+
+	app.invalidateOpenPreviewCaches()
+
+	// updateSessionRefsPreview reads the authoritative store copy, so verify
+	// there (the sessionList widget holds an independent snapshot).
+	got, ok := app.sessionByIDFromStore(sess.ID)
+	if !ok {
+		t.Fatal("session missing from store")
+	}
+	if got.RefsResolved {
+		t.Error("RefsResolved not cleared")
+	}
+	if len(got.Refs) != 0 {
+		t.Errorf("Refs not cleared: %d", len(got.Refs))
+	}
+	if app.refsInFlight[sess.ID] {
+		t.Error("refsInFlight latch not released")
+	}
+	if app.sessRefsCacheKey != "" || app.sessSplit.CacheKey != "" {
+		t.Errorf("cache keys not cleared: refs=%q split=%q", app.sessRefsCacheKey, app.sessSplit.CacheKey)
+	}
+}
+
+// TestInvalidateOpenPreviewResetsStatsCache verifies a non-refs mode drops its
+// dedicated cache so updateSessionPreview re-reads the transcript.
+func TestInvalidateOpenPreviewResetsStatsCache(t *testing.T) {
+	app := newConfiguredTestApp([]session.Session{{ID: "sess-s", ShortID: "sess-s", ProjectName: "proj"}}, Config{})
+	app.sessPreviewMode = sessPreviewStats
+	app.sessStatsCache = &session.SessionStats{}
+	app.sessStatsCacheKey = "sess-s"
+	app.sessSplit.CacheKey = "stale"
+
+	app.invalidateOpenPreviewCaches()
+
+	if app.sessStatsCache != nil {
+		t.Error("sessStatsCache not cleared")
+	}
+	if app.sessStatsCacheKey != "" || app.sessSplit.CacheKey != "" {
+		t.Errorf("cache keys not cleared: stats=%q split=%q", app.sessStatsCacheKey, app.sessSplit.CacheKey)
+	}
+}
+
+// TestRefreshSkipsPreviewInvalidationForLiveMode verifies that R in live/remote
+// preview mode does not run the preview-cache invalidation (which would flash
+// "(connecting…)" and re-find the tmux pane). The refs state of the selected
+// session must stay intact as a proxy for "invalidateOpenPreviewCaches was not
+// called".
+func TestRefreshSkipsPreviewInvalidationForLiveMode(t *testing.T) {
+	// Isolate the scan dir so doRefresh's ScanSessions can't replace the store
+	// with the developer's real sessions.
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("TMUX", "")
+	sess := session.Session{ID: "sess-l", ShortID: "sess-l", ProjectName: "proj", HasRefs: true, RefsResolved: true}
+	sess.Refs = []session.SessionRef{{URL: "https://example.test/pr/3", Resolved: true}}
+	app := newConfiguredTestApp([]session.Session{sess}, Config{ClaudeDir: claudeDir})
+	app.sessPreviewMode = sessPreviewLive
+	app.sessSplit.CacheKey = "keep-me"
+
+	m, _ := app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	app = m.(*App)
+
+	got, ok := app.sessionByIDFromStore("sess-l")
+	if !ok {
+		t.Fatal("session missing from store")
+	}
+	if !got.RefsResolved || len(got.Refs) != 1 {
+		t.Errorf("live-mode R reset refs state: RefsResolved=%v Refs=%d", got.RefsResolved, len(got.Refs))
+	}
+	if app.sessSplit.CacheKey != "keep-me" {
+		t.Errorf("live-mode R invalidated the preview cache key: %q", app.sessSplit.CacheKey)
+	}
+}

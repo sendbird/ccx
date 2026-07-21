@@ -287,7 +287,18 @@ func buildCmdRegistry() []cmdEntry {
 				return a, nil
 			}},
 		{name: "refresh", aliases: []string{"R"}, desc: "refresh sessions", views: cmdSessions,
-			action: func(a *App) (tea.Model, tea.Cmd) { cmd := a.doRefresh(); a.copiedMsg = "Refreshed"; return a, cmd }},
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				cmd := a.doRefresh()
+				if a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRemote {
+					a.copiedMsg = "Refreshed"
+					return a, cmd
+				}
+				session.ClearRefCache()
+				a.invalidateOpenPreviewCaches()
+				previewCmd := a.updateSessionPreview()
+				a.copiedMsg = "Refreshed"
+				return a, tea.Batch(cmd, previewCmd)
+			}},
 		{name: "filter:done", aliases: []string{"done", "completed"}, desc: "show completed-only projects", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				a.setSessionListFilter("is:done")

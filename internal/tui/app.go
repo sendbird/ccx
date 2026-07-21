@@ -1837,9 +1837,23 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a.openEditMenu(sess)
 	case km.Session.Refresh:
+		// Rescan the session list first (its carryOverRefState may re-populate
+		// ref state), then force the open preview to re-read: clear the process
+		// -wide ref TTL cache and invalidate the current mode's caches so
+		// updateSessionPreview re-fetches instead of short-circuiting.
 		cmd := a.doRefresh()
+		// Live/remote previews are driven by their own streams (doRefresh already
+		// calls refreshSessionPreviewLive); re-running updateSessionPreview for
+		// them would flash "(connecting…)" and re-find the pane, so skip it.
+		if a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRemote {
+			a.copiedMsg = "Refreshed"
+			return a, cmd
+		}
+		session.ClearRefCache()
+		a.invalidateOpenPreviewCaches()
+		previewCmd := a.updateSessionPreview()
 		a.copiedMsg = "Refreshed"
-		return a, cmd
+		return a, tea.Batch(cmd, previewCmd)
 	case "n":
 		// Jump to the most recent fleet notification's session.
 		if a.notifyUnreadCount() == 0 {
@@ -4300,6 +4314,59 @@ func (a *App) handleTick() tea.Cmd {
 		return tea.Batch(pollCmd, refsCmd)
 	}
 	return tea.Batch(pollCmd, refsCmd, a.doRefresh())
+}
+
+// invalidateOpenPreviewCaches clears the cache keys of whichever session
+// preview mode is currently open, so a subsequent updateSessionPreview()
+// re-reads the underlying data instead of short-circuiting. Follows the
+// refreshSessionPreviewLive template (clear the mode's own key plus the shared
+// split CacheKey). For refs it also resets the per-session resolution state and
+// the in-flight latch; the process-wide TTL cache is cleared separately via
+// session.ClearRefCache so the re-resolve actually hits the network. Live and
+// remote modes are left untouched (their content is pushed by a live stream).
+func (a *App) invalidateOpenPreviewCaches() {
+	switch a.sessPreviewMode {
+	case sessPreviewConversation:
+		a.sessConvCacheID = ""
+		a.sessConvEntries = nil
+	case sessPreviewStats:
+		a.sessStatsCache = nil
+		a.sessStatsCacheKey = ""
+	case sessPreviewMemory:
+		a.sessMemoryCacheKey = ""
+	case sessPreviewTasksPlan:
+		a.sessTasksCacheKey = ""
+	case sessPreviewShells:
+		a.sessShellsCacheKey = ""
+	case sessPreviewContexts:
+		a.sessContextsCacheKey = ""
+	case sessPreviewWorkflows:
+		a.sessWorkflowsCacheKey = ""
+	case sessPreviewRefs:
+		a.invalidateSelectedSessionRefs()
+	case sessPreviewAgents:
+		// No per-session memo; the shared CacheKey reset below suffices.
+	}
+	a.sessSplit.CacheKey = ""
+}
+
+// invalidateSelectedSessionRefs resets the currently-selected session's ref
+// resolution state so the refs preview re-extracts and re-resolves. The store
+// copy is the authoritative one (updateSessionRefsPreview reads it via
+// sessionByIDFromStore), so reset it there.
+func (a *App) invalidateSelectedSessionRefs() {
+	sess, ok := a.selectedSession()
+	if !ok {
+		return
+	}
+	for i := range a.sessions {
+		if a.sessions[i].ID == sess.ID {
+			a.sessions[i].RefsResolved = false
+			a.sessions[i].Refs = nil
+		}
+	}
+	delete(a.refsInFlight, sess.ID)
+	a.sessRefsCacheKey = ""
 }
 
 func (a *App) doRefresh() tea.Cmd {
