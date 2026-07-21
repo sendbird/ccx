@@ -240,16 +240,17 @@ func (a *App) latestTodoOrigins() map[string]session.ArtifactOrigin {
 	return out
 }
 
-// originVisibleInExecutionContext rejects artifacts from inherited transcript
-// history that the corresponding execution context intentionally hides.
-func (a *App) originVisibleInExecutionContext(origin session.ArtifactOrigin) bool {
-	context, ok := a.executionContextForTranscript(origin.Transcript)
-	if !ok {
-		return false
+// originVisibility loads and filters a transcript once per conversation refresh.
+// Resource previews call provenance checks for every selectable row, so reading
+// the same JSONL file here on each cursor move makes pinned navigation unusable.
+func (a *App) originVisibility(context executionContext) (executionOriginVisibility, bool) {
+	key := context.Key
+	if cached, ok := a.conv.execution.OriginVisibility[key]; ok {
+		return cached, true
 	}
-	raw, err := session.LoadMessages(origin.Transcript)
+	raw, err := session.LoadMessages(key)
 	if err != nil {
-		return false
+		return executionOriginVisibility{}, false
 	}
 	visible := raw
 	if context.Agent.ID != "" {
@@ -258,14 +259,39 @@ func (a *App) originVisibleInExecutionContext(origin session.ArtifactOrigin) boo
 			visible = filterSideQuestionContext(visible)
 		}
 	}
+	visibleUUIDs := make(map[string]bool, len(visible))
+	for _, entry := range visible {
+		if entry.UUID != "" {
+			visibleUUIDs[entry.UUID] = true
+		}
+	}
+	cached := executionOriginVisibility{Raw: raw, Visible: visible, VisibleUUIDs: visibleUUIDs}
+	if a.conv.execution.OriginVisibility == nil {
+		a.conv.execution.OriginVisibility = make(map[string]executionOriginVisibility)
+	}
+	a.conv.execution.OriginVisibility[key] = cached
+	return cached, true
+}
+
+// originVisibleInExecutionContext rejects artifacts from inherited transcript
+// history that the corresponding execution context intentionally hides.
+func (a *App) originVisibleInExecutionContext(origin session.ArtifactOrigin) bool {
+	context, ok := a.executionContextForTranscript(origin.Transcript)
+	if !ok {
+		return false
+	}
+	visibility, ok := a.originVisibility(context)
+	if !ok {
+		return false
+	}
 
 	var source session.Entry
 	foundSource := false
-	if origin.EntryIndex >= 0 && origin.EntryIndex < len(raw) {
-		source = raw[origin.EntryIndex]
+	if origin.EntryIndex >= 0 && origin.EntryIndex < len(visibility.Raw) {
+		source = visibility.Raw[origin.EntryIndex]
 		foundSource = true
 	} else if origin.MessageUUID != "" {
-		for _, entry := range raw {
+		for _, entry := range visibility.Raw {
 			if entry.UUID == origin.MessageUUID {
 				source = entry
 				foundSource = true
@@ -276,11 +302,11 @@ func (a *App) originVisibleInExecutionContext(origin session.ArtifactOrigin) boo
 	if !foundSource {
 		return false
 	}
-	for _, entry := range visible {
-		if source.UUID != "" && entry.UUID == source.UUID {
-			return true
-		}
-		if source.UUID == "" && entry.Role == source.Role && entry.Timestamp.Equal(source.Timestamp) {
+	if source.UUID != "" {
+		return visibility.VisibleUUIDs[source.UUID]
+	}
+	for _, entry := range visibility.Visible {
+		if entry.Role == source.Role && entry.Timestamp.Equal(source.Timestamp) {
 			if origin.BlockIndex < 0 {
 				return true
 			}

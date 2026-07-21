@@ -199,11 +199,10 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	if a.state == viewConversation && a.mouseInExecutionRail(msg.Y) {
 		a.conv.execution.Focused = true
-		// The first rail line is the section header; clicking it only focuses.
-		if msg.Y > 1+a.conversationContentHeight() {
-			if key, ok := a.executionContextAtX(msg.X); ok {
-				a.conv.execution.CursorKey = key
-			}
+		// The first rail line is the section header; clicking a context row moves
+		// the rail cursor without changing the conversation selection.
+		if key, ok := a.executionContextAtY(msg.Y); ok {
+			a.conv.execution.CursorKey = key
 		}
 		return a, nil
 	}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -8,6 +9,44 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/session"
 )
+
+func TestExecutionRailRendersVerticalWindowFollowingCursor(t *testing.T) {
+	app, _, _ := setupConversationStateFixture(t)
+	contexts := make([]executionContext, 10)
+	for i := range contexts {
+		contexts[i] = executionContext{
+			Key:    fmt.Sprintf("context-%d", i),
+			Label:  fmt.Sprintf("context-%d", i),
+			Type:   "agent",
+			Status: "unknown",
+		}
+	}
+	app.conv.execution.Contexts = contexts
+	app.conv.execution.ActiveKey = contexts[0].Key
+	app.conv.execution.CursorKey = contexts[0].Key
+	app.conv.execution.Focused = true
+
+	lines := strings.Split(stripANSI(app.renderExecutionRail()), "\n")
+	if len(lines) != 1+executionRailMaxItems {
+		t.Fatalf("vertical rail lines = %d, want header + %d rows", len(lines), executionRailMaxItems)
+	}
+	if !strings.Contains(lines[1], "context-0") || !strings.Contains(lines[len(lines)-1], "context-7") {
+		t.Fatalf("initial vertical window = %#v", lines)
+	}
+	if strings.Contains(strings.Join(lines, "\n"), "context-8") {
+		t.Fatalf("initial window rendered offscreen context: %#v", lines)
+	}
+
+	app.conv.execution.CursorKey = contexts[9].Key
+	lines = strings.Split(stripANSI(app.renderExecutionRail()), "\n")
+	window := strings.Join(lines, "\n")
+	if strings.Contains(window, "context-0") || strings.Contains(window, "context-1") {
+		t.Fatalf("cursor-follow window retained leading rows: %q", window)
+	}
+	if !strings.Contains(window, "context-2") || !strings.Contains(window, "context-9") {
+		t.Fatalf("cursor-follow window = %q", window)
+	}
+}
 
 func TestExecutionRailSwitchesContextsAndRestoresSelection(t *testing.T) {
 	app, sess, parentPath := setupConversationStateFixture(t)
@@ -363,7 +402,7 @@ func TestExecutionRailMouseDoesNotChangeConversationSelection(t *testing.T) {
 	app, _, _ := setupConversationStateFixture(t)
 	app.selectConvBody(1)
 	before := app.selectedConversationItemID()
-	railY := 2 + app.conversationContentHeight()
+	railY := app.executionRailTop() + 1
 
 	model, _ := app.handleMouseClick(tea.MouseMsg{
 		X:      2,
@@ -377,6 +416,20 @@ func TestExecutionRailMouseDoesNotChangeConversationSelection(t *testing.T) {
 	}
 	if got := app.selectedConversationItemID(); got != before {
 		t.Fatalf("rail click changed conversation selection to %q, want %q", got, before)
+	}
+	if got := app.conv.execution.CursorKey; got != app.conv.execution.Contexts[0].Key {
+		t.Fatalf("first vertical row selected %q", got)
+	}
+
+	model, _ = app.handleMouseClick(tea.MouseMsg{
+		X:      2,
+		Y:      railY + 1,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	app = model.(*App)
+	if got := app.conv.execution.CursorKey; got != app.conv.execution.Contexts[1].Key {
+		t.Fatalf("second vertical row selected %q, want %q", got, app.conv.execution.Contexts[1].Key)
 	}
 
 	model, _ = app.handleMouseScroll(tea.MouseMsg{X: 2, Y: railY, Button: tea.MouseButtonWheelDown})

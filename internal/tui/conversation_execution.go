@@ -10,7 +10,7 @@ import (
 	"github.com/sendbird/ccx/internal/session"
 )
 
-const executionRailRows = 2
+const executionRailMaxItems = 8
 
 type executionContext struct {
 	Key    string
@@ -35,12 +35,19 @@ type conversationViewState struct {
 	BottomAlign   bool
 }
 
+type executionOriginVisibility struct {
+	Raw          []session.Entry
+	Visible      []session.Entry
+	VisibleUUIDs map[string]bool
+}
+
 type executionRailState struct {
-	Contexts  []executionContext
-	ActiveKey string
-	CursorKey string
-	Focused   bool
-	Saved     map[string]conversationViewState
+	Contexts         []executionContext
+	ActiveKey        string
+	CursorKey        string
+	Focused          bool
+	Saved            map[string]conversationViewState
+	OriginVisibility map[string]executionOriginVisibility
 }
 
 func executionContextKey(path string) string {
@@ -53,11 +60,19 @@ func executionContextKey(path string) string {
 	return filepath.Clean(path)
 }
 
-func (a *App) executionRailHeight() int {
+func (a *App) executionRailItemCount() int {
 	if a.state != viewConversation || a.height < 12 || len(a.conv.execution.Contexts) == 0 {
 		return 0
 	}
-	return executionRailRows
+	return min(len(a.conv.execution.Contexts), executionRailMaxItems, max(a.height-11, 1))
+}
+
+func (a *App) executionRailHeight() int {
+	items := a.executionRailItemCount()
+	if items == 0 {
+		return 0
+	}
+	return 1 + items
 }
 
 func (a *App) conversationLayoutHeight() int {
@@ -112,6 +127,10 @@ func (a *App) initExecutionRail(agents []session.Subagent) {
 	oldActive := rail.ActiveKey
 	oldSaved := rail.Saved
 	rail.Contexts = contexts
+	// Context discovery is the cache boundary: refresh/rebuild may observe
+	// rewritten transcript files, while ordinary pinned navigation reuses the
+	// visibility index without touching disk.
+	rail.OriginVisibility = nil
 	if oldSaved == nil {
 		oldSaved = make(map[string]conversationViewState)
 	}
@@ -398,13 +417,14 @@ func executionStatusGlyph(status string) string {
 
 func (a *App) executionRailCells() []string {
 	cells := make([]string, 0, len(a.conv.execution.Contexts))
+	labelWidth := max(a.width-5, 8)
 	for _, context := range a.conv.execution.Contexts {
 		label := context.Status + " · " + context.Type + " · " + context.Label
 		if context.Agent.ID != "" && context.Agent.FirstPrompt != "" {
-			prompt, _ := truncateExact(strings.ReplaceAll(context.Agent.FirstPrompt, "\n", " "), 22)
+			prompt := strings.ReplaceAll(context.Agent.FirstPrompt, "\n", " ")
 			label += " · " + prompt
 		}
-		plain, _ := truncateExact(label, 46)
+		plain, _ := truncateExact(label, labelWidth)
 		prefix := "  "
 		if context.Key == a.conv.execution.CursorKey && a.conv.execution.Focused {
 			prefix = "> "
@@ -420,6 +440,16 @@ func (a *App) executionRailCells() []string {
 	return cells
 }
 
+func (a *App) executionRailWindow() (int, int) {
+	count := a.executionRailItemCount()
+	if count == 0 {
+		return 0, 0
+	}
+	cursor := a.executionCursorIndex()
+	start := min(max(cursor-count+1, 0), max(len(a.conv.execution.Contexts)-count, 0))
+	return start, min(start+count, len(a.conv.execution.Contexts))
+}
+
 func (a *App) renderExecutionRail() string {
 	if a.executionRailHeight() == 0 {
 		return ""
@@ -430,44 +460,27 @@ func (a *App) renderExecutionRail() string {
 	}
 	header := convRegionHeader("EXECUTION CONTEXTS"+focus, a.conv.execution.Focused, a.width)
 	cells := a.executionRailCells()
-	cursor := a.executionCursorIndex()
-	start := 0
-	for start < cursor {
-		candidate := strings.Join(cells[start:cursor+1], "  ")
-		if lipgloss.Width(candidate) <= a.width {
-			break
-		}
-		start++
-	}
-	line := strings.Join(cells[start:], "  ")
-	line, _ = truncateExact(line, a.width)
-	return header + "\n" + line
+	start, end := a.executionRailWindow()
+	return header + "\n" + strings.Join(cells[start:end], "\n")
+}
+
+func (a *App) executionRailTop() int {
+	return 1 + a.conversationContentHeight()
 }
 
 func (a *App) mouseInExecutionRail(screenY int) bool {
-	if a.executionRailHeight() == 0 {
-		return false
-	}
-	firstRailY := 1 + a.conversationContentHeight()
-	return screenY >= firstRailY && screenY < firstRailY+a.executionRailHeight()
+	height := a.executionRailHeight()
+	return height > 0 && screenY >= a.executionRailTop() && screenY < a.executionRailTop()+height
 }
 
-func (a *App) executionContextAtX(x int) (string, bool) {
-	cells := a.executionRailCells()
-	cursor := a.executionCursorIndex()
-	start := 0
-	for start < cursor && lipgloss.Width(strings.Join(cells[start:cursor+1], "  ")) > a.width {
-		start++
+func (a *App) executionContextAtY(screenY int) (string, bool) {
+	row := screenY - a.executionRailTop() - 1
+	start, end := a.executionRailWindow()
+	idx := start + row
+	if row < 0 || idx < start || idx >= end {
+		return "", false
 	}
-	pos := 0
-	for i := start; i < len(cells); i++ {
-		width := lipgloss.Width(cells[i])
-		if x >= pos && x < pos+width {
-			return a.conv.execution.Contexts[i].Key, true
-		}
-		pos += width + 2
-	}
-	return "", false
+	return a.conv.execution.Contexts[idx].Key, true
 }
 
 func (a *App) refreshExecutionRail() {

@@ -10,6 +10,33 @@ import (
 	"github.com/sendbird/ccx/internal/session"
 )
 
+func TestOriginVisibilityCachesTranscriptUntilRailRefresh(t *testing.T) {
+	app, sess, _ := setupConversationStateFixture(t)
+	origin := session.ArtifactOrigin{
+		Transcript:  sess.FilePath,
+		MessageUUID: "task-create",
+		EntryIndex:  0,
+		BlockIndex:  0,
+	}
+	if !app.originVisibleInExecutionContext(origin) {
+		t.Fatal("visible root origin was not found")
+	}
+	if len(app.conv.execution.OriginVisibility) != 1 {
+		t.Fatalf("visibility cache size = %d, want 1", len(app.conv.execution.OriginVisibility))
+	}
+	if err := os.Remove(sess.FilePath); err != nil {
+		t.Fatal(err)
+	}
+	if !app.originVisibleInExecutionContext(origin) {
+		t.Fatal("cached visibility reloaded the removed transcript")
+	}
+
+	app.initExecutionRail(app.conv.agents)
+	if app.originVisibleInExecutionContext(origin) {
+		t.Fatal("rail refresh retained stale provenance visibility")
+	}
+}
+
 func TestTodoRowsAreIndividuallySelectableWithLatestOrigin(t *testing.T) {
 	app, sess, parentPath := setupConversationStateFixture(t)
 	app.conv.sess.Todos = []session.TodoItem{
