@@ -269,6 +269,7 @@ type App struct {
 	statsPageMenu      bool // "p" page jump popup
 	inspectorMenu      bool // conversation inspector facet picker
 	sessPageMenu       bool // sessions preview page jump popup
+	stateMenu          bool // sessions state-filter toggle popup ("l" prefix)
 
 	// Session preview mode
 	sessPreviewMode       sessPreview
@@ -612,6 +613,93 @@ func (a *App) toggleCompletedProjectsFilter() {
 	a.copiedMsg = "Showing completed projects"
 }
 
+// stateFilterTokens are the mutually-orthogonal session-state tokens the state
+// toggle menu ("l" prefix) manages. They are combined with comma-OR so several
+// states can be shown at once, e.g. "is:live,is:input,is:mon".
+var stateFilterTokens = map[string]string{
+	"l": "is:live",
+	"i": "is:input",
+	"m": "is:mon",
+	"d": "is:done",
+	"w": "is:wait",
+	"b": "is:bg",
+	"s": "is:stuck",
+}
+
+// defaultActiveStateFilter is applied on startup so the project view shows only
+// sessions that are doing something now: running, waiting for input, or with an
+// in-flight Monitor. Empty string means "show everything".
+const defaultActiveStateFilter = "is:live,is:input,is:mon"
+
+// currentStateFilterSet parses the single comma-OR state term out of the active
+// filter (if the whole filter is exactly one is:* OR-term) into a set of tokens.
+// Returns nil when the active filter is empty or is not a pure state filter
+// (e.g. the user typed a free-text search), so toggling starts fresh instead of
+// clobbering an unrelated query.
+func (a *App) currentStateFilterSet() map[string]bool {
+	cur := strings.TrimSpace(a.activeFilterValue())
+	if cur == "" {
+		return map[string]bool{}
+	}
+	if strings.ContainsAny(cur, " \t") {
+		return nil // multi-term / free-text filter — not a pure state filter
+	}
+	set := map[string]bool{}
+	for _, alt := range strings.Split(cur, ",") {
+		if !strings.HasPrefix(alt, "is:") {
+			return nil
+		}
+		set[alt] = true
+	}
+	return set
+}
+
+// applyStateFilterSet rebuilds the comma-OR filter string from a token set and
+// applies it, guarding against stranding the user on a blank browser.
+func (a *App) applyStateFilterSet(set map[string]bool) {
+	if len(set) == 0 {
+		a.setSessionListFilter("")
+		a.copiedMsg = "State filter cleared — showing all"
+		return
+	}
+	// Deterministic order for a stable filter string / badge.
+	order := []string{"is:live", "is:input", "is:mon", "is:done", "is:wait", "is:bg", "is:stuck"}
+	var alts []string
+	for _, tok := range order {
+		if set[tok] {
+			alts = append(alts, tok)
+		}
+	}
+	query := strings.Join(alts, ",")
+	a.setSessionListFilter(query)
+	if a.visibleProjectBrowserItems() == 0 {
+		a.setSessionListFilter("")
+		a.copiedMsg = "No sessions match " + query + " — showing all"
+		return
+	}
+	a.copiedMsg = "State filter: " + query
+}
+
+// toggleStateFilter flips one state token in the active state filter. A
+// free-text or multi-term filter is replaced with just this token (starting a
+// fresh state filter) rather than being silently merged.
+func (a *App) toggleStateFilter(subkey string) {
+	tok, ok := stateFilterTokens[subkey]
+	if !ok {
+		return
+	}
+	set := a.currentStateFilterSet()
+	if set == nil {
+		set = map[string]bool{}
+	}
+	if set[tok] {
+		delete(set, tok)
+	} else {
+		set[tok] = true
+	}
+	a.applyStateFilterSet(set)
+}
+
 func (a *App) hasMultiSelection() bool {
 	return len(a.selectedSet) > 0
 }
@@ -715,9 +803,17 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	if a.config.Open.CommandTemplate == "" {
 		a.config.Open = oc
 	}
+	cliSearch := a.config.SearchQuery
 	a.applyPreferences(prefs)
 	a.shortcuts = sc
 	a.remoteDefaults = rc
+
+	// Default the project view to "active" sessions (running / awaiting input /
+	// with an in-flight monitor) unless the user asked for something specific via
+	// --search or a persisted filter. The `S` state menu toggles this.
+	if cliSearch == "" && a.config.SearchQuery == "" {
+		a.config.SearchQuery = defaultActiveStateFilter
+	}
 
 	// Cleanup stale remote sessions, then restore remaining as virtual items
 	cleanupStaleRemoteSessions()
@@ -1423,6 +1519,12 @@ func (a *App) View() string {
 		help = formatHelp("p:page — pick a preview")
 	}
 
+	if a.stateMenu && a.state == viewSessions {
+		hintBox := a.renderStateHintBox()
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
+		help = formatHelp("S:states — toggle which session states show")
+	}
+
 	// Tag menu centered modal
 	if a.tagMenu {
 		modal := a.renderTagMenu()
@@ -1612,6 +1714,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Clear actions menu on any unrelated key
 	if a.actionsMenu {
 		return a.handleActionsMenu(key)
+	}
+
+	// State-filter toggle menu ("l" prefix)
+	if a.stateMenu {
+		return a.handleStateMenu(key)
 	}
 
 	// Views menu: pick a view
@@ -1910,6 +2017,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "D":
 			a.toggleCompletedProjectsFilter()
 			return a, a.updateSessionPreview()
+		case "S":
+			a.stateMenu = true
+			return a, nil
 		}
 	}
 
@@ -2680,6 +2790,52 @@ func (a *App) renderSessPageHintBox() string {
 	line3 := hl.Render("a") + d.Render(":agents") + sp + hl.Render("l") + d.Render(":live")
 	line4 := hl.Render("w") + d.Render(":workflows") + sp + hl.Render("c") + d.Render(":contexts")
 	body := strings.Join([]string{line1, line2, line3, line4, d.Render("esc:cancel")}, "\n")
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1)
+	return boxStyle.Render(body)
+}
+
+// handleStateMenu maps a state-toggle sub-key to a filter toggle. Each key flips
+// one session-state token in the active comma-OR filter; "a" clears the filter
+// (show all). The menu closes after one keypress.
+func (a *App) handleStateMenu(key string) (tea.Model, tea.Cmd) {
+	a.stateMenu = false
+	switch key {
+	case "a":
+		a.setSessionListFilter("")
+		a.copiedMsg = "Showing all sessions"
+		return a, a.updateSessionPreview()
+	case "esc":
+		return a, nil
+	}
+	if _, ok := stateFilterTokens[key]; ok {
+		a.toggleStateFilter(key)
+		return a, a.updateSessionPreview()
+	}
+	return a, nil
+}
+
+// renderStateHintBox draws the state-toggle popup, marking currently-active
+// states with a filled dot so multi-state toggles are visible at a glance.
+func (a *App) renderStateHintBox() string {
+	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	d := dimStyle
+	on := lipgloss.NewStyle().Foreground(colorAccent)
+	set := a.currentStateFilterSet()
+	mark := func(sub, label string) string {
+		glyph := "○ "
+		if set != nil && set[stateFilterTokens[sub]] {
+			glyph = on.Render("● ")
+		}
+		return glyph + hl.Render(sub) + d.Render(":"+label)
+	}
+	sp := "  "
+	line1 := mark("l", "live") + sp + mark("i", "input") + sp + mark("m", "mon")
+	line2 := mark("d", "done") + sp + mark("w", "wait") + sp + mark("b", "bg") + sp + mark("s", "stuck")
+	line3 := hl.Render("a") + d.Render(":all (clear)") + sp + d.Render("esc:cancel")
+	body := strings.Join([]string{d.Render("Toggle session states (OR):"), line1, line2, line3}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDim).
@@ -7584,6 +7740,33 @@ func (a *App) renderBreadcrumb() string {
 
 // breadcrumbRightStatus returns the right-aligned status text for the title bar.
 // Shows: item count, scroll %, and loading indicators.
+// stateFilterBadge returns a short title-bar badge describing the active
+// session-state filter (e.g. "LIVE·INPUT·MON" or "DONE-ONLY"), or "" when no
+// pure state filter is active.
+func (a *App) stateFilterBadge() string {
+	set := a.currentStateFilterSet()
+	if len(set) == 0 {
+		return ""
+	}
+	order := []struct{ tok, label string }{
+		{"is:live", "LIVE"}, {"is:input", "INPUT"}, {"is:mon", "MON"},
+		{"is:done", "DONE"}, {"is:wait", "WAIT"}, {"is:bg", "BG"}, {"is:stuck", "STUCK"},
+	}
+	var labels []string
+	for _, o := range order {
+		if set[o.tok] {
+			labels = append(labels, o.label)
+		}
+	}
+	if len(labels) == 0 {
+		return ""
+	}
+	if len(labels) == 1 {
+		return labels[0] + "-ONLY"
+	}
+	return strings.Join(labels, "·")
+}
+
 func (a *App) breadcrumbRightStatus() string {
 	var parts []string
 
@@ -7592,9 +7775,9 @@ func (a *App) breadcrumbRightStatus() string {
 	if a.state == viewSessions {
 		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 		parts = append(parts, modeStyle.Render("PROJECTS"))
-		if strings.TrimSpace(a.activeFilterValue()) == "is:done" {
-			doneMode := lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
-			parts = append(parts, doneMode.Render("DONE-ONLY"))
+		if badge := a.stateFilterBadge(); badge != "" {
+			filterMode := lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
+			parts = append(parts, filterMode.Render(badge))
 		}
 		if a.hasMultiSelection() {
 			parts = append(parts, fmt.Sprintf("%d selected", len(a.selectedSet)))

@@ -104,6 +104,12 @@ func FilterValueFor(s Session, cwdProjectPaths []string) string {
 
 // Matches reports whether filterValue (as produced by FilterValueFor) matches
 // query, using space-separated substring-AND semantics. Empty query matches.
+//
+// Within a single space-separated term, commas denote OR: the term matches when
+// ANY comma-separated alternative is a substring. This lets a single filter
+// express "live OR done OR input" as "is:live,is:done,is:input" while the
+// overall AND-across-terms behavior is unchanged. (A bare comma-free term keeps
+// the original plain-substring semantics.)
 func Matches(filterValue, query string) bool {
 	terms := strings.Fields(strings.ToLower(query))
 	if len(terms) == 0 {
@@ -111,11 +117,33 @@ func Matches(filterValue, query string) bool {
 	}
 	lower := strings.ToLower(filterValue)
 	for _, t := range terms {
-		if !strings.Contains(lower, t) {
+		if !termMatches(lower, t) {
 			return false
 		}
 	}
 	return true
+}
+
+// termMatches reports whether a single filter term matches the (already
+// lowercased) filter value. A term containing commas matches if any non-empty
+// comma-separated alternative is a substring (OR); otherwise it is a plain
+// substring check.
+func termMatches(lower, term string) bool {
+	if !strings.Contains(term, ",") {
+		return strings.Contains(lower, term)
+	}
+	matchedAny := false
+	for _, alt := range strings.Split(term, ",") {
+		if alt == "" {
+			continue
+		}
+		matchedAny = true
+		if strings.Contains(lower, alt) {
+			return true
+		}
+	}
+	// A term of only commas (no real alternatives) matches everything.
+	return !matchedAny
 }
 
 func isCurrent(projectPath string, cwdProjectPaths []string) bool {
