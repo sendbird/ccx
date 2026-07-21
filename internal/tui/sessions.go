@@ -1736,6 +1736,12 @@ func (a *App) sessionsPreviewContextRows() []helpRow {
 			{"↵", "Open transcript"},
 			{"←", "Unfocus"},
 		}
+	case sessPreviewContexts:
+		return []helpRow{
+			{"↑↓", "Navigate context nodes"},
+			{"↵ / o", "Open in config / plugin explorer"},
+			{"←", "Unfocus"},
+		}
 	default:
 		return base
 	}
