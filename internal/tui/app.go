@@ -282,6 +282,9 @@ type App struct {
 	sessShellsCacheKey    string
 	sessContextsCache     string
 	sessContextsCacheKey  string
+	sessCtxCursor         int                   // cursor over the flattened context node list
+	sessCtxNodes          []session.ContextNode // flattened drill-targetable nodes, cursor order
+	sessCtxCacheID        string                // session ID the context cursor currently tracks
 	sessRefsCache         string
 	sessRefsCacheKey      string
 	sessRefsCacheID       string // session ID the refs cursor currently tracks
@@ -1743,6 +1746,12 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m, cmd, _ := a.openSelectedRefs()
 			return m, cmd
 		}
+		// If the Session Context tree is focused, drill into the node under the
+		// cursor (config / plugin explorer) instead of opening the conversation.
+		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewContexts && len(a.sessCtxNodes) > 0 {
+			m, cmd, _ := a.openSelectedContextNode()
+			return m, cmd
+		}
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
@@ -2088,6 +2097,9 @@ func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, te
 	if a.sessPreviewMode == sessPreviewRefs && len(a.sessPreviewRefs) > 0 {
 		return a.handleRefsPreviewKeys(sp, key)
 	}
+	if a.sessPreviewMode == sessPreviewContexts && len(a.sessCtxNodes) > 0 {
+		return a.handleContextsPreviewKeys(sp, key)
+	}
 	switch key {
 	case "/":
 		sp.Focus = false
@@ -2112,6 +2124,11 @@ func (a *App) handleTasksPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.
 	// Flat cursor navigation over agents
 	switch HandleFlatCursorNav(&a.sessAgentCursor, len(a.sessPreviewAgents), key) {
 	case NavCursorMoved:
+		// Rebuild content so the "> " cursor highlight tracks the new position,
+		// then nudge the viewport to keep it in view.
+		if sess, ok := a.selectedSession(); ok {
+			a.sessSplit.Preview.SetContent(a.buildAgentsPreviewContent(sess))
+		}
 		if key == "up" || key == "k" {
 			sp.Preview.LineUp(1)
 		} else if key == "down" || key == "j" {
@@ -2222,8 +2239,43 @@ func (a *App) handleRefsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 	return a, nil, false
 }
 
-// toggleRefSelection toggles multi-selection on the reference under the
-// cursor and advances the cursor, mirroring the URL menu's space-to-select.
+// handleContextsPreviewKeys drives the interactive Session Context tree: up/down
+// move a cursor over the drill-targetable nodes, Enter opens the related config
+// / plugin explorer via openRelatedContextNode.
+func (a *App) handleContextsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
+	case "enter", "o", "right":
+		return a.openSelectedContextNode()
+	case "/":
+		sp.Focus = false
+		return a, startListSearch(&a.sessionList), true
+	}
+	switch HandleFlatCursorNav(&a.sessCtxCursor, len(a.sessCtxNodes), key) {
+	case NavCursorMoved:
+		a.sessContextsCacheKey = "" // cursor moved → re-render with new highlight
+		if sess, ok := a.selectedSession(); ok {
+			a.updateSessionContextsPreview(sess)
+		}
+		return a, nil, true
+	case NavBoundaryDown, NavBoundaryUp:
+		return a, nil, true
+	}
+	if scrollViewport(&sp.Preview, key) {
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// openSelectedContextNode drills into the config/plugin destination of the
+// context node under the cursor.
+func (a *App) openSelectedContextNode() (tea.Model, tea.Cmd, bool) {
+	if a.sessCtxCursor < 0 || a.sessCtxCursor >= len(a.sessCtxNodes) {
+		return a, nil, true
+	}
+	m, cmd := a.openRelatedContextNode(a.sessCtxNodes[a.sessCtxCursor])
+	return m, cmd, true
+}
+
 // Returns the cmd that must be dispatched by the caller to actually
 // re-render the preview viewport (clearing sessRefsCacheKey alone only
 // invalidates the cache — updateSessionRefsPreview is what repopulates
@@ -5623,13 +5675,25 @@ func (a *App) updateSessionShellsPreview(sess session.Session) {
 func (a *App) updateSessionContextsPreview(sess session.Session) {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
-	cacheKey := fmt.Sprintf("%s:%d:%d", sess.ID, sess.ModTime.UnixNano(), previewW)
+	// Reset the cursor when the selected session changes so we don't carry a
+	// stale index into a different tree.
+	if a.sessCtxCacheID != sess.ID {
+		a.sessCtxCursor = 0
+		a.sessCtxCacheID = sess.ID
+	}
+	// Cursor/focus are part of the key so highlight moves re-render.
+	cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t", sess.ID, sess.ModTime.UnixNano(), previewW, a.sessCtxCursor, a.sessSplit.Focus)
 	if a.sessContextsCacheKey != cacheKey {
 		tree, err := session.BuildSessionContextTree(a.config.ClaudeDir, sess)
 		if err != nil {
 			a.sessContextsCache = dimStyle.Render("Failed to build context tree: " + err.Error())
+			a.sessCtxNodes = nil
 		} else {
-			a.sessContextsCache = renderSessionContextTree(tree, previewW)
+			a.sessCtxNodes = flattenContextNodes(tree)
+			if a.sessCtxCursor >= len(a.sessCtxNodes) {
+				a.sessCtxCursor = max(len(a.sessCtxNodes)-1, 0)
+			}
+			a.sessContextsCache = renderSessionContextTreeCursor(tree, previewW, a.sessCtxCursor, a.sessSplit.Focus)
 		}
 		a.sessContextsCacheKey = cacheKey
 	}
@@ -6080,6 +6144,40 @@ func prettyChecks(s string) string {
 }
 
 func renderSessionContextTree(tree *session.SessionContextTree, width int) string {
+	return renderSessionContextTreeCursor(tree, width, -1, false)
+}
+
+// contextNodeDrillable reports whether a node has a drill-in destination
+// (config explorer / plugin explorer). Only drillable nodes are cursor stops.
+func contextNodeDrillable(node session.ContextNode) bool {
+	return node.RelatedView != ""
+}
+
+// flattenContextNodes returns the drill-targetable nodes in the same pre-order
+// the tree renders, so a flat cursor index lines up with the highlighted row.
+func flattenContextNodes(tree *session.SessionContextTree) []session.ContextNode {
+	if tree == nil {
+		return nil
+	}
+	var out []session.ContextNode
+	var walk func(n session.ContextNode)
+	walk = func(n session.ContextNode) {
+		if contextNodeDrillable(n) {
+			out = append(out, n)
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	for _, root := range tree.Roots {
+		walk(root)
+	}
+	return out
+}
+
+// renderSessionContextTreeCursor renders the tree; when focused, the drillable
+// node at cursorDrillIdx (index into flattenContextNodes) is highlighted.
+func renderSessionContextTreeCursor(tree *session.SessionContextTree, width, cursorDrillIdx int, focused bool) string {
 	if tree == nil {
 		return dimStyle.Render("No context tree available.")
 	}
@@ -6089,13 +6187,18 @@ func renderSessionContextTree(tree *session.SessionContextTree, width int) strin
 		header += ": " + tree.SessionID[:min(8, len(tree.SessionID))]
 	}
 	header += " ──"
-	sb.WriteString(dimStyle.Render(header) + "\n\n")
+	sb.WriteString(dimStyle.Render(header) + "\n")
+	if focused {
+		sb.WriteString(dimStyle.Render("↑↓:node ↵:open ←:unfocus") + "\n")
+	}
+	sb.WriteString("\n")
 	if tree.ProjectPath != "" {
 		home, _ := os.UserHomeDir()
 		sb.WriteString(dimStyle.Render("project: "+session.ShortenPath(tree.ProjectPath, home)) + "\n\n")
 	}
+	drillIdx := 0
 	for i, node := range tree.Roots {
-		renderContextNode(&sb, node, "", i == len(tree.Roots)-1, width)
+		renderContextNode(&sb, node, "", i == len(tree.Roots)-1, width, cursorDrillIdx, focused, &drillIdx)
 	}
 	if len(tree.Warnings) > 0 {
 		sb.WriteString("\n" + dimStyle.Render("Warnings") + "\n")
@@ -6106,12 +6209,20 @@ func renderSessionContextTree(tree *session.SessionContextTree, width int) strin
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderContextNode(sb *strings.Builder, node session.ContextNode, prefix string, last bool, width int) {
+func renderContextNode(sb *strings.Builder, node session.ContextNode, prefix string, last bool, width, cursorDrillIdx int, focused bool, drillIdx *int) {
 	connector := "├─ "
 	nextPrefix := prefix + "│  "
 	if last {
 		connector = "└─ "
 		nextPrefix = prefix + "   "
+	}
+	// A drillable node participates in cursor navigation; capture its flat index.
+	isCursor := false
+	if contextNodeDrillable(node) {
+		if focused && *drillIdx == cursorDrillIdx {
+			isCursor = true
+		}
+		*drillIdx++
 	}
 	line := contextNodeLine(node)
 	if width > 0 {
@@ -6123,9 +6234,14 @@ func renderContextNode(sb *strings.Builder, node session.ContextNode, prefix str
 	} else if node.Status == "missing" {
 		style = lipgloss.NewStyle().Foreground(colorDim)
 	}
-	sb.WriteString(dimStyle.Render(prefix+connector) + style.Render(line) + "\n")
+	if isCursor {
+		cur := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+		sb.WriteString(dimStyle.Render(prefix) + cur.Render("> ") + cur.Render(line) + "\n")
+	} else {
+		sb.WriteString(dimStyle.Render(prefix+connector) + style.Render(line) + "\n")
+	}
 	for i, child := range node.Children {
-		renderContextNode(sb, child, nextPrefix, i == len(node.Children)-1, width)
+		renderContextNode(sb, child, nextPrefix, i == len(node.Children)-1, width, cursorDrillIdx, focused, drillIdx)
 	}
 }
 
