@@ -861,10 +861,11 @@ func (a *App) bootstrapAndEditConfig() (tea.Model, tea.Cmd) {
 		km := DefaultKeymap()
 		cfg := CCXConfig{
 			Keymaps: KeymapsConfig{
-				Session:    km.Session,
-				Actions:    km.Actions,
-				Views:      km.Views,
-				Navigation: km.Navigation,
+				Session:      km.Session,
+				Actions:      km.Actions,
+				Views:        km.Views,
+				Conversation: km.Conversation,
+				Navigation:   km.Navigation,
 			},
 			Preferences: a.capturePreferences(),
 			Claude: claudecmd.Config{
@@ -876,7 +877,7 @@ func (a *App) bootstrapAndEditConfig() (tea.Model, tea.Cmd) {
 			a.copiedMsg = "marshal failed: " + err.Error()
 			return a, nil
 		}
-		header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Restart ccx after editing keybindings.\n\n"
+		header := "# ccx configuration\n# Keybindings: session, actions, views, conversation, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Restart ccx after editing keybindings.\n\n"
 		if err := os.WriteFile(path, []byte(header+string(data)), 0644); err != nil {
 			a.copiedMsg = "write failed: " + err.Error()
 			return a, nil

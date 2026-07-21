@@ -16,6 +16,7 @@ const (
 	ArtifactChange   ArtifactKind = "change"   // Edit/Write/NotebookEdit occurrence (Data: ChangeData)
 	ArtifactFile     ArtifactKind = "file"     // file referenced by a tool (incl. Read)
 	ArtifactTask     ArtifactKind = "task"     // TaskCreate / TaskUpdate (Data: TaskEventData)
+	ArtifactTodo     ArtifactKind = "todo"     // TodoWrite item occurrence (Data: TodoItem)
 	ArtifactPlan     ArtifactKind = "plan"     // ExitPlanMode plan written (Data: PlanData)
 	ArtifactHook     ArtifactKind = "hook"     // hook firing (Data: HookInfo)
 	ArtifactError    ArtifactKind = "error"    // tool_result with is_error
@@ -310,7 +311,7 @@ func (b *flowBuilder) emitURLs(text, owner string, origin ArtifactOrigin) {
 }
 
 // emitToolUseArtifacts handles per-tool artifact kinds: changes, files, tasks,
-// plans, commands.
+// todos, plans, commands.
 func (b *flowBuilder) emitToolUseArtifacts(blk ContentBlock, owner string, origin ArtifactOrigin) {
 	switch blk.ToolName {
 	case "Bash":
@@ -324,6 +325,26 @@ func (b *flowBuilder) emitToolUseArtifacts(blk ContentBlock, owner string, origi
 				Key:    firstLine(in.Command),
 				Origin: origin,
 				Data:   in.Command,
+			})
+		}
+
+	case "TodoWrite":
+		var in struct {
+			Todos []TodoItem `json:"todos"`
+		}
+		if json.Unmarshal([]byte(blk.ToolInput), &in) != nil {
+			return
+		}
+		for _, todo := range in.Todos {
+			if strings.TrimSpace(todo.Content) == "" {
+				continue
+			}
+			b.append(Artifact{
+				Kind:   ArtifactTodo,
+				NodeID: owner,
+				Key:    todo.Content,
+				Origin: origin,
+				Data:   todo,
 			})
 		}
 

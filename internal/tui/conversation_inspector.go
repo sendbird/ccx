@@ -66,9 +66,10 @@ type conversationInspector struct {
 type metaEntryTarget struct {
 	kind        metaTargetKind
 	fileName    string // memory note filename (memory-file drill target)
+	transcript  string // transcript owning the origin (root or subagent)
 	messageUUID string // originating turn to jump to (empty = no jump)
-	entryIndex  int    // origin entry index in the parent transcript (fallback locator)
-	blockIdx    int    // block within that turn to focus (-1 = none)
+	entryIndex  int    // origin entry index, local to transcript
+	blockIdx    int    // block within the source entry to focus (-1 = none)
 	taskID      string // task ID (task targets)
 	planKey     string // plan artifact key (plan-detail target)
 }
@@ -80,6 +81,7 @@ const (
 	metaTargetMemoryFile                // file-list row → Enter drills into the file
 	metaTargetDecision                  // flow-summary decision → jump to origin turn
 	metaTargetTask                      // task row → open task view / definition turn
+	metaTargetTodo                      // todo row → jump to latest TodoWrite occurrence
 	metaTargetPlan                      // plan row → Enter opens data; J jumps to origin
 	metaTargetCron                      // cron row (informational; no origin to jump to)
 )
@@ -89,7 +91,7 @@ const (
 // those rows must not fall back to a bare entry-index of 0.
 func (t metaTargetKind) jumpable() bool {
 	switch t {
-	case metaTargetMemoryFile, metaTargetDecision, metaTargetTask, metaTargetPlan:
+	case metaTargetMemoryFile, metaTargetDecision, metaTargetTask, metaTargetTodo, metaTargetPlan:
 		return true
 	default:
 		return false

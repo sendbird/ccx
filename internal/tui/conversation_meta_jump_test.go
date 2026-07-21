@@ -195,6 +195,7 @@ func TestMetaTargetKindJumpable(t *testing.T) {
 		metaTargetMemoryFile: true,
 		metaTargetDecision:   true,
 		metaTargetTask:       true,
+		metaTargetTodo:       true,
 		metaTargetPlan:       true,
 		metaTargetCron:       false,
 	}

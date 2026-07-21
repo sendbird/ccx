@@ -43,6 +43,7 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 
 	a.currentSess = sess
 	a.conv.sess = sess
+	a.conv.execution = executionRailState{}
 	a.conv.messages = entries
 	a.conv.merged = filterConversation(mergeConversationTurns(entries))
 	a.conv.agent = session.Subagent{}
@@ -70,6 +71,9 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	}
 	a.conv.flow = flow
 	a.conv.agents = agents
+	a.initExecutionRail(agents)
+	a.conv.execution.ActiveKey = executionContextKey(sess.FilePath)
+	a.conv.execution.CursorKey = a.conv.execution.ActiveKey
 	a.conv.contextItems = buildConvContextItems(sess, a.conv.merged, flow)
 	a.conv.contextIndex = 0
 	a.conv.contextActive = len(a.conv.contextItems) > 0
@@ -116,12 +120,18 @@ func (a *App) pauseLiveTail() {
 // openConversationInspectorForEntry selects the exact unified-flow message row
 // and opens its Node-scoped Conversation facet in full-width zoom.
 func (a *App) openConversationInspectorForEntry(m mergedMsg, blockIdx int) (tea.Model, tea.Cmd) {
+	return a.openConversationInspectorForEntryWithHistory(m, blockIdx, true)
+}
+
+func (a *App) openConversationInspectorForEntryWithHistory(m mergedMsg, blockIdx int, pushHistory bool) (tea.Model, tea.Cmd) {
 	for i, raw := range a.convList.VisibleItems() {
 		item, ok := raw.(convItem)
 		if !ok || item.kind != convMsg || item.merged.startIdx != m.startIdx {
 			continue
 		}
-		a.pushInspectorHistory()
+		if pushHistory {
+			a.pushInspectorHistory()
+		}
 		a.pauseLiveTail()
 		a.selectConvBody(i)
 		// Exact block jumps use the verbose representation because compact and
@@ -134,14 +144,25 @@ func (a *App) openConversationInspectorForEntry(m mergedMsg, blockIdx int) (tea.
 		}
 		a.openInspector(inspectorConversation, session.ScopeNode, true)
 		if hasTargetBlock && a.conv.split.Folds != nil {
-			for renderedBlockIdx, block := range a.conv.split.Folds.Entry.Content {
-				if !sameConversationBlock(block, targetBlock) {
-					continue
+			// Verbose previews preserve merged block order and prepend one inspector
+			// header. Prefer the exact coordinate so identical repeated blocks do not
+			// jump to the first occurrence.
+			headerBlocks := max(len(a.conv.split.Folds.Entry.Content)-len(m.entry.Content), 0)
+			renderedBlockIdx := blockIdx + headerBlocks
+			if renderedBlockIdx < 0 || renderedBlockIdx >= len(a.conv.split.Folds.Entry.Content) ||
+				!sameConversationBlock(a.conv.split.Folds.Entry.Content[renderedBlockIdx], targetBlock) {
+				renderedBlockIdx = -1
+				for i, block := range a.conv.split.Folds.Entry.Content {
+					if sameConversationBlock(block, targetBlock) {
+						renderedBlockIdx = i
+						break
+					}
 				}
+			}
+			if renderedBlockIdx >= 0 {
 				a.conv.split.Folds.BlockCursor = renderedBlockIdx
 				a.conv.split.RefreshFoldCursor(a.width, a.splitRatio)
 				a.conv.split.ScrollToBlock()
-				break
 			}
 		}
 		return a, nil
@@ -299,6 +320,18 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleBlockFilterInput(msg)
 	}
 
+	if a.conv.execution.Focused {
+		if nav, navMsg := a.keymap.TranslateNav(key, msg); nav != "" {
+			key = nav
+			msg = navMsg
+		}
+		if key == "q" {
+			return a.quit()
+		}
+		a.handleExecutionRailKey(key)
+		return a, nil
+	}
+
 	// Inspector controls are handled before generic split-pane keys so [ and ]
 	// cycle facets rather than resize while the inspector is focused.
 	if key == "z" {
@@ -360,7 +393,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.updateConvHeader()
 			return a, nil
 		}
-		if len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
+		if len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.cron.ID != "" {
 			return a.popNavFrame()
 		}
 		if sp.Show {
@@ -378,6 +411,9 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.switchConversationRegion() {
 			a.pauseLiveTail()
 		}
+		return a, nil
+	case a.keymap.Conversation.ExecutionContexts:
+		a.focusExecutionRail()
 		return a, nil
 	case a.keymap.Conversation.LiveToggle:
 		return a.toggleConvLiveTail()
@@ -456,7 +492,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Common split pane keys
-	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, a.adjustSplitRatio)
+	result := sp.HandleSplitKey(key, a.width, a.conversationLayoutHeight(), a.splitRatio, a.adjustSplitRatio)
 	switch result {
 	case splitKeyClosed:
 		a.clearInspectorHistory()
@@ -476,7 +512,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.liveTail = false
 			a.conv.split.BottomAlign = false
 			a.clearInspectorHistory()
-			if a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" || len(a.navStack) > 0 {
+			if a.conv.task.ID != "" || a.conv.cron.ID != "" || len(a.navStack) > 0 {
 				return a.popNavFrame()
 			}
 			a.state = viewSessions
@@ -799,7 +835,7 @@ func (a *App) updateConvPreview() {
 	// for the meta path only, so convMsg/agent scroll math is untouched.
 	if metaEntry != nil {
 		if sp.Preview.Height <= 0 {
-			sp.Preview.Height = ContentHeight(a.height)
+			sp.Preview.Height = a.conversationContentHeight()
 		}
 		if sp.Preview.Width <= 0 {
 			sp.Preview.Width = sp.PreviewWidth(a.width, a.splitRatio)
@@ -1250,7 +1286,7 @@ func (a *App) setConvPreviewTextKey(content, cacheKey string) {
 	sameKey := sp.CacheKey == cacheKey
 	sp.CacheKey = cacheKey
 	sp.Preview.Width = sp.PreviewWidth(a.width, a.splitRatio)
-	sp.Preview.Height = ContentHeight(a.height)
+	sp.Preview.Height = a.conversationContentHeight()
 	sp.Preview.SetContent(content)
 	if sameKey {
 		maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
@@ -2063,7 +2099,7 @@ func (a *App) jumpToOriginMessage() (tea.Model, tea.Cmd) {
 
 // rebuildConversationList rebuilds the single unified flow list.
 func (a *App) rebuildConversationList(selectIdx int) {
-	contentH := ContentHeight(a.height)
+	contentH := a.conversationContentHeight()
 	a.updateConvHeader()
 	contentH = a.conv.split.listContentHeight(contentH)
 	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH, &a.conv.contextActive)
@@ -2118,6 +2154,14 @@ func (a *App) refreshConversation() tea.Cmd {
 	if err != nil {
 		return nil
 	}
+	// Match context activation: agent transcripts hide injected parent context,
+	// and side-question transcripts collapse their inherited history.
+	if a.conv.agent.ID != "" {
+		entries = filterAgentContextEntries(entries)
+		if a.conv.agent.AgentType == "aside_question" {
+			entries = filterSideQuestionContext(entries)
+		}
+	}
 	a.conv.messages = entries
 	a.conv.merged = filterConversation(mergeConversationTurns(entries))
 	a.conv.toolUseToAgent = buildToolUseToAgentMap(entries)
@@ -2140,15 +2184,22 @@ func (a *App) refreshConversation() tea.Cmd {
 	}
 	a.conv.flow = flow
 	a.conv.agents = agents
+	a.refreshExecutionRail()
 
 	tasks := mergeConversationTasks(a.currentSess.Tasks, session.LoadTasksFromEntries(rootEntries))
+	todos := a.currentSess.Todos
+	if latest, found := session.LoadTodoSnapshotFromEntries(rootEntries); found {
+		todos = latest
+	}
 	crons := a.currentSess.Crons
 	if len(crons) == 0 && a.currentSess.HasCrons {
 		crons = session.LoadCronsFromEntries(rootEntries)
 	}
 	a.currentSess.Tasks = tasks
+	a.currentSess.Todos = todos
 	a.currentSess.Crons = crons
 	a.conv.sess.Tasks = tasks
+	a.conv.sess.Todos = todos
 	a.conv.sess.Crons = crons
 
 	// Root tasks/crons are fixed session context. Only place their chronological
@@ -2163,11 +2214,18 @@ func (a *App) refreshConversation() tea.Cmd {
 	a.conv.contextItems = buildConvContextItems(a.conv.sess, a.conv.merged, flow)
 	a.conv.items = buildConvItems(a.conv.sess, a.conv.merged, agents, timelineTasks, timelineCrons, flow)
 
-	// Preserve logical selection across changed facets and folded rows.
+	// Preserve logical selection and an applied list search across refresh.
+	filterTerm := ""
+	if a.hasFilterApplied() {
+		filterTerm = a.convList.FilterInput.Value()
+	}
 	oldIdx := a.convList.Index()
 	prevCacheKey := a.conv.split.CacheKey
 	prevYOffset := a.conv.split.Preview.YOffset
 	a.rebuildConversationList(oldIdx)
+	if filterTerm != "" {
+		applyListFilter(&a.convList, filterTerm)
+	}
 	if !a.restoreConvSelection(selectedID) {
 		if len(a.conv.contextItems) > 0 {
 			a.selectConvContext(0)
@@ -2357,7 +2415,7 @@ func (a *App) toggleConvGroupFold(header convItem) {
 
 	// Rebuild visible list; find the header's new index.
 	vis := visibleConvItems(items)
-	contentH := a.conv.split.listContentHeight(ContentHeight(a.height))
+	contentH := a.conv.split.listContentHeight(a.conversationContentHeight())
 	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH, &a.conv.contextActive)
 	a.conv.split.List = &a.convList
 
@@ -2381,7 +2439,7 @@ func (a *App) scrollConvPreviewToTail() {
 		return
 	}
 	// Ensure preview height is initialized (Render may not have run yet)
-	contentH := ContentHeight(a.height)
+	contentH := a.conversationContentHeight()
 	if sp.Preview.Height < 1 && contentH > 0 {
 		sp.Preview.Height = contentH
 	}
@@ -2491,7 +2549,7 @@ func (a *App) kittyImageLayer() string {
 	sp := &a.conv.split
 
 	listW := sp.ListWidth(a.width, a.splitRatio)
-	contentH := ContentHeight(a.height)
+	contentH := a.conversationContentHeight()
 	maxCols := max(listW-1, 10)
 	maxRows := max(contentH-1, 4)
 	imgW, imgH := kitty.ImageSize(cachePath)
@@ -2504,27 +2562,26 @@ func (a *App) kittyImageLayer() string {
 // renderConvSplit renders the conversation split view.
 func (a *App) renderConvSplit() string {
 	sp := &a.conv.split
-	rendered := sp.Render(a.width, a.height, a.splitRatio)
-
-	if sp.PreviewOnly {
-		return rendered
-	}
+	rendered := sp.Render(a.width, a.conversationLayoutHeight(), a.splitRatio)
 
 	// Show tooltip for selected item when list is focused and tooltip is on.
 	// When preview is focused, prefer a tooltip for the focused artifact/block.
 	// Skip text tooltip for image blocks when Kitty rendering is active.
-	if sp.Focus && sp.Show && !a.kittyImageActive() {
+	if !sp.PreviewOnly && sp.Focus && sp.Show && !a.kittyImageActive() {
 		if tooltip := a.focusedArtifactTooltip(sp, a.width); tooltip != "" {
-			contentH := ContentHeight(a.height)
+			contentH := a.conversationContentHeight()
 			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage, a.conv.split.headerInset, a.convTooltipScroll, a.activeDividerCol())
 		}
-	} else if a.convTooltipOn && sp.Show && len(a.convList.Items()) > 0 {
+	} else if !sp.PreviewOnly && a.convTooltipOn && sp.Show && len(a.convList.Items()) > 0 {
 		if tooltip := a.convTooltip(); tooltip != "" {
-			contentH := ContentHeight(a.height)
+			contentH := a.conversationContentHeight()
 			rendered = overlayTooltip(rendered, tooltip, a.width, contentH, a.convList.Index(), a.convList.Paginator.PerPage, a.conv.split.headerInset, a.convTooltipScroll, a.activeDividerCol())
 		}
 	}
 
+	if rail := a.renderExecutionRail(); rail != "" {
+		return rendered + "\n" + rail
+	}
 	return rendered
 }
 
@@ -2851,6 +2908,10 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 		return a, nil
 	}
 
+	// Inline drilldown and execution-rail switching share the same transcript
+	// contexts. Save the current context before changing ActiveKey so selecting
+	// it again from the rail restores its exact list/filter/inspector state.
+	a.saveExecutionViewState()
 	merged := filterConversation(mergeConversationTurns(entries))
 	agentSess := a.currentSess
 	agentSess.ID = agent.ID
@@ -2879,6 +2940,8 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 	a.conv.contextActive = len(a.conv.contextItems) > 0
 	a.conv.items = items
 	a.conv.agent = agent
+	a.conv.execution.ActiveKey = executionContextKey(agent.FilePath)
+	a.conv.execution.CursorKey = a.conv.execution.ActiveKey
 	a.conv.task = session.TaskItem{}
 	a.conv.cron = session.CronItem{}
 	a.resetDrilldownInspector()

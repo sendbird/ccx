@@ -187,10 +187,11 @@ func filterSideQuestionContext(entries []session.Entry) []session.Entry {
 		return entries
 	}
 
-	// Find the last user message — everything from there onwards is the real exchange.
+	// Find the last real user prompt. Tool results are encoded as role:user too,
+	// but belong to the side-question exchange and must not become its boundary.
 	lastUserIdx := -1
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Role == "user" {
+		if isConversationUserEntry(entries[i]) {
 			lastUserIdx = i
 			break
 		}
@@ -215,6 +216,18 @@ func filterSideQuestionContext(entries []session.Entry) []session.Entry {
 	result = append(result, summary)
 	result = append(result, entries[lastUserIdx:]...)
 	return result
+}
+
+func isConversationUserEntry(entry session.Entry) bool {
+	if entry.Role != "user" {
+		return false
+	}
+	for _, block := range entry.Content {
+		if block.Type != "tool_result" && block.Type != "system_tag" {
+			return true
+		}
+	}
+	return false
 }
 
 // isSystemAgent returns true if the agent is an internal system agent

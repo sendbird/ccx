@@ -26,6 +26,7 @@ type conversationLocation struct {
 // identity is used instead of raw list indices so refreshes and filtering do not
 // silently restore a different row.
 type inspectorNavFrame struct {
+	executionKey   string
 	location       conversationLocation
 	splitShow      bool
 	splitFocus     bool
@@ -158,6 +159,7 @@ func (a *App) restoreConversationLocation(loc conversationLocation) bool {
 func (a *App) captureInspectorNavFrame() inspectorNavFrame {
 	sp := &a.conv.split
 	frame := inspectorNavFrame{
+		executionKey:   a.conv.execution.ActiveKey,
 		location:       a.currentConversationLocation(),
 		splitShow:      sp.Show,
 		splitFocus:     sp.Focus,
@@ -188,6 +190,9 @@ func (a *App) pushInspectorHistory() {
 }
 
 func (a *App) restoreInspectorFrame(frame inspectorNavFrame) {
+	if frame.executionKey != "" && frame.executionKey != a.conv.execution.ActiveKey {
+		a.activateExecutionContext(frame.executionKey, true)
+	}
 	sp := &a.conv.split
 	a.conv.inspector.Tab = frame.tab
 	a.conv.inspector.Scope = frame.scope
@@ -249,7 +254,7 @@ func (a *App) updateConvHeader() {
 		return
 	}
 	width := sp.ListWidth(a.width, a.splitRatio)
-	lines := []string{convRegionHeader("PINNED", a.conv.contextActive, width)}
+	lines := []string{convRegionHeader("RESOURCES", a.conv.contextActive, width)}
 	for i, item := range a.conv.contextItems {
 		var row strings.Builder
 		renderConvSessionMeta(&row, item, a.conv.contextActive && i == a.conv.contextIndex, width, lipgloss.NewStyle().MaxWidth(width), "")
@@ -261,7 +266,7 @@ func (a *App) updateConvHeader() {
 }
 
 func (a *App) convContextIndexAtHeaderLine(line int) (int, bool) {
-	// Header line 0 is the PINNED label; the final line is CONVERSATION.
+	// Header line 0 is the RESOURCES label; the final line is CONVERSATION.
 	index := line - 1
 	return index, index >= 0 && index < len(a.conv.contextItems)
 }
@@ -448,6 +453,8 @@ func (a *App) popNavFrame() (tea.Model, tea.Cmd) {
 	a.conv.inspector = cloneConversationInspector(frame.inspector)
 	a.conv.rightPaneMode = frame.rightPaneMode
 	a.conv.agent = frame.agent
+	a.conv.execution.ActiveKey = executionContextKey(frame.sess.FilePath)
+	a.conv.execution.CursorKey = a.conv.execution.ActiveKey
 	a.conv.task = frame.task
 	a.conv.cron = frame.cron
 	a.conv.split.Show = frame.splitShow

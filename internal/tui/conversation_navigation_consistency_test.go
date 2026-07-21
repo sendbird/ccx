@@ -12,7 +12,7 @@ import (
 func TestPinnedAndTimelineRenderAsDistinctRegions(t *testing.T) {
 	app := setupFixedContextConvApp(t, 120, 24)
 	view := stripANSI(app.renderConvSplit())
-	if !strings.Contains(view, "PINNED") || !strings.Contains(view, "CONVERSATION") {
+	if !strings.Contains(view, "RESOURCES") || !strings.Contains(view, "CONVERSATION") {
 		t.Fatalf("conversation regions are not labeled: %q", view)
 	}
 	if !app.conv.contextActive {

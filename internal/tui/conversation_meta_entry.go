@@ -54,12 +54,9 @@ func (a *App) metaMemoryEntries() []metaEntry {
 	sess := a.conv.sess
 
 	var out []metaEntry
-	// Todos come first as read-only rows (no drill target). They are session
-	// state independent of the memory directory, so render them even when no
-	// project path / memory dir is available.
-	if len(sess.Todos) > 0 {
-		out = append(out, textMeta(a.renderTodosBlock(sess.Todos)))
-	}
+	// Todos are independent selectable resources. When the transcript contains
+	// TodoWrite occurrences, each row points back to its latest exact origin.
+	out = append(out, a.metaTodoEntries(sess.Todos)...)
 
 	if sess.ProjectPath == "" {
 		if len(out) == 0 {
@@ -188,7 +185,7 @@ func (a *App) lastMemoryWriteOrigin(fileName string) (session.ArtifactOrigin, bo
 	var best session.ArtifactOrigin
 	found := false
 	for _, art := range a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactChange, session.ScopeSession) {
-		if filepath.Base(art.Key) != fileName {
+		if filepath.Base(art.Key) != fileName || !a.originVisibleInExecutionContext(art.Origin) {
 			continue
 		}
 		if !found || !art.Origin.Timestamp.Before(best.Timestamp) {
@@ -199,30 +196,115 @@ func (a *App) lastMemoryWriteOrigin(fileName string) (session.ArtifactOrigin, bo
 	return best, found
 }
 
-// renderTodosBlock renders the session todo list as one text block.
-func (a *App) renderTodosBlock(todos []session.TodoItem) string {
+// metaTodoEntries renders each todo as an independently selectable resource.
+// The latest matching TodoWrite occurrence supplies its cross-context origin.
+func (a *App) metaTodoEntries(todos []session.TodoItem) []metaEntry {
+	if len(todos) == 0 {
+		return nil
+	}
 	completed := 0
-	for _, t := range todos {
-		if t.Status == "completed" {
+	for _, todo := range todos {
+		if todo.Status == "completed" {
 			completed++
 		}
 	}
-	var b strings.Builder
-	b.WriteString(dimStyle.Render(fmt.Sprintf("── Todos [%d/%d] ──", completed, len(todos))))
-	for _, t := range todos {
-		icon := iconIdle
-		style := dimStyle
-		switch t.Status {
-		case "completed":
-			icon = iconDone
-			style = lipgloss.NewStyle().Foreground(colorAccent)
-		case "in_progress":
-			icon = iconActive
-			style = lipgloss.NewStyle().Foreground(colorAssistant)
+	out := []metaEntry{textMeta(dimStyle.Render(fmt.Sprintf("── Todos [%d/%d] · ↵/J jump ──", completed, len(todos))))}
+	origins := a.latestTodoOrigins()
+	for _, todo := range todos {
+		target := metaEntryTarget{kind: metaTargetTodo, entryIndex: -1, blockIdx: -1}
+		if origin, ok := origins[todo.Content]; ok {
+			target = a.originTarget(metaTargetTodo, origin)
 		}
-		b.WriteString("\n" + style.Render(fmt.Sprintf("  %s %s", icon, t.Content)))
+		out = append(out, metaEntry{
+			block:  session.ContentBlock{Type: "text", Text: todoRow(todo)},
+			target: target,
+		})
 	}
-	return b.String()
+	return out
+}
+
+func (a *App) latestTodoOrigins() map[string]session.ArtifactOrigin {
+	out := make(map[string]session.ArtifactOrigin)
+	if a.conv.flow == nil {
+		return out
+	}
+	for _, artifact := range a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactTodo, session.ScopeSession) {
+		if !a.originVisibleInExecutionContext(artifact.Origin) {
+			continue
+		}
+		current, exists := out[artifact.Key]
+		if !exists || !artifact.Origin.Timestamp.Before(current.Timestamp) {
+			out[artifact.Key] = artifact.Origin
+		}
+	}
+	return out
+}
+
+// originVisibleInExecutionContext rejects artifacts from inherited transcript
+// history that the corresponding execution context intentionally hides.
+func (a *App) originVisibleInExecutionContext(origin session.ArtifactOrigin) bool {
+	context, ok := a.executionContextForTranscript(origin.Transcript)
+	if !ok {
+		return false
+	}
+	raw, err := session.LoadMessages(origin.Transcript)
+	if err != nil {
+		return false
+	}
+	visible := raw
+	if context.Agent.ID != "" {
+		visible = filterAgentContextEntries(visible)
+		if context.Agent.AgentType == "aside_question" {
+			visible = filterSideQuestionContext(visible)
+		}
+	}
+
+	var source session.Entry
+	foundSource := false
+	if origin.EntryIndex >= 0 && origin.EntryIndex < len(raw) {
+		source = raw[origin.EntryIndex]
+		foundSource = true
+	} else if origin.MessageUUID != "" {
+		for _, entry := range raw {
+			if entry.UUID == origin.MessageUUID {
+				source = entry
+				foundSource = true
+				break
+			}
+		}
+	}
+	if !foundSource {
+		return false
+	}
+	for _, entry := range visible {
+		if source.UUID != "" && entry.UUID == source.UUID {
+			return true
+		}
+		if source.UUID == "" && entry.Role == source.Role && entry.Timestamp.Equal(source.Timestamp) {
+			if origin.BlockIndex < 0 {
+				return true
+			}
+			if origin.BlockIndex < len(source.Content) && origin.BlockIndex < len(entry.Content) &&
+				sameConversationBlock(entry.Content[origin.BlockIndex], source.Content[origin.BlockIndex]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func todoRow(todo session.TodoItem) string {
+	icon := iconIdle
+	style := dimStyle
+	switch todo.Status {
+	case "completed":
+		icon = iconDone
+		style = lipgloss.NewStyle().Foreground(colorAccent)
+	case "in_progress":
+		icon = iconActive
+		style = lipgloss.NewStyle().Foreground(colorAssistant)
+	}
+	return style.Render(fmt.Sprintf("%s %s", icon, todo.Content))
 }
 
 // currentMetaTarget returns the jump/drill target bound to the focused block of
@@ -262,6 +344,12 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 			return true, m, cmd
 		}
 		a.copiedMsg = "No origin turn for this memory"
+		return true, a, nil
+	case metaTargetTodo:
+		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
+			return true, m, cmd
+		}
+		a.copiedMsg = "No origin turn for this todo"
 		return true, a, nil
 	case metaTargetTask:
 		// Prefer opening the task's own view (matches decision-task Enter); fall
@@ -364,30 +452,110 @@ func (a *App) exitPlanDrill() bool {
 	return true
 }
 
-// jumpToMetaTarget jumps to the conversation turn that produced a meta entry.
-// Origins recorded on flow artifacts point at a specific transcript entry, which
-// mergeConversationTurns may have folded into a multi-entry turn — so we resolve
-// the turn by UUID first and fall back to the entry-index range (matching
-// mergedIndexForOrigin), not a bare UUID equality on the merged turn head.
+// jumpToMetaTarget opens the exact transcript turn and source block that
+// produced a resource. Cross-context jumps switch the execution rail first;
+// the history frame retains the source context so Esc returns to the resource.
 func (a *App) jumpToMetaTarget(target metaEntryTarget) (tea.Model, tea.Cmd, bool) {
-	// Only rows bound to a real origin jump. Header/todo/separator rows carry
-	// metaTargetNone and must NOT fall through to a bare entry-index of 0, which
-	// would jump to the first turn.
 	if !target.kind.jumpable() {
 		return a, nil, false
 	}
 	if target.messageUUID == "" && target.entryIndex < 0 {
 		return a, nil, false
 	}
-	idx := mergedIndexForOrigin(a.conv.merged, target.messageUUID, target.entryIndex)
-	if idx < 0 {
-		a.copiedMsg = "origin turn not found"
+
+	returnFrame := a.captureInspectorNavFrame()
+	transcript := target.transcript
+	if transcript == "" {
+		transcript = a.conv.sess.FilePath
+	}
+	switchedContext := executionContextKey(transcript) != a.conv.execution.ActiveKey
+	if switchedContext {
+		context, ok := a.executionContextForTranscript(transcript)
+		if !ok || !a.activateExecutionContext(context.Key, true) {
+			a.copiedMsg = "origin transcript unavailable"
+			return a, nil, true
+		}
+	}
+	rollback := func(message string) (tea.Model, tea.Cmd, bool) {
+		if switchedContext {
+			a.restoreInspectorFrame(returnFrame)
+		}
+		a.copiedMsg = message
 		return a, nil, true
 	}
-	// Jump at turn granularity: origin.BlockIndex is relative to the source
-	// entry, which does not line up with the merged turn's concatenated blocks.
-	model, cmd := a.openConversationInspectorForEntry(a.conv.merged[idx], -1)
+
+	sourceEntry, sourceUUID := a.resolveVisibleOrigin(transcript, target)
+	idx := mergedIndexForOrigin(a.conv.merged, sourceUUID, sourceEntry)
+	if idx < 0 {
+		return rollback("origin turn not found")
+	}
+	visible := false
+	for _, raw := range a.convList.VisibleItems() {
+		item, ok := raw.(convItem)
+		if ok && item.kind == convMsg && item.merged.startIdx == a.conv.merged[idx].startIdx {
+			visible = true
+			break
+		}
+	}
+	if !visible {
+		return rollback("origin turn is hidden by filter")
+	}
+
+	blockIdx := -1
+	if sourceEntry >= a.conv.merged[idx].startIdx && sourceEntry <= a.conv.merged[idx].endIdx && target.blockIdx >= 0 {
+		blockIdx = target.blockIdx
+		for i := a.conv.merged[idx].startIdx; i < sourceEntry && i < len(a.conv.messages); i++ {
+			blockIdx += len(a.conv.messages[i].Content)
+		}
+		if blockIdx >= len(a.conv.merged[idx].entry.Content) {
+			blockIdx = -1
+		}
+	}
+
+	a.conv.inspector.History = append(a.conv.inspector.History, returnFrame)
+	a.conv.inspector.ReturnToID = returnFrame.location.ItemID
+	model, cmd := a.openConversationInspectorForEntryWithHistory(a.conv.merged[idx], blockIdx, false)
 	return model, cmd, true
+}
+
+// resolveVisibleOrigin maps transcript-local raw coordinates onto the entries
+// currently visible after agent context filtering. UUID is preferred; legacy
+// UUID-less entries fall back to timestamp, role, and the exact source block.
+func (a *App) resolveVisibleOrigin(transcript string, target metaEntryTarget) (int, string) {
+	findVisible := func(entry session.Entry, uuid string) int {
+		for i, visible := range a.conv.messages {
+			if uuid != "" && visible.UUID == uuid {
+				return i
+			}
+			if uuid == "" && visible.Role == entry.Role && visible.Timestamp.Equal(entry.Timestamp) {
+				if target.blockIdx < 0 {
+					return i
+				}
+				if target.blockIdx < len(entry.Content) && target.blockIdx < len(visible.Content) &&
+					sameConversationBlock(visible.Content[target.blockIdx], entry.Content[target.blockIdx]) {
+					return i
+				}
+			}
+		}
+		return -1
+	}
+
+	if target.messageUUID != "" {
+		if i := findVisible(session.Entry{}, target.messageUUID); i >= 0 {
+			return i, target.messageUUID
+		}
+	}
+	raw, err := session.LoadMessages(transcript)
+	if err == nil && target.entryIndex >= 0 && target.entryIndex < len(raw) {
+		entry := raw[target.entryIndex]
+		// The target UUID may be absent or stale in legacy provenance. The raw
+		// entry's UUID is authoritative for mapping into the filtered view.
+		if i := findVisible(entry, entry.UUID); i >= 0 {
+			return i, entry.UUID
+		}
+		return -1, entry.UUID
+	}
+	return -1, target.messageUUID
 }
 
 // mergedByUUID finds the merged conversation turn whose head entry UUID matches.
@@ -415,6 +583,13 @@ func (a *App) metaSummaryEntries() []metaEntry {
 	out := []metaEntry{textMeta(strings.TrimRight(a.flowSummaryHeader(), "\n"))}
 
 	decisions := flow.Decisions(session.ScopeSession)
+	visibleDecisions := decisions[:0]
+	for _, decision := range decisions {
+		if a.originVisibleInExecutionContext(decision.Origin) {
+			visibleDecisions = append(visibleDecisions, decision)
+		}
+	}
+	decisions = visibleDecisions
 	if len(decisions) == 0 {
 		out = append(out, textMeta(dimStyle.Render("No decisions recorded.")))
 		return out
@@ -430,21 +605,18 @@ func (a *App) metaSummaryEntries() []metaEntry {
 	return out
 }
 
-// originTarget builds a jump target from an artifact origin. The entry-index
-// fallback is only meaningful for origins in the root transcript (entry indices
-// are transcript-local), so it is dropped for agent-owned origins — those still
-// jump by UUID when the turn is visible.
+// originTarget preserves transcript-local coordinates so resource jumps can
+// cross between main and subagent execution contexts without losing precision.
 func (a *App) originTarget(kind metaTargetKind, origin session.ArtifactOrigin) metaEntryTarget {
-	entryIndex := -1
-	if origin.Transcript == "" || origin.Transcript == a.conv.sess.FilePath {
-		entryIndex = origin.EntryIndex
+	target := metaEntryTarget{kind: kind, entryIndex: -1, blockIdx: -1}
+	if !a.originVisibleInExecutionContext(origin) {
+		return target
 	}
-	return metaEntryTarget{
-		kind:        kind,
-		messageUUID: origin.MessageUUID,
-		entryIndex:  entryIndex,
-		blockIdx:    origin.BlockIndex,
-	}
+	target.transcript = origin.Transcript
+	target.messageUUID = origin.MessageUUID
+	target.entryIndex = origin.EntryIndex
+	target.blockIdx = origin.BlockIndex
+	return target
 }
 
 // flowSummaryHeader is the non-decision preamble of the flow summary (counts,
@@ -535,6 +707,9 @@ func (a *App) planEntries() []metaEntry {
 	order := make([]string, 0, len(arts))
 	latest := make(map[string]session.Artifact, len(arts))
 	for _, art := range arts {
+		if !a.originVisibleInExecutionContext(art.Origin) {
+			continue
+		}
 		if _, seen := latest[art.Key]; !seen {
 			order = append(order, art.Key)
 		}
@@ -560,7 +735,7 @@ func (a *App) latestPlanArtifact(key string) (session.Artifact, bool) {
 	}
 	arts := a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactPlan, session.ScopeSession)
 	for i := len(arts) - 1; i >= 0; i-- {
-		if arts[i].Key == key {
+		if arts[i].Key == key && a.originVisibleInExecutionContext(arts[i].Origin) {
 			return arts[i], true
 		}
 	}
@@ -610,7 +785,7 @@ func (a *App) taskOriginByID() map[string]session.ArtifactOrigin {
 	}
 	for _, art := range a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactTask, session.ScopeSession) {
 		data, ok := art.Data.(session.TaskEventData)
-		if !ok || data.TaskID == "" {
+		if !ok || data.TaskID == "" || !a.originVisibleInExecutionContext(art.Origin) {
 			continue
 		}
 		prev, seen := out[data.TaskID]

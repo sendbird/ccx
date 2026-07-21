@@ -51,6 +51,9 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 // tryStartDragResize checks if the click is on the split pane border and starts drag.
 func (a *App) tryStartDragResize(msg tea.MouseMsg) bool {
+	if a.state == viewConversation && a.mouseInExecutionRail(msg.Y) {
+		return false
+	}
 	sp := a.activeSplitPane()
 	if sp == nil || !sp.Show || sp.PreviewOnly {
 		return false
@@ -81,7 +84,11 @@ func (a *App) handleDragResize(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		a.splitRatio = newRatio
 		sp := a.activeSplitPane()
 		if sp != nil {
-			sp.Resize(a.width, a.height, a.splitRatio)
+			height := a.height
+			if a.state == viewConversation {
+				height = a.conversationLayoutHeight()
+			}
+			sp.Resize(a.width, height, a.splitRatio)
 		}
 	}
 	return a, nil
@@ -108,6 +115,15 @@ func (a *App) activeSplitPane() *SplitPane {
 
 func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	up := msg.Button == tea.MouseButtonWheelUp
+	if a.state == viewConversation && a.mouseInExecutionRail(msg.Y) {
+		a.conv.execution.Focused = true
+		key := "down"
+		if up {
+			key = "up"
+		}
+		a.handleExecutionRailKey(key)
+		return a, nil
+	}
 	sp := a.activeSplitPane()
 	scrolledPreview := sp != nil && sp.Show && (sp.PreviewOnly || msg.X > sp.ListWidth(a.width, a.splitRatio))
 
@@ -178,6 +194,17 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	// Ignore help bar
 	if msg.Y >= a.height-1 {
+		return a, nil
+	}
+
+	if a.state == viewConversation && a.mouseInExecutionRail(msg.Y) {
+		a.conv.execution.Focused = true
+		// The first rail line is the section header; clicking it only focuses.
+		if msg.Y > 1+a.conversationContentHeight() {
+			if key, ok := a.executionContextAtX(msg.X); ok {
+				a.conv.execution.CursorKey = key
+			}
+		}
 		return a, nil
 	}
 
