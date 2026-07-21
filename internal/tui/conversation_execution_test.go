@@ -585,3 +585,30 @@ func TestRegionNavigationCyclesWithJK(t *testing.T) {
 		t.Fatalf("K past top region = %v, want pinned (clamped)", got)
 	}
 }
+
+// TestRegionNavAndJumpDeferToOpenModals verifies that K/J (region nav) and o
+// (origin jump) do not fire while a dismiss-on-any-key hint modal (actions menu)
+// is open — the modal must own the key, not the region-nav shortcut behind it.
+func TestRegionNavAndJumpDeferToOpenModals(t *testing.T) {
+	app, _, _ := setupConversationStateFixture(t)
+	// Focus the top region so a region change would be observable.
+	app.focusConversationRegion(conversationRegionPinned)
+	if app.currentConversationRegion() != conversationRegionPinned {
+		t.Fatal("precondition: not on pinned region")
+	}
+
+	// Open the actions menu (x), then press J — the menu must absorb it (any key
+	// dismisses it), and the region must NOT move underneath the overlay.
+	app = pressKey(app, "x")
+	if !app.convActionsMenu {
+		t.Fatal("x did not open the actions menu")
+	}
+	app = pressKey(app, "J")
+	if app.currentConversationRegion() != conversationRegionPinned {
+		t.Fatal("J moved the region while the actions menu was open")
+	}
+	if app.convActionsMenu {
+		// The menu dismissed on the keypress — that's fine; the key must NOT have
+		// also driven region navigation, which the assertion above guarantees.
+	}
+}

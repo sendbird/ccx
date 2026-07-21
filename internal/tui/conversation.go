@@ -330,7 +330,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// execution-rail and split-pane branches so it works from any region,
 	// including while the rail itself is focused. Skipped during list filtering,
 	// which owns key input.
-	if !a.isConvListFiltering() {
+	// Region navigation (K/J) and the origin-jump key (o) must not fire while a
+	// dismiss-on-any-key hint modal (edit / actions menu) is open — those are
+	// handled by their own guards below and would otherwise be bypassed, leaving
+	// a stale overlay or triggering navigation underneath it.
+	if !a.isConvListFiltering() && !a.editMenu && !a.convActionsMenu {
 		// JumpToTree (origin-turn / tmux-pane jump) is bound to `o` by default; J
 		// is reserved for region navigation. Enter and the x actions menu also
 		// cover jumping where applicable.
