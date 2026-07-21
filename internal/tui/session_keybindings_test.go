@@ -92,10 +92,20 @@ func TestSessionsHelpShowsNavigationAndPreviewTab(t *testing.T) {
 	app := newSessionKeybindingApp()
 	app.sessSplit.Show = false
 
+	// Footer is concise: core actions + the ?:help affordance. The full key
+	// list moved into the "?" overlay.
 	help := stripANSI(app.sessHelpLine())
-	for _, want := range []string{"g/G:top/end", "tab/S-tab:preview"} {
+	for _, want := range []string{"↵:open", "?:help", "q:quit"} {
 		if !strings.Contains(help, want) {
-			t.Fatalf("expected sessions help to contain %q, got %q", want, help)
+			t.Fatalf("expected sessions footer to contain %q, got %q", want, help)
+		}
+	}
+
+	// The context-aware overlay carries the detailed keys.
+	overlay := stripANSI(app.renderHelpModal("", 120, 80))
+	for _, want := range []string{"Sessions", "Preview", "Multi-select", "Common keys"} {
+		if !strings.Contains(overlay, want) {
+			t.Fatalf("expected help overlay to contain %q, got %q", want, overlay)
 		}
 	}
 }

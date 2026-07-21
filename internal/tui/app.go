@@ -1224,6 +1224,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Help overlay: available from any view. Any key closes it; otherwise
+		// the help key opens it (unless a text input or another overlay owns keys).
+		if a.showHelp {
+			a.showHelp = false
+			return a, nil
+		}
+		if msg.String() == a.keymap.Session.Help && !a.isInTextInput() && !a.isInOverlay() {
+			a.showHelp = true
+			return a, nil
+		}
+
 		// Number key shortcuts (1-9): view + focus scoped
 		if key := msg.String(); !a.isInTextInput() && !a.isInOverlay() &&
 			len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
@@ -1310,8 +1321,6 @@ func (a *App) View() string {
 			content = renderConfirmModal(content, a.confirmMsg, a.width, ContentHeight(a.height))
 		} else if a.sessConvFullText != "" {
 			content = renderFullTextModal(content, a.sessConvFullText, a.sessConvFullScroll, a.width, ContentHeight(a.height))
-		} else if a.showHelp {
-			content = renderHelpModal(content, a.width, ContentHeight(a.height), a.keymap, a.shortcutHint())
 		}
 		help = a.sessHelpLine()
 
@@ -1327,10 +1336,10 @@ func (a *App) View() string {
 			help = formatHelp("loading… v:views q:quit")
 		} else if a.statsDetail != statsDetailNone {
 			content = a.statsDetailVP.View()
-			help = formatHelp("p:page tab/S-tab:cycle ↑↓:scroll esc:back")
+			help = formatHelp("p:page ↑↓:scroll esc:back " + a.helpSuffix())
 		} else {
 			content = a.globalStatsVP.View()
-			help = formatHelp("p:page tab:first ↑↓:scroll v:views q:quit")
+			help = formatHelp("p:page ↑↓:scroll " + a.keymap.Session.Views + ":views " + a.helpSuffix())
 		}
 
 	case viewConversation:
@@ -1362,6 +1371,11 @@ func (a *App) View() string {
 			content = a.renderPluginSplit()
 		}
 		help = a.pluginsHelpLine()
+	}
+
+	// Context-aware help overlay — available in every view.
+	if a.showHelp {
+		content = a.renderHelpModal(content, a.width, ContentHeight(a.height))
 	}
 
 	// Command mode help — overrides view-specific help in any view
@@ -1530,6 +1544,8 @@ func (a *App) View() string {
 		help += "  " + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(a.copiedMsg)
 	}
 
+	help = a.truncateFooter(help)
+
 	screen := title + "\n" + content + "\n" + help
 
 	// Live input modal overlays everything
@@ -1566,12 +1582,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if key != "g" {
 		a.sessPendingG = false
-	}
-
-	// Help overlay: any key closes it
-	if a.showHelp {
-		a.showHelp = false
-		return a, nil
 	}
 
 	// Full text modal: scroll or dismiss
@@ -1846,9 +1856,6 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case km.Session.GlobalSearch:
 		a.enterSearchMode()
-		return a, nil
-	case km.Session.Help:
-		a.showHelp = true
 		return a, nil
 	// Tab/shift+tab now only control preview behavior. The main browser is
 	// project-centric by default, so users should not need Tab to rotate
@@ -6631,6 +6638,17 @@ func formatHelp(h string) string {
 		}
 	}
 	return sb.String()
+}
+
+// truncateFooter clips the (already-colorized) footer line to the terminal
+// width so a long help string never overflows and pushes hints off-screen.
+// ANSI+CJK aware via truncateExact.
+func (a *App) truncateFooter(h string) string {
+	if a.width <= 0 {
+		return h
+	}
+	out, _ := truncateExact(h, a.width)
+	return out
 }
 
 // renderActionsHintBox renders a compact bordered hint box for the actions menu.

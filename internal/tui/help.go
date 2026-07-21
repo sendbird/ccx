@@ -3,8 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-
-	"github.com/sendbird/ccx/internal/tmux"
 )
 
 // fmtHints builds a help line from alternating key, desc pairs.
@@ -15,6 +13,12 @@ func fmtHints(pairs ...string) string {
 		parts = append(parts, displayKey(pairs[i])+":"+pairs[i+1])
 	}
 	return formatHelp(strings.Join(parts, " "))
+}
+
+// helpSuffix is the shared trailing hint for navigable footers: the help key
+// and quit. The full key list lives in the "?" overlay.
+func (a *App) helpSuffix() string {
+	return fmtKey(a.keymap.Session.Help, "help") + " " + fmtKey(a.keymap.Session.Quit, "quit")
 }
 
 // --- Session view help ---
@@ -66,52 +70,28 @@ func (a *App) sessHelpLine() string {
 		return "  " + a.paneProxyIndicator() + " " + formatHelp("→:focus esc:close []:resize")
 	}
 
-	// Normal session list/preview
+	// Normal session list/preview — concise; full list is in the "?" overlay.
 	sk := a.keymap.Session
-	h := fmtKey(sk.Open, "open") + " " + fmtKey(sk.Edit, "edit") + " " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Views, "views") + " " + fmtKey(sk.Refresh, "refresh")
-	if a.notifyUnreadCount() > 0 {
-		h += " n:notify"
-	}
-	if a.config.PickMode {
-		h = fmtKey(sk.Pick, "pick") + " " + h
-	}
+	var h string
 	if !a.sessSplit.Show {
-		h += " g/G:top/end →:preview tab/S-tab:preview"
+		h = fmtKey(sk.Open, "open") + " " + fmtKey(sk.Actions, "actions") + " →:preview " + fmtKey(sk.Search, "search")
 	} else if a.sessSplit.Focus {
 		switch a.sessPreviewMode {
 		case sessPreviewConversation:
-			h += " ↑↓:nav c:full " + fmtKey(sk.Actions, "actions") + " " + fmtKey(sk.Open, "jump") + " ←:unfocus /:search tab:mode"
+			h = "↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
 		case sessPreviewAgents:
-			h += " ↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
+			h = "↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
 		case sessPreviewWorkflows:
-			h += " ↑↓:agent ↵:transcript ←:unfocus tab:mode"
+			h = "↑↓:agent ↵:transcript ←:unfocus tab:mode"
 		case sessPreviewRefs:
-			h += " ↑↓:nav ↵:open sp:select y:copy ←:unfocus tab:mode"
+			h = "↑↓:nav ↵:open sp:select ←:unfocus tab:mode"
 		default:
-			h += " ↑↓:scroll ←:unfocus tab:mode"
+			h = "↑↓:scroll ←:unfocus tab:mode"
 		}
-		if a.sessPreviewMode != sessPreviewConversation {
-			h += " esc:messages"
-		} else {
-			h += " esc:list"
-		}
-		h += " " + displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
 	} else {
-		h += " g/G:top/end tab/S-tab:preview →:focus ←:close "
-		if a.sessPreviewMode != sessPreviewConversation {
-			h += "esc:messages "
-		} else {
-			h += "esc:close "
-		}
-		h += displayKey(sk.ResizeShrink) + displayKey(sk.ResizeGrow) + ":resize"
+		h = "↑↓:nav →:focus tab:mode ←:close"
 	}
-	if a.config.TmuxEnabled && tmux.InTmux() {
-		h += " " + fmtKey(sk.Live, "live") + " " + fmtKey(sk.Switch, "switch")
-	}
-	if sc := a.shortcutHint(); sc != "" {
-		h += " " + dimStyle.Render(sc)
-	}
-	h += " D:completed " + fmtKey(sk.Search, "search") + " " + fmtKey(sk.Help, "help") + " " + fmtKey(sk.Quit, "quit")
+	h += " " + a.helpSuffix()
 	return formatHelp(h)
 }
 
@@ -122,7 +102,7 @@ func (a *App) convHelpLine(badges string) string {
 		return formatHelp("↵:jump to origin  esc:close")
 	}
 	if a.conv.execution.Focused {
-		return formatHelp("↑↓/jk:context ↵/→:open x:menu K:up-region A/esc:back q:quit")
+		return formatHelp("↑↓:context ↵:open x:menu A/esc:back q:quit")
 	}
 	if a.conv.blockFiltering {
 		return "  " + a.conv.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
@@ -166,9 +146,9 @@ func (a *App) convHelpLine(badges string) string {
 		vis := countVisibleBlocks(sp.Folds.BlockVisible)
 		total := len(sp.Folds.Entry.Content)
 		filterInfo := filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, sp.Folds.BlockFilter))
-		return filterInfo + " " + badges + formatHelp(joinHelpSections(h, "/:search", "q:quit"))
+		return filterInfo + " " + badges + formatHelp(joinHelpSections(h, a.helpSuffix()))
 	}
-	return badges + formatHelp(joinHelpSections(h, "/:search", "q:quit"))
+	return badges + formatHelp(joinHelpSections(h, a.helpSuffix()))
 }
 
 // --- Config view help ---
@@ -191,19 +171,18 @@ func (a *App) configHelpLine() string {
 		return "  " + filterBadge.Render(badge) + formatHelp(" n/N:next/prev esc:clear")
 	}
 
-	h := "sp:sel x:actions p:page tab:filter P:project a:new /:search " + a.keymap.Session.Refresh + ":refresh v:views q:quit"
+	h := "↵:open x:actions " + a.keymap.Session.Search + ":search " + a.keymap.Session.Views + ":views"
 	if a.cfgHasSelection() {
-		h = "sp:sel x:actions p:page tab:filter esc:clear q:quit"
+		h = "sp:sel x:actions esc:clear"
 	}
 	if a.cfgSplit.Show {
 		if a.cfgSplit.Focus {
-			h = "↑↓:scroll esc:unfocus q:quit"
-		} else if a.cfgHasSelection() {
-			h = "↑↓:nav →:focus sp:sel x:actions p:page esc:clear q:quit"
+			h = "↑↓:scroll esc:unfocus"
 		} else {
-			h = "↑↓:nav →:focus sp:sel x:actions p:page tab:filter P:project a:new v:views q:quit"
+			h = "↑↓:nav →:focus x:actions " + a.keymap.Session.Views + ":views"
 		}
 	}
+	h += " " + a.helpSuffix()
 	var badges string
 	if fl := a.cfgFilterLabel(); fl != "" {
 		badges += filterBadge.Render(fl) + " "
@@ -218,11 +197,11 @@ func (a *App) configHelpLine() string {
 
 func (a *App) pluginsHelpLine() string {
 	if a.plgDetailActive {
-		h := "↑↓:nav →:preview sp:sel x:actions e:edit c:copy-path o:shell esc:back q:quit"
+		h := "↑↓:nav →:preview x:actions e:edit esc:back"
 		if a.plgDetailSplit.Show && a.plgDetailSplit.Focus {
-			h = "↑↓:scroll ←:unfocus q:quit"
+			h = "↑↓:scroll ←:unfocus"
 		}
-		return "  " + formatHelp(h)
+		return "  " + formatHelp(h+" "+a.helpSuffix())
 	}
 	if a.plgSearching {
 		return "  " + a.plgSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
@@ -230,10 +209,11 @@ func (a *App) pluginsHelpLine() string {
 	if a.plgSearchTerm != "" {
 		return "  " + filterBadge.Render(a.plgSearchTerm) + formatHelp(" n/N:next/prev esc:clear")
 	}
-	h := "↑↓:nav ↵:open →:preview sp:select x:actions /:search " + a.keymap.Session.Refresh + ":refresh v:views esc:back q:quit"
+	h := "↵:open →:preview x:actions " + a.keymap.Session.Search + ":search"
 	if a.plgSplit.Show && a.plgSplit.Focus {
-		h = "↑↓:scroll ←:unfocus q:quit"
+		h = "↑↓:scroll ←:unfocus"
 	}
+	h += " " + a.helpSuffix()
 	if a.plgHasSelection() {
 		badges := filterBadge.Render(fmt.Sprintf("%d sel", len(a.plgSelectedSet)))
 		return "  " + badges + formatHelp(" "+h)
