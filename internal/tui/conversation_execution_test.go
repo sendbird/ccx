@@ -612,3 +612,34 @@ func TestRegionNavAndJumpDeferToOpenModals(t *testing.T) {
 		// also driven region navigation, which the assertion above guarantees.
 	}
 }
+
+// TestJumpTreeCollisionBreaksThenResolvesRegionNav reproduces the reported
+// regression: a stale config that binds jump_to_tree to the region-down key (J)
+// makes J stop navigating regions (jump wins the earlier dispatch). Applying
+// resolveConversationConflicts frees J and region-down works again.
+func TestJumpTreeCollisionBreaksThenResolvesRegionNav(t *testing.T) {
+	app, _, _ := setupConversationStateFixture(t)
+	if app.executionRailItemCount() == 0 {
+		t.Fatal("fixture has no EXECUTION CONTEXTS region")
+	}
+
+	// Simulate the stale collision: jump_to_tree bound to the region-down key.
+	app.keymap.Conversation.JumpToTree = app.keymap.Conversation.RegionDown // "J"
+	app.focusConversationRegion(conversationRegionTimeline)
+	before := app.currentConversationRegion()
+	app = pressKey(app, "J")
+	if app.currentConversationRegion() != before {
+		t.Fatalf("precondition: with the collision, J should be swallowed by jump, region moved to %v", app.currentConversationRegion())
+	}
+
+	// Resolve the collision (what LoadCCXConfig now does at load) and retry.
+	app.keymap.resolveConversationConflicts()
+	if app.keymap.Conversation.JumpToTree == app.keymap.Conversation.RegionDown {
+		t.Fatal("resolveConversationConflicts did not clear the collision")
+	}
+	app.focusConversationRegion(conversationRegionTimeline)
+	app = pressKey(app, "J")
+	if got := app.currentConversationRegion(); got != conversationRegionExecution {
+		t.Fatalf("after resolving, J region = %v, want execution", got)
+	}
+}

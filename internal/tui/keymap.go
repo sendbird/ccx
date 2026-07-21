@@ -418,6 +418,34 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 }
 
+// resolveConversationConflicts repairs conversation-view key bindings that
+// collide with the region-navigation keys (RegionUp/RegionDown). Region nav is
+// the backbone of moving between the RESOURCES / CONVERSATION / EXECUTION
+// CONTEXTS panes, and its handler runs before the other conversation actions in
+// handleConversationKeys — so if a stale user config maps another action to the
+// same key (historically jump_to_tree defaulted to "J", the RegionDown key),
+// that action silently swallows the keypress and region nav appears broken.
+//
+// Rather than depend on dispatch order, we detect the collision at load time and
+// snap the offending action back to its default, keeping region nav intact.
+func (km *Keymap) resolveConversationConflicts() {
+	defaults := DefaultKeymap().Conversation
+	up := km.Conversation.RegionUp
+	down := km.Conversation.RegionDown
+	collides := func(key string) bool {
+		return key != "" && (key == up || key == down)
+	}
+	if collides(km.Conversation.JumpToTree) {
+		km.Conversation.JumpToTree = defaults.JumpToTree
+	}
+	if collides(km.Conversation.SwitchRegion) {
+		km.Conversation.SwitchRegion = defaults.SwitchRegion
+	}
+	if collides(km.Conversation.ExecutionContexts) {
+		km.Conversation.ExecutionContexts = defaults.ExecutionContexts
+	}
+}
+
 // navKeyTypes maps canonical nav key names to tea.KeyType for synthetic KeyMsg creation.
 var navKeyTypes = map[string]tea.KeyType{
 	"up":     tea.KeyUp,
