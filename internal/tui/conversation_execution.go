@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -148,14 +150,10 @@ func (a *App) initExecutionRail(agents []session.Subagent) {
 }
 
 func (a *App) mainExecutionStatus() string {
-	switch {
-	case a.currentSess.IsResponding:
-		return "running"
-	case a.currentSess.IsLive:
+	if a.currentSess.IsLive || a.currentSess.IsResponding {
 		return "live"
-	default:
-		return "idle"
 	}
+	return "ended"
 }
 
 func (a *App) executionAgentStatuses(agents []session.Subagent) map[string]string {
@@ -166,17 +164,68 @@ func (a *App) executionAgentStatuses(agents []session.Subagent) map[string]strin
 	}
 	for _, run := range runs {
 		for _, agent := range run.Agents {
-			if agent.AgentID != "" {
-				statuses[agent.AgentID] = workflowAgentStatus(agent.State)
+			if agent.AgentID == "" {
+				continue
+			}
+			switch workflowAgentStatus(agent.State) {
+			case "running":
+				statuses[agent.AgentID] = "live"
+			case "completed":
+				statuses[agent.AgentID] = "ended"
+			case "stopped":
+				statuses[agent.AgentID] = "stopped"
 			}
 		}
 	}
 	for _, agent := range agents {
-		if statuses[agent.ID] == "" {
-			statuses[agent.ID] = "unknown"
+		if statuses[agent.ID] != "" {
+			continue
+		}
+		if agent.EndedAt.IsZero() {
+			statuses[agent.ID] = "live"
+		} else {
+			statuses[agent.ID] = "ended"
 		}
 	}
 	return statuses
+}
+
+func executionContextTimes(context executionContext) (time.Time, time.Time) {
+	if context.Agent.ID != "" {
+		return context.Agent.StartedAt, context.Agent.EndedAt
+	}
+	start := time.Time{}
+	if !context.Agent.Timestamp.IsZero() {
+		start = context.Agent.Timestamp
+	}
+	return start, time.Time{}
+}
+
+func (a *App) executionContextTimeLabel(context executionContext) string {
+	start, end := executionContextTimes(context)
+	if context.Agent.ID == "" {
+		start = a.currentSess.Created
+		if context.Status != "live" {
+			end = a.currentSess.ModTime
+		}
+	}
+	if start.IsZero() {
+		return "time unknown"
+	}
+	startLabel := start.Format("01-02 15:04")
+	if context.Status == "live" {
+		return startLabel + " → now"
+	}
+	if end.IsZero() {
+		end = context.Agent.Timestamp
+	}
+	if end.IsZero() {
+		return startLabel + " → ?"
+	}
+	if start.Year() == end.Year() && start.YearDay() == end.YearDay() {
+		return startLabel + " → " + end.Format("15:04")
+	}
+	return startLabel + " → " + end.Format("01-02 15:04")
 }
 
 func (a *App) executionContextByKey(key string) executionContext {
@@ -381,6 +430,8 @@ func (a *App) handleExecutionRailKey(key string) bool {
 	switch key {
 	case a.keymap.Conversation.ExecutionContexts, "esc", "left":
 		rail.Focused = false
+	case a.keymap.Conversation.Actions:
+		a.executionContextMenu = true
 	case "home":
 		rail.CursorKey = contexts[0].Key
 	case "end":
@@ -404,9 +455,9 @@ func (a *App) handleExecutionRailKey(key string) bool {
 
 func executionStatusGlyph(status string) string {
 	switch status {
-	case "running":
+	case "live":
 		return taskInProgressStyle.Render("●")
-	case "completed", "live":
+	case "ended":
 		return taskDoneStyle.Render("●")
 	case "stopped":
 		return errorStyle.Render("●")
@@ -419,7 +470,7 @@ func (a *App) executionRailCells() []string {
 	cells := make([]string, 0, len(a.conv.execution.Contexts))
 	labelWidth := max(a.width-5, 8)
 	for _, context := range a.conv.execution.Contexts {
-		label := context.Status + " · " + context.Type + " · " + context.Label
+		label := context.Status + " · " + a.executionContextTimeLabel(context) + " · " + context.Type + " · " + context.Label
 		if context.Agent.ID != "" && context.Agent.FirstPrompt != "" {
 			prompt := strings.ReplaceAll(context.Agent.FirstPrompt, "\n", " ")
 			label += " · " + prompt
@@ -481,6 +532,114 @@ func (a *App) executionContextAtY(screenY int) (string, bool) {
 		return "", false
 	}
 	return a.conv.execution.Contexts[idx].Key, true
+}
+
+// executionContextOrigin resolves where an agent context was launched from,
+// walking up flow nodes (agent → phase → workflow → turn) until it finds a node
+// whose origin carries an exact spawn edge in some transcript.
+func (a *App) executionContextOrigin(context executionContext) (session.FlowOrigin, bool) {
+	if context.Agent.ID == "" || a.conv.flow == nil {
+		return session.FlowOrigin{}, false
+	}
+	nodeID := session.FlowAgentNodeID(context.Agent.ID)
+	for range 8 {
+		node, ok := a.conv.flow.Node(nodeID)
+		if !ok {
+			break
+		}
+		if node.Origin.Transcript != "" && (node.Origin.MessageUUID != "" || node.Origin.EntryIndex >= 0) {
+			return node.Origin, true
+		}
+		if node.ParentID == "" || node.ParentID == nodeID {
+			break
+		}
+		nodeID = node.ParentID
+	}
+	if context.Agent.OriginTranscript != "" && context.Agent.OriginMessageUUID != "" {
+		return session.FlowOrigin{
+			Transcript:  context.Agent.OriginTranscript,
+			MessageUUID: context.Agent.OriginMessageUUID,
+			EntryIndex:  context.Agent.OriginEntryIndex,
+			BlockIndex:  context.Agent.OriginBlockIndex,
+		}, true
+	}
+	return session.FlowOrigin{}, false
+}
+
+func (a *App) cursorExecutionContext() executionContext {
+	return a.executionContextByKey(a.conv.execution.CursorKey)
+}
+
+// jumpToExecutionOrigin closes the context menu and opens the exact turn that
+// spawned the selected context, switching execution contexts if the origin
+// lives in a different transcript.
+func (a *App) jumpToExecutionOrigin() (tea.Model, tea.Cmd) {
+	a.executionContextMenu = false
+	a.conv.execution.Focused = false
+	context := a.cursorExecutionContext()
+	origin, ok := a.executionContextOrigin(context)
+	if !ok {
+		a.copiedMsg = "No spawn origin for this context"
+		return a, nil
+	}
+	target := metaEntryTarget{
+		kind:        metaTargetDecision,
+		transcript:  origin.Transcript,
+		messageUUID: origin.MessageUUID,
+		entryIndex:  origin.EntryIndex,
+		blockIdx:    origin.BlockIndex,
+	}
+	if m, cmd, handled := a.jumpToMetaTarget(target); handled {
+		return m, cmd
+	}
+	a.copiedMsg = "Origin turn is not available"
+	return a, nil
+}
+
+func (a *App) handleExecutionContextMenuKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case a.keymap.Conversation.JumpToTree, strings.ToLower(a.keymap.Conversation.JumpToTree), "enter":
+		return a.jumpToExecutionOrigin()
+	case a.keymap.Conversation.ExecutionContexts, "esc", "q":
+		a.executionContextMenu = false
+	}
+	return a, nil
+}
+
+func (a *App) renderExecutionContextMenu() string {
+	context := a.cursorExecutionContext()
+	title := lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true).Render("Execution Context")
+	var b strings.Builder
+	b.WriteString(title + "\n\n")
+	label := context.Label
+	if label == "" {
+		label = "main"
+	}
+	b.WriteString(dimStyle.Render("Context: ") + label + "\n")
+	b.WriteString(dimStyle.Render("Status:  ") + context.Status + " · " + a.executionContextTimeLabel(context) + "\n")
+
+	origin, ok := a.executionContextOrigin(context)
+	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	d := dimStyle
+	if ok {
+		originName := "main"
+		if oc, found := a.executionContextForTranscript(origin.Transcript); found && oc.Agent.ID != "" {
+			originName = oc.Label
+		}
+		b.WriteString(d.Render("Origin:  ") + originName + "\n\n")
+		b.WriteString(hl.Render(displayKey(a.keymap.Conversation.JumpToTree)) + d.Render(":jump to origin turn") + "   ")
+	} else if context.Agent.ID == "" {
+		b.WriteString(d.Render("Origin:  session root") + "\n\n")
+	} else {
+		b.WriteString(d.Render("Origin:  unavailable") + "\n\n")
+	}
+	b.WriteString(hl.Render("esc") + d.Render(":close"))
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1).
+		Render(b.String())
 }
 
 func (a *App) refreshExecutionRail() {

@@ -48,13 +48,113 @@ func TestExecutionRailRendersVerticalWindowFollowingCursor(t *testing.T) {
 	}
 }
 
+func TestExecutionRowShowsLifecycleStatusAndTimes(t *testing.T) {
+	app, _, _ := setupConversationStateFixture(t)
+	plain := stripANSI(app.renderConvSplit())
+	// The agent transcripts carry no terminal signal, so they read as live with a
+	// start → now window; main reflects the (non-live) session as ended.
+	if !strings.Contains(plain, "live · 07-04 10:01 → now · agent · parent11") {
+		t.Fatalf("parent lifecycle row missing: %q", plain)
+	}
+	if !strings.Contains(plain, "ended ·") {
+		t.Fatalf("main lifecycle status missing: %q", plain)
+	}
+}
+
+func TestExecutionContextMenuJumpsToSpawnOrigin(t *testing.T) {
+	app, sess, _ := setupConversationStateFixture(t)
+	app = pressKey(app, "A")
+	app = pressKey(app, "down") // cursor → parent agent context
+	if got := app.cursorExecutionContext().Agent.ID; got != "parent1111111111" {
+		t.Fatalf("rail cursor = %q, want parent agent", got)
+	}
+	app = pressKey(app, "x")
+	if !app.executionContextMenu {
+		t.Fatal("x did not open the execution context menu")
+	}
+	menu := stripANSI(app.renderExecutionContextMenu())
+	if !strings.Contains(menu, "jump to origin turn") {
+		t.Fatalf("context menu missing jump action: %q", menu)
+	}
+
+	app = pressKey(app, "J")
+	if app.executionContextMenu || app.conv.execution.Focused {
+		t.Fatalf("jump left menu/rail focused: menu=%t focus=%t", app.executionContextMenu, app.conv.execution.Focused)
+	}
+	// parent agent was spawned from the root transcript's spawn-parent turn.
+	if app.conv.execution.ActiveKey != executionContextKey(sess.FilePath) {
+		t.Fatalf("jump active context = %q, want root", app.conv.execution.ActiveKey)
+	}
+	if !app.conv.inspector.Zoom {
+		t.Fatal("origin jump did not open the conversation inspector")
+	}
+	// mergeConversationTurns folds the root tool turns into one turn; the origin
+	// (entry index of spawn-parent) must land inside it and focus the parent-call
+	// tool_use block.
+	item, ok := app.selectedConversationItem()
+	if !ok || item.kind != convMsg || item.merged.startIdx > 2 || item.merged.endIdx < 2 {
+		t.Fatalf("origin jump landed on %#v, want the turn containing spawn-parent (entry 2)", item)
+	}
+	if app.conv.split.Folds != nil {
+		bc := app.conv.split.Folds.BlockCursor
+		if bc >= 0 && bc < len(app.conv.split.Folds.Entry.Content) {
+			if got := app.conv.split.Folds.Entry.Content[bc].ID; got != "parent-call" {
+				t.Fatalf("origin jump focused block %q, want parent-call", got)
+			}
+		}
+	}
+}
+
+func TestExecutionRailAndMenuSuppressGlobalShortcuts(t *testing.T) {
+	app, _, _ := setupConversationStateFixture(t)
+	if app.isInOverlay() {
+		t.Fatal("precondition: overlay active before focusing rail")
+	}
+	app = pressKey(app, "A")
+	if !app.conv.execution.Focused || !app.isInOverlay() {
+		t.Fatalf("rail focus must count as overlay: focus=%t overlay=%t", app.conv.execution.Focused, app.isInOverlay())
+	}
+	// A detail shortcut (1/2/3) must not leak through to the conversation while the
+	// rail owns input; rightPaneMode stays put.
+	before := app.conv.rightPaneMode
+	app = pressKey(app, "3")
+	if app.conv.rightPaneMode != before {
+		t.Fatalf("detail shortcut leaked while rail focused: mode %d → %d", before, app.conv.rightPaneMode)
+	}
+	if !app.conv.execution.Focused {
+		t.Fatal("digit key should be absorbed by rail, not exit focus")
+	}
+
+	app = pressKey(app, "x")
+	if !app.executionContextMenu || !app.isInOverlay() {
+		t.Fatalf("context menu must count as overlay: menu=%t overlay=%t", app.executionContextMenu, app.isInOverlay())
+	}
+	app = pressKey(app, "2")
+	if app.conv.rightPaneMode != before {
+		t.Fatalf("detail shortcut leaked while menu open: mode %d → %d", before, app.conv.rightPaneMode)
+	}
+}
+
+func TestExecutionContextMenuMainHasNoOrigin(t *testing.T) {
+	app, _, _ := setupConversationStateFixture(t)
+	app = pressKey(app, "A") // cursor starts on main
+	if app.cursorExecutionContext().Agent.ID != "" {
+		t.Fatal("expected main context at rail cursor")
+	}
+	app = pressKey(app, "x")
+	app = pressKey(app, "J")
+	if app.copiedMsg != "No spawn origin for this context" {
+		t.Fatalf("main origin jump feedback = %q", app.copiedMsg)
+	}
+}
+
 func TestExecutionRailSwitchesContextsAndRestoresSelection(t *testing.T) {
 	app, sess, parentPath := setupConversationStateFixture(t)
 	if got := len(app.conv.execution.Contexts); got != 4 {
 		t.Fatalf("execution contexts = %d, want main + 3 transcript agents", got)
 	}
 	plain := stripANSI(app.renderConvSplit())
-	for _, want := range []string{"EXECUTION CONTEXTS", "main", "unknown · agent", "coordinate"} {
+	for _, want := range []string{"EXECUTION CONTEXTS", "main", "agent · parent11", "coordinate"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("execution rail missing %q: %q", want, plain)
 		}

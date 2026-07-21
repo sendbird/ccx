@@ -320,6 +320,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleBlockFilterInput(msg)
 	}
 
+	if a.executionContextMenu {
+		return a.handleExecutionContextMenuKey(key)
+	}
+
 	if a.conv.execution.Focused {
 		if nav, navMsg := a.keymap.TranslateNav(key, msg); nav != "" {
 			key = nav

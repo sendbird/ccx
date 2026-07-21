@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func FindSubagents(sessionFile string) ([]Subagent, error) {
@@ -56,10 +57,88 @@ func FindSubagents(sessionFile string) ([]Subagent, error) {
 		}
 	}
 
+	applySubagentLifecycles(sessionFile, agents)
 	sort.Slice(agents, func(i, j int) bool {
 		return agents[i].Timestamp.After(agents[j].Timestamp)
 	})
 	return agents, nil
+}
+
+func applySubagentLifecycles(sessionFile string, agents []Subagent) {
+	byID := make(map[string]*Subagent, len(agents))
+	paths := []string{sessionFile}
+	for i := range agents {
+		byID[agents[i].ID] = &agents[i]
+		paths = append(paths, agents[i].FilePath)
+	}
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+		for sc.Scan() {
+			line := sc.Text()
+			entry, err := ParseEntry(line)
+			if err != nil {
+				continue
+			}
+			// Synchronous agents end when their spawning tool_result lands.
+			if entry.ToolResultAgentID != "" && !entry.ToolResultAsync {
+				if agent := byID[entry.ToolResultAgentID]; agent != nil {
+					setAgentEnd(agent, entry.Timestamp)
+				}
+			}
+			// Background agents end when a terminal <task-notification> arrives.
+			// The tag content is preserved on system_tag / text blocks by the parser.
+			for _, b := range entry.Content {
+				if b.Type != "system_tag" && b.Type != "text" {
+					continue
+				}
+				id := xmlValue(b.Text, "task-id")
+				if id == "" {
+					continue
+				}
+				if agent := byID[id]; agent != nil && terminalTaskStatus(xmlValue(b.Text, "status")) {
+					setAgentEnd(agent, entry.Timestamp)
+				}
+			}
+		}
+		f.Close()
+	}
+}
+
+func xmlValue(text, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
+	start := strings.Index(text, startTag)
+	if start < 0 {
+		return ""
+	}
+	start += len(startTag)
+	end := strings.Index(text[start:], endTag)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(text[start : start+end])
+}
+
+func terminalTaskStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "completed", "failed", "error", "cancelled", "stopped":
+		return true
+	default:
+		return false
+	}
+}
+
+func setAgentEnd(agent *Subagent, at time.Time) {
+	if at.IsZero() || (!agent.StartedAt.IsZero() && at.Before(agent.StartedAt)) ||
+		(!agent.EndedAt.IsZero() && !at.Before(agent.EndedAt)) {
+		return
+	}
+	agent.EndedAt = at
 }
 
 // isContextContinuation returns true if the entry is an injected context summary
@@ -153,6 +232,9 @@ func scanSubagentFile(path string) Subagent {
 			}
 			agent.MsgCount++
 			if !entry.Timestamp.IsZero() {
+				if agent.StartedAt.IsZero() {
+					agent.StartedAt = entry.Timestamp
+				}
 				agent.Timestamp = entry.Timestamp
 			}
 			if agent.FirstPrompt == "" && entry.Role == "user" {

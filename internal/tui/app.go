@@ -358,8 +358,9 @@ type App struct {
 	urlDiffVP    viewport.Model                // scrollable diff viewport
 	urlDiffReady bool                          // whether diff viewport is initialized
 
-	// Conversation inspector actions menu (x key)
-	convActionsMenu bool
+	// Conversation inspector and execution-context action menus (x key)
+	convActionsMenu      bool
+	executionContextMenu bool
 
 	// Views menu (V key)
 	viewsMenu bool
@@ -1379,6 +1380,13 @@ func (a *App) View() string {
 		} else {
 			help = formatHelp("↑↓:nav ↵:open y:copy /:search esc:close")
 		}
+	}
+
+	// Execution-context action menu hint box
+	if a.executionContextMenu && a.state == viewConversation {
+		hintBox := a.renderExecutionContextMenu()
+		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
+		help = formatHelp(fmtKey(a.keymap.Conversation.JumpToTree, "jump") + " esc:close")
 	}
 
 	// Conversation inspector actions menu hint box

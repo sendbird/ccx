@@ -118,8 +118,11 @@ func (a *App) sessHelpLine() string {
 // --- Conversation view help ---
 
 func (a *App) convHelpLine(badges string) string {
+	if a.executionContextMenu {
+		return formatHelp(displayKey(a.keymap.Conversation.JumpToTree) + ":jump to origin  esc:close")
+	}
 	if a.conv.execution.Focused {
-		return formatHelp("↑↓/jk:context ↵/→:open A/esc:back q:quit")
+		return formatHelp("↑↓/jk:context ↵/→:open x:menu A/esc:back q:quit")
 	}
 	if a.conv.blockFiltering {
 		return "  " + a.conv.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")

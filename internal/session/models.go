@@ -119,6 +119,8 @@ type Entry struct {
 	// agent transcript AgentID is the parent while ToolResultAgentID is its child.
 	ToolResultAgentID string
 	ToolResultRunID   string
+	ToolResultStatus  string
+	ToolResultAsync   bool
 	RawJSON           string
 }
 
@@ -149,7 +151,9 @@ type Subagent struct {
 	FilePath    string
 	MsgCount    int
 	FirstPrompt string
-	Timestamp   time.Time
+	StartedAt   time.Time
+	EndedAt     time.Time
+	Timestamp   time.Time // last transcript event
 	AgentType   string
 
 	// WorkflowRunID is set for agents spawned by a Workflow run — they live under
