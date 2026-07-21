@@ -16,6 +16,52 @@ func agentByID(agents []Subagent, id string) (Subagent, bool) {
 	return Subagent{}, false
 }
 
+// TestSubagentLifecycleFromNestedTranscriptSignal verifies that a completion
+// signal living only inside a parent agent's transcript (not the root session)
+// still ends the child, proving discovery-pass signals are reused without a
+// second read of the agent files.
+func TestSubagentLifecycleFromNestedTranscriptSignal(t *testing.T) {
+	root := t.TempDir()
+	sessID := "sess-nested"
+	sessFile := filepath.Join(root, sessID+".jsonl")
+	// Root only spawns the parent; it has no signal for the child.
+	rootTranscript := `{"type":"assistant","uuid":"spawn-parent","timestamp":"2026-07-04T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-parent","name":"Agent","input":{"prompt":"p"}}]}}
+`
+	if err := os.WriteFile(sessFile, []byte(rootTranscript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	subDir := filepath.Join(root, sessID, "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The parent transcript is where the child's synchronous completion lands.
+	parent := `{"type":"user","agentId":"parent111111111","timestamp":"2026-07-04T10:01:00Z","message":{"role":"user","content":"go"}}
+{"type":"assistant","agentId":"parent111111111","timestamp":"2026-07-04T10:01:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-child","name":"Agent","input":{"prompt":"c"}}]}}
+{"type":"user","agentId":"parent111111111","timestamp":"2026-07-04T10:04:00Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-child","content":"done"}]},"toolUseResult":{"agentId":"child222222222","agentType":"general-purpose"}}
+`
+	child := `{"type":"user","agentId":"child222222222","timestamp":"2026-07-04T10:01:30Z","message":{"role":"user","content":"go"}}
+`
+	if err := os.WriteFile(filepath.Join(subDir, "agent-parent111111111.jsonl"), []byte(parent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "agent-child222222222.jsonl"), []byte(child), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agents, err := FindSubagents(sessFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childAgent, ok := agentByID(agents, "child222222222")
+	if !ok {
+		t.Fatal("child agent missing")
+	}
+	wantEnd := time.Date(2026, 7, 4, 10, 4, 0, 0, time.UTC)
+	if !childAgent.EndedAt.Equal(wantEnd) {
+		t.Fatalf("child EndedAt = %v, want %v (nested-transcript signal)", childAgent.EndedAt, wantEnd)
+	}
+}
+
 // TestSubagentLifecycleFromSyncResult verifies that a synchronous agent whose
 // parent tool_result carries agentId is marked ended at the result timestamp,
 // while an agent that never reported completion stays live (EndedAt zero).
