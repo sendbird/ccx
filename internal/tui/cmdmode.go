@@ -93,6 +93,8 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewWorkflows) }},
 		{name: "preview:contexts", aliases: []string{"p:contexts", "p:ctx", "contexts", "page:contexts"}, desc: "context tree preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewContexts) }},
+		{name: "preview:shells", aliases: []string{"p:shells", "shells"}, desc: "background shells preview", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewShells) }},
 		{name: "preview:refs", aliases: []string{"p:refs", "refs", "preview:pr", "p:pr"}, desc: "PR/Jira references preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewRefs) }},
 		{name: "preview:live", aliases: []string{"p:live"}, desc: "live preview", views: cmdSessions,

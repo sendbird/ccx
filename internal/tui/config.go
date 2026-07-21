@@ -230,7 +230,7 @@ func (a *App) shortcutConfigItems() []session.ConfigItem {
 	var items []session.ConfigItem
 	for viewName, vs := range a.shortcuts {
 		addSide := func(side string, sm ShortcutMap) {
-			for i := '1'; i <= '9'; i++ {
+			for _, i := range "0123456789" {
 				k := string(i)
 				if cmd, ok := sm[k]; ok {
 					items = append(items, session.ConfigItem{

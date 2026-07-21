@@ -19,14 +19,16 @@ func DefaultShortcuts() Shortcuts {
 	return Shortcuts{
 		"sessions": {
 			Left: ShortcutMap{
+				"0": "preview:live",
 				"1": "preview:conv",
-				"2": "preview:stats",
-				"3": "preview:mem",
+				"2": "preview:contexts",
+				"3": "preview:agents",
 				"4": "preview:tasks",
-				"5": "preview:agents",
-				"6": "preview:live",
-				"7": "preview:contexts",
-				"8": "preview:refs",
+				"5": "preview:refs",
+				"6": "preview:mem",
+				"7": "preview:stats",
+				"8": "preview:wf",
+				"9": "preview:shells",
 			},
 		},
 		"conversation": {
@@ -91,17 +93,30 @@ func migrateShortcuts(sc Shortcuts) {
 	if !ok || sess.Left == nil {
 		return
 	}
-	if sess.Left["5"] == "preview:live" {
-		sess.Left["5"] = "preview:agents"
-		if _, exists := sess.Left["6"]; !exists {
-			sess.Left["6"] = "preview:live"
+	// Older defaults had no "0" key and put live at 5 or 6 (e.g.
+	// 1conv 2stats 3mem 4tasks 5agents 6live 7contexts 8refs). If the map still
+	// looks like one of those untouched defaults, migrate it wholesale to the
+	// flow-ordered layout with 0=live. A config the user has customized (its "1"
+	// is not the old preview:conv, or a "0" already exists) is left untouched.
+	if _, hasZero := sess.Left["0"]; hasZero {
+		sc["sessions"] = sess
+		return
+	}
+	looksLikeOldDefault := sess.Left["1"] == "preview:conv" &&
+		(sess.Left["6"] == "preview:live" || sess.Left["5"] == "preview:live")
+	if looksLikeOldDefault {
+		sess.Left = ShortcutMap{
+			"0": "preview:live",
+			"1": "preview:conv",
+			"2": "preview:contexts",
+			"3": "preview:agents",
+			"4": "preview:tasks",
+			"5": "preview:refs",
+			"6": "preview:mem",
+			"7": "preview:stats",
+			"8": "preview:wf",
+			"9": "preview:shells",
 		}
-	}
-	if _, exists := sess.Left["7"]; !exists {
-		sess.Left["7"] = "preview:contexts"
-	}
-	if _, exists := sess.Left["8"]; !exists {
-		sess.Left["8"] = "preview:refs"
 	}
 	sc["sessions"] = sess
 }
@@ -225,9 +240,9 @@ func (a *App) shortcutHint() string {
 		return ""
 	}
 
-	// Build hint in key order (1-9)
+	// Build hint in key order (0-9); 0 is rendered first as the quick "live" key.
 	var parts []string
-	for i := '1'; i <= '9'; i++ {
+	for _, i := range "0123456789" {
 		key := string(i)
 		if cmd, ok := sm[key]; ok {
 			// Shorten command name: "preview:conv" -> "conv"

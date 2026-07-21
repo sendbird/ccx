@@ -12,17 +12,17 @@ func TestDefaultShortcuts(t *testing.T) {
 	if !ok {
 		t.Fatal("expected sessions view shortcuts")
 	}
+	if sess.Left["0"] != "preview:live" {
+		t.Errorf("sessions left 0 = %q, want preview:live", sess.Left["0"])
+	}
 	if sess.Left["1"] != "preview:conv" {
 		t.Errorf("sessions left 1 = %q, want preview:conv", sess.Left["1"])
 	}
-	if sess.Left["5"] != "preview:agents" {
-		t.Errorf("sessions left 5 = %q, want preview:agents", sess.Left["5"])
+	if sess.Left["2"] != "preview:contexts" {
+		t.Errorf("sessions left 2 = %q, want preview:contexts", sess.Left["2"])
 	}
-	if sess.Left["6"] != "preview:live" {
-		t.Errorf("sessions left 6 = %q, want preview:live", sess.Left["6"])
-	}
-	if sess.Left["7"] != "preview:contexts" {
-		t.Errorf("sessions left 7 = %q, want preview:contexts", sess.Left["7"])
+	if sess.Left["3"] != "preview:agents" {
+		t.Errorf("sessions left 3 = %q, want preview:agents", sess.Left["3"])
 	}
 
 	// Conversation view
@@ -101,6 +101,38 @@ func TestMergeShortcuts(t *testing.T) {
 	}
 }
 
+// TestMigrateShortcutsFromOldDefault verifies a persisted config still on the
+// pre-0-key default layout is migrated wholesale to the flow-ordered layout
+// (0=live), while a user-customized layout is left untouched.
+func TestMigrateShortcutsFromOldDefault(t *testing.T) {
+	// Old default: 1conv 2stats 3mem 4tasks 5agents 6live 7contexts 8refs.
+	old := Shortcuts{"sessions": ViewShortcuts{Left: ShortcutMap{
+		"1": "preview:conv", "2": "preview:stats", "3": "preview:mem",
+		"4": "preview:tasks", "5": "preview:agents", "6": "preview:live",
+		"7": "preview:contexts", "8": "preview:refs",
+	}}}
+	migrateShortcuts(old)
+	got := old["sessions"].Left
+	if got["0"] != "preview:live" {
+		t.Errorf("migrated 0 = %q, want preview:live", got["0"])
+	}
+	if got["1"] != "preview:conv" || got["2"] != "preview:contexts" || got["3"] != "preview:agents" {
+		t.Errorf("migration did not apply flow order: %v", got)
+	}
+
+	// A customized layout (already has 0, or 1 is not preview:conv) is untouched.
+	custom := Shortcuts{"sessions": ViewShortcuts{Left: ShortcutMap{
+		"1": "preview:refs", "2": "preview:stats",
+	}}}
+	migrateShortcuts(custom)
+	if custom["sessions"].Left["1"] != "preview:refs" {
+		t.Errorf("customized layout was clobbered: %v", custom["sessions"].Left)
+	}
+	if _, hasZero := custom["sessions"].Left["0"]; hasZero {
+		t.Errorf("customized layout should not gain a 0 key: %v", custom["sessions"].Left)
+	}
+}
+
 func TestShortcutHint(t *testing.T) {
 	app := newTestApp(fakeSessions())
 	app.shortcuts = DefaultShortcuts()
@@ -110,18 +142,18 @@ func TestShortcutHint(t *testing.T) {
 	if hint == "" {
 		t.Fatal("expected non-empty hint for sessions view")
 	}
-	// Should contain "1:conv"
+	// Should contain "1:conv" and the new 0:live quick-key
+	if !containsSubstring(hint, "0:live") {
+		t.Errorf("hint %q should contain 0:live", hint)
+	}
 	if !containsSubstring(hint, "1:conv") {
 		t.Errorf("hint %q should contain 1:conv", hint)
 	}
-	if !containsSubstring(hint, "5:agents") {
-		t.Errorf("hint %q should contain 5:agents", hint)
+	if !containsSubstring(hint, "3:agents") {
+		t.Errorf("hint %q should contain 3:agents", hint)
 	}
-	if !containsSubstring(hint, "6:live") {
-		t.Errorf("hint %q should contain 6:live", hint)
-	}
-	if !containsSubstring(hint, "7:contexts") {
-		t.Errorf("hint %q should contain 7:contexts", hint)
+	if !containsSubstring(hint, "2:contexts") {
+		t.Errorf("hint %q should contain 2:contexts", hint)
 	}
 }
 
