@@ -325,6 +325,48 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleExecutionContextMenuKey(key)
 	}
 
+	// Uppercase K/J move focus between the vertically-stacked regions
+	// (RESOURCES ↑ CONVERSATION ↕ EXECUTION CONTEXTS ↓). Handled before the
+	// execution-rail and split-pane branches so it works from any region,
+	// including while the rail itself is focused. Skipped during list filtering,
+	// which owns key input.
+	if !a.isConvListFiltering() {
+		// JumpToTree (origin-turn / tmux-pane jump) is bound to `o` by default; J
+		// is reserved for region navigation. Enter and the x actions menu also
+		// cover jumping where applicable.
+		if jt := a.keymap.Conversation.JumpToTree; jt != "" && key == jt {
+			item, ok := a.selectedConversationItem()
+			if ok && item.kind == convSessionMeta {
+				if target, has := a.currentMetaTarget(); has {
+					if m, cmd, jumped := a.jumpToMetaTarget(target); jumped {
+						return m, cmd
+					}
+				}
+				a.copiedMsg = "no origin turn for this entry"
+				return a, nil
+			}
+			if ok && item.kind != convMsg {
+				return a.jumpToOriginMessage()
+			}
+			if a.config.TmuxEnabled {
+				return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
+			}
+			return a, nil
+		}
+		switch key {
+		case a.keymap.Conversation.RegionUp:
+			if a.cycleConversationRegion(-1) {
+				a.pauseLiveTail()
+			}
+			return a, nil
+		case a.keymap.Conversation.RegionDown:
+			if a.cycleConversationRegion(1) {
+				a.pauseLiveTail()
+			}
+			return a, nil
+		}
+	}
+
 	if a.conv.execution.Focused {
 		if nav, navMsg := a.keymap.TranslateNav(key, msg); nav != "" {
 			key = nav
@@ -439,24 +481,6 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a.openLiveInput(a.currentSess.ProjectPath, a.currentSess.ID)
-	case a.keymap.Conversation.JumpToTree:
-		item, ok := a.selectedConversationItem()
-		if ok && item.kind == convSessionMeta {
-			if target, has := a.currentMetaTarget(); has {
-				if m, cmd, jumped := a.jumpToMetaTarget(target); jumped {
-					return m, cmd
-				}
-			}
-			a.copiedMsg = "no origin turn for this entry"
-			return a, nil
-		}
-		if ok && item.kind != convMsg {
-			return a.jumpToOriginMessage()
-		}
-		if a.config.TmuxEnabled {
-			return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
-		}
-		return a, nil
 	case a.keymap.Conversation.Actions:
 		a.convActionsMenu = true
 		return a, nil
@@ -729,7 +753,12 @@ func (a *App) updateConvPreview() {
 	// Session-meta rows (memory/tasks-plan/summary) render as a selectable
 	// synthetic entry so each item can be cursor-selected and jumped from, even
 	// though they map to the root flow node. Handled below via the fold path.
-	if hasNode && item.kind != convSessionMeta && a.conv.inspector.Tab != inspectorConversation {
+	// Exception: the "summary" (Session Flow) row renders session-wide facet tabs
+	// (Changes/Files/Refs/Images/Stats) through the facet path so the `p` picker
+	// can survey the whole session; its Overview stays on the synthetic path.
+	summaryFacet := item.kind == convSessionMeta && item.sessionMeta == "summary" &&
+		a.conv.inspector.Tab != inspectorOverview && a.conv.inspector.Tab != inspectorConversation
+	if hasNode && (item.kind != convSessionMeta || summaryFacet) && a.conv.inspector.Tab != inspectorConversation {
 		content := a.renderInspector(item, node, a.renderInspectorTab(item, node))
 		a.conv.inspector.Rendered = content
 		// baseKey keeps rows that share a flow node distinct (all session

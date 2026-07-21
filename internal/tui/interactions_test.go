@@ -134,10 +134,12 @@ func TestHandleConvActionsMenuKeepsEmptyFilesFacet(t *testing.T) {
 
 func TestHandleConvActionsMenuCopyCopiesRenderedFacet(t *testing.T) {
 	app, _, _ := setupInspectorFlowApp(t)
+	// Turn a1 owns the reference https://github.com/acme/repo/pull/42, so its
+	// node-scope Refs facet is non-empty.
 	selectInspectorItem(t, app, func(item convItem) bool {
-		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+		return item.kind == convMsg && item.merged.entry.UUID == "a1"
 	})
-	app.openInspector(inspectorRefs, session.ScopeSession, false)
+	app.openInspector(inspectorRefs, session.ScopeNode, false)
 	app.keymap.Actions.Copy = "C"
 
 	var copied string

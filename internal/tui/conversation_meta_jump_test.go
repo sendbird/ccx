@@ -132,12 +132,12 @@ func TestPinnedPlanEnterOpensDetailEscRestoresAndJumps(t *testing.T) {
 	}
 
 	app = pressKey(app, "enter")
-	app = pressKey(app, "J")
+	app = pressKey(app, "o")
 	if app.conv.contextActive {
-		t.Fatal("J from plan detail did not switch selection to the origin conversation turn")
+		t.Fatal("o from plan detail did not switch selection to the origin conversation turn")
 	}
 	if got := app.selectedConversationItemID(); got == originID {
-		t.Fatalf("J kept pinned selection %q instead of jumping to origin", got)
+		t.Fatalf("o kept pinned selection %q instead of jumping to origin", got)
 	}
 }
 

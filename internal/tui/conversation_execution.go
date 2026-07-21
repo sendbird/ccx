@@ -597,10 +597,11 @@ func (a *App) jumpToExecutionOrigin() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) handleExecutionContextMenuKey(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case a.keymap.Conversation.JumpToTree, strings.ToLower(a.keymap.Conversation.JumpToTree), "enter":
+	jt := a.keymap.Conversation.JumpToTree
+	switch {
+	case key == "enter" || (jt != "" && (key == jt || key == strings.ToLower(jt))):
 		return a.jumpToExecutionOrigin()
-	case a.keymap.Conversation.ExecutionContexts, "esc", "q":
+	case key == a.keymap.Conversation.ExecutionContexts || key == "esc" || key == "q":
 		a.executionContextMenu = false
 	}
 	return a, nil
@@ -627,7 +628,7 @@ func (a *App) renderExecutionContextMenu() string {
 			originName = oc.Label
 		}
 		b.WriteString(d.Render("Origin:  ") + originName + "\n\n")
-		b.WriteString(hl.Render(displayKey(a.keymap.Conversation.JumpToTree)) + d.Render(":jump to origin turn") + "   ")
+		b.WriteString(hl.Render("↵") + d.Render(":jump to origin turn") + "   ")
 	} else if context.Agent.ID == "" {
 		b.WriteString(d.Render("Origin:  session root") + "\n\n")
 	} else {
