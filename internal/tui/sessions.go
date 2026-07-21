@@ -1573,118 +1573,242 @@ func overlayCenteredModal(bg, fg string, screenW, screenH int, opts modalOptions
 }
 
 // renderHelpModal renders a centered bordered modal with help content overlaid on bg.
-func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint string) string {
+// helpRow is one key→description line in the help overlay.
+type helpRow struct{ key, desc string }
+
+// helpModalContextRows returns the "This view" key rows for whatever view,
+// region, and mode currently has focus. These are the keys the concise footer
+// trims away — the overlay is where the full per-context list lives.
+func (a *App) helpModalContextRows() (title string, rows []helpRow) {
+	km := a.keymap
+	switch a.state {
+	case viewConversation:
+		if a.conv.execution.Focused {
+			return "Execution contexts", []helpRow{
+				{"↑↓ / jk", "Move between contexts"},
+				{"↵ / →", "Open context"},
+				{displayKey(km.Conversation.Actions), "Context actions (jump to origin)"},
+				{displayKey(km.Conversation.RegionUp) + " / " + displayKey(km.Conversation.RegionDown), "Move between regions"},
+				{displayKey(km.Conversation.ExecutionContexts) + " / esc", "Leave rail"},
+			}
+		}
+		if a.conv.split.Show && a.conv.split.Focus {
+			return "Inspector", []helpRow{
+				{"[ / ]", "Cycle facet"},
+				{"s", "Cycle scope"},
+				{"z", "Zoom"},
+				{displayKey(km.Preview.CopyMode), "Copy mode"},
+				{"←", "Unfocus"},
+			}
+		}
+		return "Conversation", []helpRow{
+			{"↑↓ / jk", "Navigate"},
+			{"↵", "Open / drill in"},
+			{displayKey(km.Conversation.RegionUp) + " / " + displayKey(km.Conversation.RegionDown), "Move between regions"},
+			{displayKey(km.Conversation.JumpToTree), "Jump to origin turn"},
+			{displayKey(km.Conversation.Actions), "Actions"},
+			{displayKey(km.Conversation.SwitchRegion), "Switch region"},
+			{displayKey(km.Conversation.ExecutionContexts), "Execution rail"},
+			{displayKey(km.Conversation.Edit), "Edit"},
+			{displayKey(km.Conversation.Input), "Live input (tmux)"},
+			{"tab", "Toggle inspector"},
+		}
+	case viewGlobalStats:
+		return "Global stats", []helpRow{
+			{"p", "Page menu (tools/mcp/agents/…)"},
+			{"↑↓", "Scroll"},
+			{"1-9", "Jump to page"},
+			{"esc", "Back"},
+		}
+	case viewConfig:
+		return "Config", []helpRow{
+			{"↑↓ / jk", "Navigate"},
+			{"↵ / →", "Open / preview"},
+			{displayKey(km.Session.Search), "Search"},
+			{"p", "Page menu"},
+			{"tab", "Cycle filter"},
+			{"1-9", "Jump to section"},
+			{"esc / ←", "Back / close"},
+		}
+	case viewPlugins:
+		return "Plugins", []helpRow{
+			{"↑↓ / jk", "Navigate"},
+			{"↵ / →", "Open / detail"},
+			{displayKey(km.Session.Search), "Search"},
+			{displayKey(km.Session.Actions), "Actions"},
+			{"esc / ←", "Back / close"},
+		}
+	default: // viewSessions
+		if a.sessSplit.Show && a.sessSplit.Focus {
+			return "Preview (focused)", a.sessionsPreviewContextRows()
+		}
+		return "Sessions", []helpRow{
+			{displayKey(km.Session.Open), "Open / expand"},
+			{displayKey(km.Session.Right) + " / tab", "Preview / cycle mode"},
+			{displayKey(km.Session.Actions), "Actions (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.CopyPath) + "/…)"},
+			{displayKey(km.Session.Edit), "Edit session files"},
+			{displayKey(km.Session.Search), "Search / filter"},
+			{displayKey(km.Session.Views), "Views (stats/config/plugins)"},
+			{displayKey(km.Session.Refresh), "Refresh"},
+			{displayKey(km.Session.Live) + " / " + displayKey(km.Session.Switch), "Live preview / switch to tmux"},
+			{displayKey(km.Session.Select), "Multi-select"},
+			{"o / f / F", "Fold group / all / expand all"},
+			{"D", "Completed-only filter"},
+		}
+	}
+}
+
+// sessionsPreviewContextRows returns the key rows for the focused sessions
+// preview, specialized by the active preview mode.
+func (a *App) sessionsPreviewContextRows() []helpRow {
+	base := []helpRow{{"↑↓ / jk", "Scroll / navigate"}, {"←", "Unfocus"}, {"tab", "Cycle mode"}, {"p", "Page menu"}}
+	switch a.sessPreviewMode {
+	case sessPreviewRefs:
+		return []helpRow{
+			{"↑↓", "Navigate refs"},
+			{"↵ / o", "Open ref"},
+			{displayKey(a.keymap.Session.Select), "Select"},
+			{displayKey(a.keymap.Actions.CopyPath), "Copy"},
+			{"←", "Unfocus"},
+		}
+	case sessPreviewAgents, sessPreviewTasksPlan:
+		return []helpRow{
+			{"↑↓", "Navigate"},
+			{"↵", "Jump to agent"},
+			{displayKey(a.keymap.Session.Search), "Search"},
+			{"←", "Unfocus"},
+		}
+	case sessPreviewWorkflows:
+		return []helpRow{
+			{"↑↓", "Navigate agents"},
+			{"↵", "Open transcript"},
+			{"←", "Unfocus"},
+		}
+	default:
+		return base
+	}
+}
+
+// helpCommonRows returns the cross-view keys shown in every help overlay.
+func (a *App) helpCommonRows() []helpRow {
+	km := a.keymap.Session
+	return []helpRow{
+		{displayKey(km.Command), "Command palette (full actions)"},
+		{displayKey(km.Views), "Switch views"},
+		{displayKey(km.Search), "Search / filter"},
+		{displayKey(km.GlobalSearch), "Global search"},
+		{displayKey(km.Escape), "Back / close"},
+		{displayKey(km.Help), "This help"},
+		{displayKey(km.Quit), "Quit"},
+	}
+}
+
+func (a *App) renderHelpModal(bg string, screenW, screenH int) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	d := dimStyle
+	km := a.keymap
 
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render(" ccx — Help") + "\n\n")
 
-	// Badges: two-column layout
-	sb.WriteString(headerStyle.Render(" Badges") + "\n")
-	type badge struct {
-		style lipgloss.Style
-		badge string
-		desc  string
+	// "This view" — keys for the currently focused view/region/mode.
+	ctxTitle, ctxRows := a.helpModalContextRows()
+	sb.WriteString(headerStyle.Render(" "+ctxTitle) + "\n")
+	for _, r := range ctxRows {
+		sb.WriteString(fmt.Sprintf(" %-14s %s\n", r.key, d.Render(r.desc)))
 	}
-	allBadges := []badge{
-		{liveDotStyle, iconStatusDot + " ", "Live & idle (dot before ID)"},
-		{busyDotStyle, iconStatusDot + " ", "Busy / responding now"},
-		{prBadgeStyle, badgeLabel(iconBadgePR, "PR"), "Open pull request(s)"},
-		{memoryBadge, badgeLabel(iconTask, "JIRA"), "Open Jira issue(s)"},
-		{bgBadgeStyle, badgeLabel(iconBadgeBg, "BG"), "Background shell/monitor/cron"},
-		{monBadgeStyle, badgeLabel(iconBadgeMon, "MON"), "Monitor tool currently in flight"},
-		{inputBadgeStyle, badgeLabel(iconBadgeInput, "INPUT"), "Awaiting your answer (AskUserQuestion)"},
-		{waitBadgeStyle, badgeLabel(iconBadgeWait, "WAIT"), "Idle, waiting for user"},
-		{doneBadgeStyle, badgeLabel(iconBadgeDone, "DONE"), "All work completed"},
-		{stuckBadgeStyle, badgeLabel(iconBadgeStuck, "STUCK"), "Live but stale with unfinished work"},
-		{lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true), badgeLabel(iconBadgeRemote, "REMOTE"), "Remote (experimental)"},
+
+	// Common keys — cross-view. Placed high so the key sections stay visible
+	// even when the (long) sessions Badges/Filters reference is truncated on a
+	// short screen.
+	sb.WriteString("\n" + headerStyle.Render(" Common keys") + "\n")
+	for _, r := range a.helpCommonRows() {
+		sb.WriteString(fmt.Sprintf(" %-14s %s\n", r.key, d.Render(r.desc)))
 	}
-	// Render badges in pairs (two per line)
-	for i := 0; i < len(allBadges); i += 2 {
-		b := allBadges[i]
-		left := fmt.Sprintf(" %s %-16s", b.style.Render(fmt.Sprintf("%-6s", b.badge)), d.Render(b.desc))
-		if i+1 < len(allBadges) {
-			b2 := allBadges[i+1]
-			right := fmt.Sprintf("  %s %s", b2.style.Render(fmt.Sprintf("%-6s", b2.badge)), d.Render(b2.desc))
-			sb.WriteString(left + right + "\n")
-		} else {
-			sb.WriteString(left + "\n")
+
+	if a.state == viewSessions {
+		// Badges: two-column layout
+		sb.WriteString("\n" + headerStyle.Render(" Badges") + "\n")
+		type badge struct {
+			style lipgloss.Style
+			badge string
+			desc  string
+		}
+		allBadges := []badge{
+			{liveDotStyle, iconStatusDot + " ", "Live & idle (dot before ID)"},
+			{busyDotStyle, iconStatusDot + " ", "Busy / responding now"},
+			{prBadgeStyle, badgeLabel(iconBadgePR, "PR"), "Open pull request(s)"},
+			{memoryBadge, badgeLabel(iconTask, "JIRA"), "Open Jira issue(s)"},
+			{bgBadgeStyle, badgeLabel(iconBadgeBg, "BG"), "Background shell/monitor/cron"},
+			{monBadgeStyle, badgeLabel(iconBadgeMon, "MON"), "Monitor tool currently in flight"},
+			{inputBadgeStyle, badgeLabel(iconBadgeInput, "INPUT"), "Awaiting your answer (AskUserQuestion)"},
+			{waitBadgeStyle, badgeLabel(iconBadgeWait, "WAIT"), "Idle, waiting for user"},
+			{doneBadgeStyle, badgeLabel(iconBadgeDone, "DONE"), "All work completed"},
+			{stuckBadgeStyle, badgeLabel(iconBadgeStuck, "STUCK"), "Live but stale with unfinished work"},
+			{lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true), badgeLabel(iconBadgeRemote, "REMOTE"), "Remote (experimental)"},
+		}
+		for i := 0; i < len(allBadges); i += 2 {
+			b := allBadges[i]
+			left := fmt.Sprintf(" %s %-16s", b.style.Render(fmt.Sprintf("%-6s", b.badge)), d.Render(b.desc))
+			if i+1 < len(allBadges) {
+				b2 := allBadges[i+1]
+				right := fmt.Sprintf("  %s %s", b2.style.Render(fmt.Sprintf("%-6s", b2.badge)), d.Render(b2.desc))
+				sb.WriteString(left + right + "\n")
+			} else {
+				sb.WriteString(left + "\n")
+			}
+		}
+
+		// Search filters: two-column layout
+		sb.WriteString("\n" + headerStyle.Render(" Search Filters") + "\n")
+		type filter struct{ filter, desc string }
+		allFilters := []filter{
+			{"is:here", "In current window"},
+			{"is:live", "Live sessions"},
+			{"is:busy", "Responding now"},
+			{"is:bg", "Background work in flight"},
+			{"is:wait", "Idle, waiting for user"},
+			{"is:done", "All work completed"},
+			{"D", "Toggle completed-only"},
+			{"is:stuck", "Stale, unfinished"},
+			{"is:wt", "Worktree sessions"},
+			{"is:team", "Team sessions"},
+			{"has:mem", "With memory"},
+			{"has:todo", "With todos"},
+			{"has:task", "With tasks"},
+			{"has:plan", "With plans"},
+			{"has:agent", "With subagents"},
+			{"has:compact", "With compaction"},
+			{"has:skill", "With skills"},
+			{"has:mcp", "With MCP tools"},
+			{"is:mon", "Monitor in flight"},
+			{"is:input", "Awaiting user answer"},
+			{"proj:<name>", "By project name"},
+			{"team:<name>", "By team name"},
+			{"is:fork", "Forked sessions"},
+			{"is:remote", "Remote sessions (exp)"},
+		}
+		for i := 0; i < len(allFilters); i += 2 {
+			f := allFilters[i]
+			left := fmt.Sprintf(" %-13s %s", f.filter, d.Render(fmt.Sprintf("%-17s", f.desc)))
+			if i+1 < len(allFilters) {
+				f2 := allFilters[i+1]
+				right := fmt.Sprintf(" %-13s %s", f2.filter, d.Render(f2.desc))
+				sb.WriteString(left + right + "\n")
+			} else {
+				sb.WriteString(left + "\n")
+			}
 		}
 	}
 
-	// Search filters: two-column layout
-	sb.WriteString("\n" + headerStyle.Render(" Search Filters") + "\n")
-	type filter struct{ filter, desc string }
-	allFilters := []filter{
-		{"is:here", "In current window"},
-		{"is:live", "Live sessions"},
-		{"is:busy", "Responding now"},
-		{"is:bg", "Background work in flight"},
-		{"is:wait", "Idle, waiting for user"},
-		{"is:done", "All work completed"},
-		{"D", "Toggle completed-only"},
-		{"is:stuck", "Stale, unfinished"},
-		{"is:wt", "Worktree sessions"},
-		{"is:team", "Team sessions"},
-		{"has:mem", "With memory"},
-		{"has:todo", "With todos"},
-		{"has:task", "With tasks"},
-		{"has:plan", "With plans"},
-		{"has:agent", "With subagents"},
-		{"has:compact", "With compaction"},
-		{"has:skill", "With skills"},
-		{"has:mcp", "With MCP tools"},
-		{"is:mon", "Monitor in flight"},
-		{"is:input", "Awaiting user answer"},
-		{"proj:<name>", "By project name"},
-		{"team:<name>", "By team name"},
-		{"is:fork", "Forked sessions"},
-		{"is:remote", "Remote sessions (exp)"},
-	}
-	for i := 0; i < len(allFilters); i += 2 {
-		f := allFilters[i]
-		left := fmt.Sprintf(" %-13s %s", f.filter, d.Render(fmt.Sprintf("%-17s", f.desc)))
-		if i+1 < len(allFilters) {
-			f2 := allFilters[i+1]
-			right := fmt.Sprintf(" %-13s %s", f2.filter, d.Render(f2.desc))
-			sb.WriteString(left + right + "\n")
-		} else {
-			sb.WriteString(left + "\n")
-		}
-	}
-
-	// Keybindings: single column but concise descriptions
-	sb.WriteString("\n" + headerStyle.Render(" Keybindings") + "\n")
-	sk := km.Session
-	keys := []struct{ key, desc string }{
-		{displayKey(sk.Open) + " / " + displayKey(sk.Right), "Open / preview"},
-		{displayKey(sk.Escape) + " / " + displayKey(sk.Left), "Back / close"},
-		{displayKey(sk.Edit), "Edit session files"},
-		{displayKey(sk.Actions), "Actions (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Move) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.CopyPath) + "/" + displayKey(km.Actions.Worktree) + "/" + displayKey(km.Actions.Kill) + "/" + displayKey(km.Actions.Input) + "/" + displayKey(km.Actions.Jump) + ")"},
-		{displayKey(sk.Search), "Search / filter"},
-		{displayKey(km.Views.Stats), "Global stats"},
-		{displayKey(sk.Refresh), "Refresh list"},
-		{displayKey(sk.Preview), "Cycle preview mode (conv→stats→mem→tasks/plan)"},
-		{displayKey(sk.Live), "Live preview (^Q:unfocus)"},
-		{displayKey(sk.Switch), "Switch to live tmux window"},
-		{displayKey(sk.Select), "Toggle multi-select"},
-		{"o", "Fold/expand project group"},
-		{"f / F", "Fold all / expand all groups"},
-		{"D", "Toggle completed-only filter"},
-		{displayKey(sk.Help), "This help"},
-		{displayKey(sk.Quit), "Quit"},
-	}
-	for _, k := range keys {
-		sb.WriteString(fmt.Sprintf(" %-12s %s\n", k.key, d.Render(k.desc)))
-	}
-
-	// Number key shortcuts for current view
-	if shortcutHint != "" {
+	// Number key shortcuts for current view/side
+	if hint := a.shortcutHint(); hint != "" {
 		sb.WriteString("\n" + headerStyle.Render(" Shortcuts") + "\n")
-		sb.WriteString(" " + d.Render(shortcutHint) + "\n")
+		sb.WriteString(" " + d.Render(hint) + "\n")
 	}
+
+	sb.WriteString("\n" + d.Render(" Press "+displayKey(km.Session.Command)+" for the full command palette · any key to close"))
 
 	body := strings.TrimRight(sb.String(), "\n")
 	bodyLines := strings.Split(body, "\n")
@@ -1697,8 +1821,10 @@ func renderHelpModal(bg string, screenW, screenH int, km Keymap, shortcutHint st
 	modalH := len(bodyLines) + 2 // +2 for top/bottom border
 	if modalH > screenH-2 {
 		modalH = screenH - 2
-		bodyLines = bodyLines[:modalH-2]
-		body = strings.Join(bodyLines, "\n")
+		if modalH-2 < len(bodyLines) && modalH >= 2 {
+			bodyLines = bodyLines[:modalH-2]
+			body = strings.Join(bodyLines, "\n")
+		}
 	}
 
 	modalStyle := lipgloss.NewStyle().
