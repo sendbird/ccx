@@ -195,6 +195,7 @@ func (a *App) currentFocusSide() string {
 // isInOverlay returns true when a popup menu or overlay is active.
 func (a *App) isInOverlay() bool {
 	return a.actionsMenu || a.editMenu || a.convActionsMenu ||
+		a.executionContextMenu || a.conv.execution.Focused ||
 		a.viewsMenu || a.statsPageMenu || a.inspectorMenu || a.showHelp
 }
 

@@ -120,6 +120,8 @@ type rawToolUseResult struct {
 	AgentID   string `json:"agentId"`
 	AgentType string `json:"agentType"`
 	RunID     string `json:"runId"`
+	Status    string `json:"status"`
+	IsAsync   bool   `json:"isAsync"`
 }
 
 type rawMessage struct {
@@ -162,6 +164,8 @@ func ParseEntry(line string) (Entry, error) {
 	if raw.ToolUseResult != nil {
 		entry.ToolResultAgentID = raw.ToolUseResult.AgentID
 		entry.ToolResultRunID = raw.ToolUseResult.RunID
+		entry.ToolResultStatus = raw.ToolUseResult.Status
+		entry.ToolResultAsync = raw.ToolUseResult.IsAsync || raw.ToolUseResult.Status == "async_launched"
 	}
 
 	if raw.Timestamp != "" {

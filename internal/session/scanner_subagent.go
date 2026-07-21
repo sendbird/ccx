@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func FindSubagents(sessionFile string) ([]Subagent, error) {
@@ -19,6 +20,11 @@ func FindSubagents(sessionFile string) ([]Subagent, error) {
 	}
 
 	var agents []Subagent
+	// Lifecycle terminal signals often live inside the agent transcripts we are
+	// already parsing here (a nested agent's tool_result or task-notification).
+	// Collect them during that single pass so applySubagentLifecycles only has to
+	// read the root transcript once, instead of re-reading every agent file.
+	var signals []lifecycleSignal
 
 	// 1. Ordinary Task/Agent subagents directly under subagents/.
 	matches, err := filepath.Glob(filepath.Join(agentDir, "agent-*.jsonl"))
@@ -30,7 +36,9 @@ func FindSubagents(sessionFile string) ([]Subagent, error) {
 		if strings.HasPrefix(base, "agent-acompact-") {
 			continue
 		}
-		agents = append(agents, scanSubagentFile(p))
+		sa, sigs := scanSubagentFile(p)
+		agents = append(agents, sa)
+		signals = append(signals, sigs...)
 	}
 
 	// 2. Workflow-spawned agents nested under subagents/workflows/{runId}/.
@@ -49,17 +57,112 @@ func FindSubagents(sessionFile string) ([]Subagent, error) {
 				if strings.HasPrefix(base, "agent-acompact-") {
 					continue
 				}
-				sa := scanSubagentFile(p)
+				sa, sigs := scanSubagentFile(p)
 				sa.WorkflowRunID = runID
 				agents = append(agents, sa)
+				signals = append(signals, sigs...)
 			}
 		}
 	}
 
+	applySubagentLifecycles(sessionFile, agents, signals)
 	sort.Slice(agents, func(i, j int) bool {
 		return agents[i].Timestamp.After(agents[j].Timestamp)
 	})
 	return agents, nil
+}
+
+// lifecycleSignal is a terminal-completion marker for a subagent, extracted
+// while scanning some transcript: agentID ends at ts.
+type lifecycleSignal struct {
+	agentID string
+	ts      time.Time
+}
+
+// lifecycleSignalsFromEntry returns any terminal-completion markers carried by a
+// single parsed entry: a synchronous spawning tool_result, or a terminal
+// <task-notification> for a background agent.
+func lifecycleSignalsFromEntry(entry Entry) []lifecycleSignal {
+	var out []lifecycleSignal
+	if entry.ToolResultAgentID != "" && !entry.ToolResultAsync {
+		out = append(out, lifecycleSignal{entry.ToolResultAgentID, entry.Timestamp})
+	}
+	for _, b := range entry.Content {
+		if b.Type != "system_tag" && b.Type != "text" {
+			continue
+		}
+		id := xmlValue(b.Text, "task-id")
+		if id != "" && terminalTaskStatus(xmlValue(b.Text, "status")) {
+			out = append(out, lifecycleSignal{id, entry.Timestamp})
+		}
+	}
+	return out
+}
+
+func applySubagentLifecycles(sessionFile string, agents []Subagent, signals []lifecycleSignal) {
+	byID := make(map[string]*Subagent, len(agents))
+	for i := range agents {
+		byID[agents[i].ID] = &agents[i]
+	}
+	apply := func(sig lifecycleSignal) {
+		if agent := byID[sig.agentID]; agent != nil {
+			setAgentEnd(agent, sig.ts)
+		}
+	}
+	// Signals gathered from the agent transcripts during the discovery pass.
+	for _, sig := range signals {
+		apply(sig)
+	}
+	// The root transcript is not scanned elsewhere here, so read it once for the
+	// common case: a synchronous agent whose spawning tool_result lands in root.
+	f, err := os.Open(sessionFile)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+	for sc.Scan() {
+		entry, err := ParseEntry(sc.Text())
+		if err != nil {
+			continue
+		}
+		for _, sig := range lifecycleSignalsFromEntry(entry) {
+			apply(sig)
+		}
+	}
+}
+
+func xmlValue(text, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
+	start := strings.Index(text, startTag)
+	if start < 0 {
+		return ""
+	}
+	start += len(startTag)
+	end := strings.Index(text[start:], endTag)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(text[start : start+end])
+}
+
+func terminalTaskStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "completed", "failed", "error", "cancelled", "stopped":
+		return true
+	default:
+		return false
+	}
+}
+
+func setAgentEnd(agent *Subagent, at time.Time) {
+	if at.IsZero() || (!agent.StartedAt.IsZero() && at.Before(agent.StartedAt)) ||
+		(!agent.EndedAt.IsZero() && !at.Before(agent.EndedAt)) {
+		return
+	}
+	agent.EndedAt = at
 }
 
 // isContextContinuation returns true if the entry is an injected context summary
@@ -86,7 +189,7 @@ func isHexString(s string) bool {
 	return len(s) > 0
 }
 
-func scanSubagentFile(path string) Subagent {
+func scanSubagentFile(path string) (Subagent, []lifecycleSignal) {
 	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	id := strings.TrimPrefix(name, "agent-")
 
@@ -122,13 +225,14 @@ func scanSubagentFile(path string) Subagent {
 
 	f, err := os.Open(path)
 	if err != nil {
-		return agent
+		return agent, nil
 	}
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
+	var signals []lifecycleSignal
 	firstUser := true // track first user message for context-skip
 	for sc.Scan() {
 		line := sc.Text()
@@ -139,6 +243,9 @@ func scanSubagentFile(path string) Subagent {
 		if parseErr != nil {
 			continue
 		}
+		// A nested agent's transcript can carry the terminal signal for the child
+		// it spawned; collect those here so we needn't re-read this file later.
+		signals = append(signals, lifecycleSignalsFromEntry(entry)...)
 		if entry.IsMeta {
 			continue
 		}
@@ -153,6 +260,9 @@ func scanSubagentFile(path string) Subagent {
 			}
 			agent.MsgCount++
 			if !entry.Timestamp.IsZero() {
+				if agent.StartedAt.IsZero() {
+					agent.StartedAt = entry.Timestamp
+				}
 				agent.Timestamp = entry.Timestamp
 			}
 			if agent.FirstPrompt == "" && entry.Role == "user" {
@@ -163,5 +273,5 @@ func scanSubagentFile(path string) Subagent {
 			}
 		}
 	}
-	return agent
+	return agent, signals
 }
