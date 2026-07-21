@@ -48,6 +48,51 @@ func containsID(ids []string, want string) bool {
 	return false
 }
 
+// TestAutoStateFilterNotPersisted verifies the auto-applied default filter is
+// NOT written to preferences (persisting it would bypass the blank-guard on the
+// next launch and strand the user on an empty browser).
+func TestAutoStateFilterNotPersisted(t *testing.T) {
+	now := time.Now()
+	app := newTestApp([]session.Session{{ID: "live1", ShortID: "live1", ProjectName: "a", ProjectPath: "/tmp/a", ModTime: now, IsLive: true}})
+	app.sessGroupMode = groupFlat
+	app.rebuildSessionList()
+	// Arm the auto default filter as startup would.
+	app.config.SearchQuery = defaultActiveStateFilter
+	app.autoStateFilter = true
+	applyListFilter(&app.sessionList, defaultActiveStateFilter)
+
+	prefs := app.capturePreferences()
+	if prefs.FilterTerm != "" {
+		t.Fatalf("auto filter should not be persisted, got FilterTerm=%q", prefs.FilterTerm)
+	}
+
+	// An explicit (non-auto) filter IS persisted.
+	app.autoStateFilter = false
+	app.setSessionListFilter("is:done")
+	prefs = app.capturePreferences()
+	if prefs.FilterTerm != "is:done" {
+		t.Fatalf("explicit filter should persist, got %q", prefs.FilterTerm)
+	}
+}
+
+// TestApplyPreferencesMarksDefaultFilterAuto verifies a persisted filter equal
+// to the default (written by an older build) is re-marked auto so the
+// blank-guard still applies.
+func TestApplyPreferencesMarksDefaultFilterAuto(t *testing.T) {
+	app := newTestApp(fakeSessions())
+	app.autoStateFilter = false
+	app.applyPreferences(Preferences{FilterTerm: defaultActiveStateFilter})
+	if !app.autoStateFilter {
+		t.Fatal("persisted default filter should be re-marked autoStateFilter")
+	}
+	// A different persisted filter is NOT auto.
+	app.autoStateFilter = false
+	app.applyPreferences(Preferences{FilterTerm: "is:done"})
+	if app.autoStateFilter {
+		t.Fatal("explicit persisted filter should not be marked auto")
+	}
+}
+
 // TestApplyStartupFilterClearsWhenEmpty verifies the auto-applied active-state
 // default filter is dropped (rather than leaving a blank browser) when no
 // session matches it — the "아무것도 안 보임" case.

@@ -377,9 +377,12 @@ func (a *App) capturePreferences() Preferences {
 			hidden = append(hidden, k)
 		}
 	}
-	// Capture active filter
+	// Capture active filter — but never persist the auto-applied active-state
+	// default. Persisting it would make the next launch treat it as an explicit
+	// user filter, bypassing the blank-guard and stranding the user on an empty
+	// browser when nothing is currently live/input/mon.
 	var filterTerm string
-	if a.sessionList.FilterState() == list.FilterApplied {
+	if a.sessionList.FilterState() == list.FilterApplied && !a.autoStateFilter {
 		filterTerm = a.sessionList.FilterInput.Value()
 	}
 
@@ -442,6 +445,12 @@ func (a *App) applyPreferences(p Preferences) {
 	}
 	if p.FilterTerm != "" {
 		a.config.SearchQuery = p.FilterTerm
+		// A persisted filter equal to the active-state default (written by an
+		// older build) is treated as the auto filter, so the blank-guard still
+		// clears it when nothing matches.
+		if p.FilterTerm == defaultActiveStateFilter {
+			a.autoStateFilter = true
+		}
 	}
 	a.editorInput = p.EditorInput
 }
