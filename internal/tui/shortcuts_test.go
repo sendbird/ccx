@@ -133,6 +133,34 @@ func TestMigrateShortcutsFromOldDefault(t *testing.T) {
 	}
 }
 
+// TestMergeShortcutsMigratesStaleUserConfig is the real-world path: the user's
+// persisted pre-0 layout is merged onto the new default (which already has a 0
+// key). Without migrating off the USER src, the merge produces a frankenstein
+// with duplicate mappings (0 and 6 both live). This asserts the merged result
+// is the clean flow layout with no duplicates.
+func TestMergeShortcutsMigratesStaleUserConfig(t *testing.T) {
+	dst := DefaultShortcuts()
+	user := Shortcuts{"sessions": ViewShortcuts{Left: ShortcutMap{
+		"1": "preview:conv", "2": "preview:stats", "3": "preview:mem",
+		"4": "preview:tasks", "5": "preview:agents", "6": "preview:live",
+	}}}
+	mergeShortcuts(dst, user)
+	sl := dst["sessions"].Left
+
+	// No command appears on more than one key.
+	seen := map[string]string{}
+	for k, v := range sl {
+		if prev, dup := seen[v]; dup {
+			t.Errorf("duplicate mapping: %q on both %q and %q", v, prev, k)
+		}
+		seen[v] = k
+	}
+	// And it is the flow layout.
+	if sl["0"] != "preview:live" || sl["1"] != "preview:conv" || sl["6"] != "preview:mem" {
+		t.Errorf("merged layout is not flow order: %v", sl)
+	}
+}
+
 func TestShortcutHint(t *testing.T) {
 	app := newTestApp(fakeSessions())
 	app.shortcuts = DefaultShortcuts()

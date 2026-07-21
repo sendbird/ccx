@@ -48,6 +48,48 @@ func containsID(ids []string, want string) bool {
 	return false
 }
 
+// TestApplyStartupFilterClearsWhenEmpty verifies the auto-applied active-state
+// default filter is dropped (rather than leaving a blank browser) when no
+// session matches it — the "아무것도 안 보임" case.
+func TestApplyStartupFilterClearsWhenEmpty(t *testing.T) {
+	// All sessions are plain/done — none live/input/mon.
+	now := time.Now()
+	sessions := []session.Session{
+		{ID: "d1", ShortID: "d1", ProjectPath: "/tmp/d1", ProjectName: "d1", ModTime: now},
+		{ID: "d2", ShortID: "d2", ProjectPath: "/tmp/d2", ProjectName: "d2", ModTime: now},
+	}
+	app := newTestApp(sessions)
+	app.sessGroupMode = groupFlat
+	app.rebuildSessionList()
+
+	// Simulate the startup default filter being armed.
+	app.config.SearchQuery = defaultActiveStateFilter
+	app.autoStateFilter = true
+	app.applyStartupFilter()
+
+	if app.config.SearchQuery != "" {
+		t.Fatalf("auto filter should be cleared when it hides everything, got %q", app.config.SearchQuery)
+	}
+	if visibleSessionIDs(app) == nil {
+		t.Fatal("expected sessions visible after auto filter cleared")
+	}
+}
+
+// TestApplyStartupFilterKeepsExplicitEmpty verifies a user's explicit filter is
+// NOT auto-cleared even if it matches nothing (only the auto default is).
+func TestApplyStartupFilterKeepsExplicitEmpty(t *testing.T) {
+	now := time.Now()
+	app := newTestApp([]session.Session{{ID: "d1", ShortID: "d1", ProjectName: "d1", ProjectPath: "/tmp/d1", ModTime: now}})
+	app.sessGroupMode = groupFlat
+	app.rebuildSessionList()
+	app.config.SearchQuery = "nomatch-xyz"
+	app.autoStateFilter = false
+	app.applyStartupFilter()
+	if app.config.SearchQuery != "nomatch-xyz" {
+		t.Fatalf("explicit filter should be preserved, got %q", app.config.SearchQuery)
+	}
+}
+
 // TestStateFilterCommaOR verifies the state-toggle menu builds a comma-OR filter
 // and that multiple states are shown at once (which plain AND cannot express).
 func TestStateFilterCommaOR(t *testing.T) {
