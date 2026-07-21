@@ -729,7 +729,12 @@ func (a *App) updateConvPreview() {
 	// Session-meta rows (memory/tasks-plan/summary) render as a selectable
 	// synthetic entry so each item can be cursor-selected and jumped from, even
 	// though they map to the root flow node. Handled below via the fold path.
-	if hasNode && item.kind != convSessionMeta && a.conv.inspector.Tab != inspectorConversation {
+	// Exception: the "summary" (Session Flow) row renders session-wide facet tabs
+	// (Changes/Files/Refs/Images/Stats) through the facet path so the `p` picker
+	// can survey the whole session; its Overview stays on the synthetic path.
+	summaryFacet := item.kind == convSessionMeta && item.sessionMeta == "summary" &&
+		a.conv.inspector.Tab != inspectorOverview && a.conv.inspector.Tab != inspectorConversation
+	if hasNode && (item.kind != convSessionMeta || summaryFacet) && a.conv.inspector.Tab != inspectorConversation {
 		content := a.renderInspector(item, node, a.renderInspectorTab(item, node))
 		a.conv.inspector.Rendered = content
 		// baseKey keeps rows that share a flow node distinct (all session

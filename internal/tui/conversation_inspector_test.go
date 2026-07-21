@@ -236,22 +236,21 @@ func TestInspectorScopeAndTabKeys(t *testing.T) {
 	if app.conv.inspector.Tab == inspectorOverview {
 		t.Fatal("] did not cycle to a non-empty facet")
 	}
-	// The Explore agent has no descendants, so Subtree is omitted from the
-	// selector: scope cycles Node → Session → Node, skipping the redundant
-	// Subtree step that would resolve to the same set as Node.
-	app = pressKey(app, "s")
-	if app.conv.inspector.Scope != session.ScopeSession {
-		t.Fatalf("scope = %v, want session (childless node skips subtree)", app.conv.inspector.Scope)
+	// The Explore agent has no descendants, so scope is [Node] only — session-wide
+	// aggregation lives in the pinned Session Flow row, not on an individual node.
+	// Pressing s must be a no-op rather than cycling to Subtree or Session.
+	if scopes := app.inspectorScopesFor(app.conv.inspector.NodeID); len(scopes) != 1 || scopes[0] != session.ScopeNode {
+		t.Fatalf("childless agent scopes = %v, want [Node]", scopes)
 	}
 	app = pressKey(app, "s")
 	if app.conv.inspector.Scope != session.ScopeNode {
-		t.Fatalf("scope = %v, want node (wraps past session)", app.conv.inspector.Scope)
+		t.Fatalf("scope = %v, want node (childless node has no other scope)", app.conv.inspector.Scope)
 	}
 }
 
 // TestInspectorScopeCycleIncludesSubtreeForParent verifies that a node with
-// descendants (a turn that spawned an agent) offers the full Node → Subtree →
-// Session cycle.
+// descendants (a turn that spawned an agent) offers Node → Subtree — but never
+// Session, which is a whole-session concern owned by the pinned Session Flow row.
 func TestInspectorScopeCycleIncludesSubtreeForParent(t *testing.T) {
 	app, _, _ := setupInspectorFlowApp(t)
 	// Turn a2 spawns the Explore agent, so its flow node has a child.
@@ -263,16 +262,16 @@ func TestInspectorScopeCycleIncludesSubtreeForParent(t *testing.T) {
 	app.updateConvPreview()
 
 	scopes := app.inspectorScopesFor(app.conv.inspector.NodeID)
-	if len(scopes) != 3 {
-		t.Fatalf("parent node scopes = %v, want Node/Subtree/Session", scopes)
+	if len(scopes) != 2 || scopes[0] != session.ScopeNode || scopes[1] != session.ScopeSubtree {
+		t.Fatalf("parent node scopes = %v, want [Node Subtree]", scopes)
 	}
 	app = pressKey(app, "s")
 	if app.conv.inspector.Scope != session.ScopeSubtree {
 		t.Fatalf("scope = %v, want subtree (parent node)", app.conv.inspector.Scope)
 	}
 	app = pressKey(app, "s")
-	if app.conv.inspector.Scope != session.ScopeSession {
-		t.Fatalf("scope = %v, want session", app.conv.inspector.Scope)
+	if app.conv.inspector.Scope != session.ScopeNode {
+		t.Fatalf("scope = %v, want node (wraps past subtree, no session)", app.conv.inspector.Scope)
 	}
 }
 
@@ -329,10 +328,11 @@ func TestZoomedInspectorRetainsFilterAndCopyModes(t *testing.T) {
 
 func TestInspectorFacetCopyUsesRenderedProvenance(t *testing.T) {
 	app, _, _ := setupInspectorFlowApp(t)
+	// Turn a1 owns the reference, so its node-scope Refs facet is non-empty.
 	selectInspectorItem(t, app, func(item convItem) bool {
-		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+		return item.kind == convMsg && item.merged.entry.UUID == "a1"
 	})
-	app.openInspector(inspectorRefs, session.ScopeSession, true)
+	app.openInspector(inspectorRefs, session.ScopeNode, true)
 
 	app = pressKey(app, app.keymap.Preview.CopyMode)
 	if !app.copyModeActive {
@@ -375,6 +375,9 @@ func TestExplicitEmptyFacetClearsWhenSelectionChanges(t *testing.T) {
 	}
 }
 
+// TestInspectorFacetPickerUsesSessionScope verifies the `p` facet picker
+// surveys the whole session: it targets the pinned Session Flow (root) row at
+// ScopeSession, not the individual turn that was selected when it opened.
 func TestInspectorFacetPickerUsesSessionScope(t *testing.T) {
 	app, _, _ := setupInspectorFlowApp(t)
 	selectInspectorItem(t, app, func(item convItem) bool {
@@ -390,6 +393,13 @@ func TestInspectorFacetPickerUsesSessionScope(t *testing.T) {
 	if app.inspectorMenu {
 		t.Fatal("facet picker remained open")
 	}
+	// Picker jumps to the pinned Session Flow row and renders session-wide.
+	if !app.conv.contextActive {
+		t.Fatal("facet picker did not activate the pinned Session Flow row")
+	}
+	if app.conv.inspector.NodeID != app.conv.flow.RootID {
+		t.Fatalf("facet picker node = %q, want root %q", app.conv.inspector.NodeID, app.conv.flow.RootID)
+	}
 	if app.conv.inspector.Tab != inspectorRefs || app.conv.inspector.Scope != session.ScopeSession {
 		t.Fatalf("facet picker state = tab:%v scope:%v", app.conv.inspector.Tab, app.conv.inspector.Scope)
 	}
@@ -402,8 +412,11 @@ func TestInspectorFacetPickerUsesSessionScope(t *testing.T) {
 	if app.conv.inspector.Tab != inspectorFiles || app.conv.inspector.Scope != session.ScopeSession {
 		t.Fatalf("files picker state = tab:%v scope:%v", app.conv.inspector.Tab, app.conv.inspector.Scope)
 	}
-	if !strings.Contains(app.conv.inspector.Rendered, "/repo/parent.go") {
-		t.Fatalf("files picker rendered %q", app.conv.inspector.Rendered)
+	// Session-wide Files must include both the parent turn's and the agent's
+	// files, proving the facet aggregates across the whole session, not one node.
+	rendered := app.conv.inspector.Rendered
+	if !strings.Contains(rendered, "/repo/parent.go") || !strings.Contains(rendered, "/repo/agent.go") {
+		t.Fatalf("files picker did not render session-wide files: %q", rendered)
 	}
 }
 

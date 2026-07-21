@@ -85,17 +85,23 @@ func TestRenderPhaseInspectorUsesPhaseSubtree(t *testing.T) {
 
 	// A phase node has children (its assigned agents) but scopeNodeIDs
 	// auto-expands ScopeNode to the phase subtree, so Node and Subtree resolve
-	// identically — the scope selector must omit the redundant Subtree there.
+	// identically — the scope selector collapses to [Node] only. Session is never
+	// offered on an individual node; it belongs to the pinned Session Flow row.
 	app := newTestApp([]session.Session{{ID: sessID, FilePath: sessPath}})
 	app.conv.flow = flow
 	phaseNode := session.FlowPhaseNodeID("run-phases", 1)
-	if scopes := app.inspectorScopesFor(phaseNode); len(scopes) != 2 ||
-		scopes[0] != session.ScopeNode || scopes[1] != session.ScopeSession {
-		t.Fatalf("phase node scopes = %v, want [Node Session]", scopes)
+	if scopes := app.inspectorScopesFor(phaseNode); len(scopes) != 1 || scopes[0] != session.ScopeNode {
+		t.Fatalf("phase node scopes = %v, want [Node]", scopes)
 	}
-	// The workflow node itself is a non-phase parent, so it keeps all three.
+	// The workflow node is a non-phase parent with children → Node + Subtree.
 	wfNode := session.FlowWorkflowNodeID("run-phases")
-	if scopes := app.inspectorScopesFor(wfNode); len(scopes) != 3 {
-		t.Fatalf("workflow node scopes = %v, want Node/Subtree/Session", scopes)
+	if scopes := app.inspectorScopesFor(wfNode); len(scopes) != 2 ||
+		scopes[0] != session.ScopeNode || scopes[1] != session.ScopeSubtree {
+		t.Fatalf("workflow node scopes = %v, want [Node Subtree]", scopes)
+	}
+	// The session root is the whole session, so it is the one node that keeps
+	// Session (and only Session).
+	if scopes := app.inspectorScopesFor(flow.RootID); len(scopes) != 1 || scopes[0] != session.ScopeSession {
+		t.Fatalf("root node scopes = %v, want [Session]", scopes)
 	}
 }

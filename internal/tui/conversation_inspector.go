@@ -129,19 +129,29 @@ func inspectorScopeName(scope session.Scope) string {
 }
 
 // inspectorScopesFor returns the scope selector entries meaningful for a node,
-// in cycle order. Node and Session always apply; Subtree is offered only when it
-// resolves to a different artifact set than Node — i.e. the node has descendants
-// AND is not a phase. Without children, ScopeSubtree collapses to ScopeNode; and
-// a phase node is auto-expanded to its subtree even under ScopeNode (see
-// FlowIndex.scopeNodeIDs), so Node and Subtree are byte-identical there too.
-// Omitting the redundant Subtree step removes a confusing no-op from the cycle.
+// in cycle order. Scope on a node is *relative* to that node: Node is the node
+// itself, Subtree is the node plus its descendants. Whole-session aggregation is
+// not a per-node concern — it lives in the pinned "Session Flow" row — so Session
+// is not offered for an ordinary node.
+//
+// Subtree is offered only when it resolves to a different set than Node: the node
+// must have descendants AND not be a phase (a phase is auto-expanded to its
+// subtree even under ScopeNode, see FlowIndex.scopeNodeIDs, so Node≡Subtree). A
+// node with no distinct subtree gets a single [Node] entry and the selector
+// collapses to a non-interactive label.
+//
+// The session root is the one exception: it *is* the whole session, so it keeps
+// Session (and only Session — Node/Subtree on the root would just re-derive it).
 func (a *App) inspectorScopesFor(nodeID string) []session.Scope {
+	if a.conv.flow != nil && nodeID != "" && nodeID == a.conv.flow.RootID {
+		return []session.Scope{session.ScopeSession}
+	}
 	if a.conv.flow != nil && nodeID != "" && len(a.conv.flow.Children(nodeID)) > 0 {
 		if node, ok := a.conv.flow.Node(nodeID); ok && node.Kind != session.FlowNodePhase {
-			return []session.Scope{session.ScopeNode, session.ScopeSubtree, session.ScopeSession}
+			return []session.Scope{session.ScopeNode, session.ScopeSubtree}
 		}
 	}
-	return []session.Scope{session.ScopeNode, session.ScopeSession}
+	return []session.Scope{session.ScopeNode}
 }
 
 // normalizeInspectorScope collapses a scope the current node does not support

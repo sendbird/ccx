@@ -96,6 +96,18 @@ func (a *App) selectConvContext(index int) bool {
 	return true
 }
 
+// selectSessionFlowContext activates the pinned "Session Flow" summary row so
+// facet views opened from the picker render session-wide against the flow root.
+// No-op if that row is absent (no flow index).
+func (a *App) selectSessionFlowContext() bool {
+	for i, item := range a.conv.contextItems {
+		if item.kind == convSessionMeta && item.sessionMeta == "summary" {
+			return a.selectConvContext(i)
+		}
+	}
+	return false
+}
+
 // selectConvBody selects an item by its visible index. bubbles/list keeps
 // selection indices in filtered-list coordinates, so callers must never pass an
 // index from Items() while a filter is active.

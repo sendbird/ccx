@@ -2684,6 +2684,11 @@ func (a *App) renderStatsPageHintBox() string {
 }
 
 func (a *App) handleInspectorMenu(key string) (tea.Model, tea.Cmd) {
+	// The facet picker surveys session-wide urls/changes/files. That is a
+	// whole-session view, so it targets the pinned "Session Flow" (RootID) row
+	// rather than layering Session scope onto the currently-selected turn — an
+	// ordinary node no longer offers Session scope at all.
+	a.selectSessionFlowContext()
 	switch key {
 	case "u":
 		a.openInspector(inspectorRefs, session.ScopeSession, false)
