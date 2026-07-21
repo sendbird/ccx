@@ -535,6 +535,7 @@ func (a *App) renderInspectorChanges(nodeID string) string {
 	if len(arts) == 0 {
 		return fmt.Sprintf("# Changes\n\nNo changes in this %s scope.\n", strings.ToLower(inspectorScopeName(a.conv.inspector.Scope)))
 	}
+	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
 	var b strings.Builder
 	b.WriteString("# Changes\n")
 	lastOwner := ""
@@ -549,14 +550,27 @@ func (a *App) renderInspectorChanges(nodeID string) string {
 		if summary == "" {
 			summary = changeInputSummary(data.ToolName, data.ToolInput)
 		}
-		fmt.Fprintf(&b, "%d. %s %s", i+1, data.ToolName, art.Key)
+		fmt.Fprintf(&b, "\n%d. %s %s", i+1, data.ToolName, art.Key)
 		if summary != "" {
 			fmt.Fprintf(&b, " · %s", summary)
 		}
 		b.WriteByte('\n')
 		fmt.Fprintf(&b, "   origin: %s\n", inspectorArtifactOrigin(art.Origin))
+		if diff := changeDiff(data, diffWidth); diff != "" {
+			b.WriteString("\n" + diff + "\n")
+		}
 	}
 	return b.String()
+}
+
+// changeDiff renders the inline diff for one ChangeData occurrence by
+// reconstructing the tool_use block toolDiffOutput expects.
+func changeDiff(data session.ChangeData, width int) string {
+	if data.ToolName == "" || data.ToolInput == "" {
+		return ""
+	}
+	block := session.ContentBlock{Type: "tool_use", ToolName: data.ToolName, ToolInput: data.ToolInput}
+	return strings.TrimRight(toolDiffOutput(block, width), "\n")
 }
 
 func (a *App) renderInspectorFiles(nodeID string) string {
