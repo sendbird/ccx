@@ -82,6 +82,10 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config,
 		Navigation:   cfg.Keymaps.Navigation,
 	}
 	mergeKeymap(&km, override)
+	// A stale user config can map two conversation actions to the same key
+	// (e.g. an old jump_to_tree: J colliding with region_down: J), which breaks
+	// region navigation because the earlier-dispatched action wins. Repair it.
+	km.resolveConversationConflicts()
 
 	// Merge shortcut overrides over defaults
 	mergeShortcuts(sc, cfg.Shortcuts)
@@ -91,8 +95,12 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config,
 }
 
 // SavePreferences updates the preferences section in the config file,
-// preserving existing keymap settings and filling in missing defaults.
-func SavePreferences(prefs Preferences) {
+// preserving existing keymap settings and filling in missing defaults. The
+// caller passes the running app's open/claude config so those sections survive
+// a save even when the on-disk file has dropped them (both use omitempty, so an
+// older binary or an emptied section would otherwise be lost permanently on the
+// next quit round-trip).
+func SavePreferences(prefs Preferences, open opener.Config, claude claudecmd.Config) {
 	path := configPath()
 	os.MkdirAll(filepath.Dir(path), 0755)
 
@@ -105,6 +113,21 @@ func SavePreferences(prefs Preferences) {
 	// Fill in missing keymap defaults so the file shows all keys
 	defaults := DefaultKeymap()
 	fillKeymapDefaults(&cfg, defaults)
+
+	// Preserve the running open/claude config. The file is the source of truth
+	// when it has a value; otherwise backfill from the live app config so a
+	// once-set command_template is never silently dropped.
+	if cfg.Open.CommandTemplate == "" && open.CommandTemplate != "" {
+		cfg.Open = open
+	}
+	if cfg.Claude.CommandTemplate == "" {
+		if claude.CommandTemplate != "" {
+			cfg.Claude = claude
+		} else {
+			// Always surface the claude stub so the knob is discoverable.
+			cfg.Claude.CommandTemplate = claudecmd.DefaultTemplate
+		}
+	}
 
 	cfg.Preferences = prefs
 
@@ -341,7 +364,7 @@ func viewStateString(state viewState) string {
 // quit saves preferences and returns tea.Quit.
 func (a *App) quit() (tea.Model, tea.Cmd) {
 	if !a.config.PickMode {
-		SavePreferences(a.capturePreferences())
+		SavePreferences(a.capturePreferences(), a.config.Open, a.config.Claude)
 	}
 	return a, tea.Quit
 }
