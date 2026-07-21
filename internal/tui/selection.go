@@ -112,8 +112,8 @@ func highlightSnippet(text, term string, maxW int, baseStyle lipgloss.Style) str
 
 	// Need to extract a window. Compute how much visible space we have
 	// after reserving room for "..." on each side.
-	needLeft := idx > 0                // will we need left ellipsis?
-	needRight := matchEnd < len(text)  // will we need right ellipsis?
+	needLeft := idx > 0               // will we need left ellipsis?
+	needRight := matchEnd < len(text) // will we need right ellipsis?
 	const ellipsis = "..."
 	const eW = 3
 

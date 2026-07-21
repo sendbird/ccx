@@ -54,8 +54,8 @@ func TestExtractTaskEntries_PendingTaskMatchesOriginatingCreate(t *testing.T) {
 // taskId "1" must not match "10", "11", "21", etc.
 func TestExtractTaskEntries_NoSubstringMatch(t *testing.T) {
 	entries := []session.Entry{
-		mkEntry("assistant", mkTaskCreate("First")),                  // task 1
-		mkEntry("assistant", mkTaskUpdate("10", "in_progress")),      // unrelated
+		mkEntry("assistant", mkTaskCreate("First")),             // task 1
+		mkEntry("assistant", mkTaskUpdate("10", "in_progress")), // unrelated
 		mkEntry("assistant", mkTaskUpdate("10", "completed")),
 		mkEntry("assistant", mkTaskUpdate("11", "in_progress")),
 		mkEntry("assistant", mkTaskUpdate("11", "completed")),

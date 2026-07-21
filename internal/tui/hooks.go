@@ -262,7 +262,7 @@ func renderHookEvent(sb *strings.Builder, event string, matchers []hookMatcher, 
 			// Show hook type if not default
 			typeTag := ""
 			if h.Type != "" && h.Type != "command" {
-				typeTag = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render("["+h.Type+"] ")
+				typeTag = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render("[" + h.Type + "] ")
 			}
 
 			// Child connector

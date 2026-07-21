@@ -145,25 +145,25 @@ func (s sessionItem) FilterValue() string {
 // can be expanded to reveal its child sessions. Selecting it does not open
 // a conversation; pressing Enter/Open toggles its fold state instead.
 type projectItem struct {
-	basePath     string            // canonical key (resolved base repo path)
-	displayName  string            // shown name (project name or base repo basename)
-	branch       string            // main repo's git branch (if any)
-	sessions     []session.Session // all sessions under this project (main + worktrees), sorted recent-first
-	worktrees    int               // count of worktree-only sessions
-	totalMsgs    int               // sum of MsgCount across sessions
-	liveSessions int               // number of live sessions
-	bgSessions   int               // sessions whose lifecycle is BG
-	monSessions  int               // sessions with active monitor jobs
-	inputSessions int              // sessions awaiting user answer (AskUserQuestion)
-	openPRs       int              // sessions with at least one open PR (summed open-PR count)
-	stuckCount   int               // STUCK lifecycle sessions
-	waitCount    int               // WAIT lifecycle sessions
-	doneCount    int               // DONE lifecycle sessions
-	busyCount    int               // BUSY lifecycle sessions
-	hereCount    int               // sessions in the current tmux window
-	bestTime     time.Time         // most-recent ModTime in this project
-	expanded     bool              // current fold state at build time
-	lifecycle    session.LifecycleState
+	basePath      string            // canonical key (resolved base repo path)
+	displayName   string            // shown name (project name or base repo basename)
+	branch        string            // main repo's git branch (if any)
+	sessions      []session.Session // all sessions under this project (main + worktrees), sorted recent-first
+	worktrees     int               // count of worktree-only sessions
+	totalMsgs     int               // sum of MsgCount across sessions
+	liveSessions  int               // number of live sessions
+	bgSessions    int               // sessions whose lifecycle is BG
+	monSessions   int               // sessions with active monitor jobs
+	inputSessions int               // sessions awaiting user answer (AskUserQuestion)
+	openPRs       int               // sessions with at least one open PR (summed open-PR count)
+	stuckCount    int               // STUCK lifecycle sessions
+	waitCount     int               // WAIT lifecycle sessions
+	doneCount     int               // DONE lifecycle sessions
+	busyCount     int               // BUSY lifecycle sessions
+	hereCount     int               // sessions in the current tmux window
+	bestTime      time.Time         // most-recent ModTime in this project
+	expanded      bool              // current fold state at build time
+	lifecycle     session.LifecycleState
 }
 
 func (p projectItem) FilterValue() string {

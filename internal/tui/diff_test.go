@@ -112,9 +112,9 @@ func TestFormatWriteFolded(t *testing.T) {
 
 func TestToolFoldedSummary(t *testing.T) {
 	tests := []struct {
-		name     string
-		block    session.ContentBlock
-		wantNon  bool
+		name    string
+		block   session.ContentBlock
+		wantNon bool
 	}{
 		{
 			name:    "Edit tool",
