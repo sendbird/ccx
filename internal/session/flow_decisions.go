@@ -1,10 +1,13 @@
 package session
 
-// markFirstChangeDecisions emits a first-change decision marker for the first
-// Edit/Write occurrence per file path per session, in chronological order.
-// Memory writes already carry their own DecisionMemory marker and are skipped
-// so a memory note does not produce two markers for the same write.
-func (b *flowBuilder) markFirstChangeDecisions() {
+// markChangeDecisions emits a decision marker for every Edit/Write occurrence,
+// in chronological order across all transcripts. The first change to a given
+// file path is labeled "first change: <file>"; subsequent edits to the same
+// file are labeled "change: <file>" so the timeline shows every change while
+// still highlighting where each file was first touched. Memory writes already
+// carry their own DecisionMemory marker and are skipped so a memory note does
+// not produce two markers for the same write.
+func (b *flowBuilder) markChangeDecisions() {
 	// Collect change occurrences in chronological order across all transcripts.
 	var changes []int // indices into fi.artifacts
 	for i := range b.fi.artifacts {
@@ -22,21 +25,28 @@ func (b *flowBuilder) markFirstChangeDecisions() {
 	seen := make(map[string]bool)
 	for _, ci := range changes {
 		a := b.fi.artifacts[ci] // copy — appends below may reallocate the slice
-		if seen[a.Key] {
-			continue
-		}
-		seen[a.Key] = true
 		if isMemoryPath(a.Key) {
+			seen[a.Key] = true
 			continue // already a DecisionMemory marker
+		}
+		first := !seen[a.Key]
+		seen[a.Key] = true
+		// The "first-change:" key prefix drives the inspector's per-file change
+		// history lookup; keep it for both first and subsequent markers so every
+		// marker inspects to the same full history.
+		key := "first-change:" + a.Key
+		label := "change: " + baseName(a.Key)
+		if first {
+			label = "first change: " + baseName(a.Key)
 		}
 		b.append(Artifact{
 			Kind:   ArtifactDecision,
 			NodeID: a.NodeID,
-			Key:    "first-change:" + a.Key,
+			Key:    key,
 			Origin: a.Origin,
 			Data: DecisionData{
 				Kind:    DecisionFirstChange,
-				Label:   "first change: " + baseName(a.Key),
+				Label:   label,
 				Related: a.ID,
 			},
 		})

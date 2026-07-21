@@ -128,15 +128,32 @@ func inspectorScopeName(scope session.Scope) string {
 	}
 }
 
-func cycleInspectorScope(scope session.Scope) session.Scope {
-	switch scope {
-	case session.ScopeNode:
-		return session.ScopeSubtree
-	case session.ScopeSubtree:
-		return session.ScopeSession
-	default:
-		return session.ScopeNode
+// inspectorScopesFor returns the scope selector entries meaningful for a node,
+// in cycle order. Node and Session always apply; Subtree is offered only when it
+// resolves to a different artifact set than Node — i.e. the node has descendants
+// AND is not a phase. Without children, ScopeSubtree collapses to ScopeNode; and
+// a phase node is auto-expanded to its subtree even under ScopeNode (see
+// FlowIndex.scopeNodeIDs), so Node and Subtree are byte-identical there too.
+// Omitting the redundant Subtree step removes a confusing no-op from the cycle.
+func (a *App) inspectorScopesFor(nodeID string) []session.Scope {
+	if a.conv.flow != nil && nodeID != "" && len(a.conv.flow.Children(nodeID)) > 0 {
+		if node, ok := a.conv.flow.Node(nodeID); ok && node.Kind != session.FlowNodePhase {
+			return []session.Scope{session.ScopeNode, session.ScopeSubtree, session.ScopeSession}
+		}
 	}
+	return []session.Scope{session.ScopeNode, session.ScopeSession}
+}
+
+// normalizeInspectorScope collapses a scope the current node does not support
+// (Subtree on a childless node) down to Node so the selector never highlights an
+// entry it does not display.
+func (a *App) normalizeInspectorScope(nodeID string) {
+	for _, s := range a.inspectorScopesFor(nodeID) {
+		if s == a.conv.inspector.Scope {
+			return
+		}
+	}
+	a.conv.inspector.Scope = session.ScopeNode
 }
 
 // convItemFlowNodeID maps every unified-flow row to the FlowIndex node it owns.
@@ -302,6 +319,7 @@ func (a *App) syncInspectorSelection(item convItem) (session.FlowNode, bool) {
 		a.conv.inspector.Explicit = false
 	}
 	a.conv.inspector.NodeID = nodeID
+	a.normalizeInspectorScope(nodeID)
 	tabs := a.inspectorTabs(item, nodeID)
 	a.conv.inspector.Tab = validInspectorTab(a.conv.inspector.Tab, tabs)
 	return node, true
@@ -373,7 +391,15 @@ func (a *App) cycleInspectorTabBy(delta int) {
 }
 
 func (a *App) cycleInspectorScope() {
-	a.conv.inspector.Scope = cycleInspectorScope(a.conv.inspector.Scope)
+	scopes := a.inspectorScopesFor(a.conv.inspector.NodeID)
+	idx := 0
+	for i, s := range scopes {
+		if s == a.conv.inspector.Scope {
+			idx = i
+			break
+		}
+	}
+	a.conv.inspector.Scope = scopes[(idx+1)%len(scopes)]
 	a.conv.split.CacheKey = ""
 	a.updateConvPreview()
 }
@@ -398,7 +424,7 @@ func (a *App) inspectorHeader(item convItem, node session.FlowNode) string {
 		zoom = "INSPECTOR / ZOOM"
 	}
 	var scopeLabels []string
-	for _, scope := range []session.Scope{session.ScopeNode, session.ScopeSubtree, session.ScopeSession} {
+	for _, scope := range a.inspectorScopesFor(node.ID) {
 		label := inspectorScopeName(scope)
 		if scope == a.conv.inspector.Scope {
 			label = "[" + label + "]"

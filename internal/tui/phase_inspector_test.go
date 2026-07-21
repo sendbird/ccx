@@ -82,4 +82,20 @@ func TestRenderPhaseInspectorUsesPhaseSubtree(t *testing.T) {
 	if strings.Contains(verify, "scanner") || strings.Contains(verify, "13 exact") {
 		t.Fatalf("verify overview leaked scan phase: %q", verify)
 	}
+
+	// A phase node has children (its assigned agents) but scopeNodeIDs
+	// auto-expands ScopeNode to the phase subtree, so Node and Subtree resolve
+	// identically — the scope selector must omit the redundant Subtree there.
+	app := newTestApp([]session.Session{{ID: sessID, FilePath: sessPath}})
+	app.conv.flow = flow
+	phaseNode := session.FlowPhaseNodeID("run-phases", 1)
+	if scopes := app.inspectorScopesFor(phaseNode); len(scopes) != 2 ||
+		scopes[0] != session.ScopeNode || scopes[1] != session.ScopeSession {
+		t.Fatalf("phase node scopes = %v, want [Node Session]", scopes)
+	}
+	// The workflow node itself is a non-phase parent, so it keeps all three.
+	wfNode := session.FlowWorkflowNodeID("run-phases")
+	if scopes := app.inspectorScopesFor(wfNode); len(scopes) != 3 {
+		t.Fatalf("workflow node scopes = %v, want Node/Subtree/Session", scopes)
+	}
 }

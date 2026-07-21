@@ -236,13 +236,63 @@ func TestInspectorScopeAndTabKeys(t *testing.T) {
 	if app.conv.inspector.Tab == inspectorOverview {
 		t.Fatal("] did not cycle to a non-empty facet")
 	}
+	// The Explore agent has no descendants, so Subtree is omitted from the
+	// selector: scope cycles Node → Session → Node, skipping the redundant
+	// Subtree step that would resolve to the same set as Node.
+	app = pressKey(app, "s")
+	if app.conv.inspector.Scope != session.ScopeSession {
+		t.Fatalf("scope = %v, want session (childless node skips subtree)", app.conv.inspector.Scope)
+	}
+	app = pressKey(app, "s")
+	if app.conv.inspector.Scope != session.ScopeNode {
+		t.Fatalf("scope = %v, want node (wraps past session)", app.conv.inspector.Scope)
+	}
+}
+
+// TestInspectorScopeCycleIncludesSubtreeForParent verifies that a node with
+// descendants (a turn that spawned an agent) offers the full Node → Subtree →
+// Session cycle.
+func TestInspectorScopeCycleIncludesSubtreeForParent(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	// Turn a2 spawns the Explore agent, so its flow node has a child.
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+	})
+	app.conv.split.Focus = true
+	app.conv.inspector.Scope = session.ScopeNode
+	app.updateConvPreview()
+
+	scopes := app.inspectorScopesFor(app.conv.inspector.NodeID)
+	if len(scopes) != 3 {
+		t.Fatalf("parent node scopes = %v, want Node/Subtree/Session", scopes)
+	}
 	app = pressKey(app, "s")
 	if app.conv.inspector.Scope != session.ScopeSubtree {
-		t.Fatalf("scope = %v, want subtree", app.conv.inspector.Scope)
+		t.Fatalf("scope = %v, want subtree (parent node)", app.conv.inspector.Scope)
 	}
 	app = pressKey(app, "s")
 	if app.conv.inspector.Scope != session.ScopeSession {
 		t.Fatalf("scope = %v, want session", app.conv.inspector.Scope)
+	}
+}
+
+// TestInspectorScopeNormalizesOnChildlessNode verifies that selecting a childless
+// node while a Subtree scope is active collapses the scope back to Node, so the
+// selector never highlights an entry it does not display.
+func TestInspectorScopeNormalizesOnChildlessNode(t *testing.T) {
+	app, _, _ := setupInspectorFlowApp(t)
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "a2"
+	})
+	app.conv.inspector.Scope = session.ScopeSubtree
+	app.updateConvPreview()
+
+	// u1 is a plain user turn with no descendants — Subtree must not survive.
+	selectInspectorItem(t, app, func(item convItem) bool {
+		return item.kind == convMsg && item.merged.entry.UUID == "u1"
+	})
+	if app.conv.inspector.Scope == session.ScopeSubtree {
+		t.Fatal("Subtree scope survived selection of a childless node")
 	}
 }
 
