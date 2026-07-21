@@ -244,6 +244,12 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if c.ExecutionContexts == "" {
 		c.ExecutionContexts = d.Conversation.ExecutionContexts
 	}
+	if c.RegionUp == "" {
+		c.RegionUp = d.Conversation.RegionUp
+	}
+	if c.RegionDown == "" {
+		c.RegionDown = d.Conversation.RegionDown
+	}
 	if c.LiveToggle == "" {
 		c.LiveToggle = d.Conversation.LiveToggle
 	}

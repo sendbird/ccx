@@ -77,7 +77,7 @@ func TestExecutionContextMenuJumpsToSpawnOrigin(t *testing.T) {
 		t.Fatalf("context menu missing jump action: %q", menu)
 	}
 
-	app = pressKey(app, "J")
+	app = pressKey(app, "enter")
 	if app.executionContextMenu || app.conv.execution.Focused {
 		t.Fatalf("jump left menu/rail focused: menu=%t focus=%t", app.executionContextMenu, app.conv.execution.Focused)
 	}
@@ -142,7 +142,7 @@ func TestExecutionContextMenuMainHasNoOrigin(t *testing.T) {
 		t.Fatal("expected main context at rail cursor")
 	}
 	app = pressKey(app, "x")
-	app = pressKey(app, "J")
+	app = pressKey(app, "enter")
 	if app.copiedMsg != "No spawn origin for this context" {
 		t.Fatalf("main origin jump feedback = %q", app.copiedMsg)
 	}
@@ -536,5 +536,52 @@ func TestExecutionRailMouseDoesNotChangeConversationSelection(t *testing.T) {
 	app = model.(*App)
 	if got := app.selectedConversationItemID(); got != before {
 		t.Fatalf("rail wheel changed conversation selection to %q, want %q", got, before)
+	}
+}
+
+// TestRegionNavigationCyclesWithJK verifies uppercase K/J move focus up/down
+// through the RESOURCES → CONVERSATION → EXECUTION CONTEXTS stack, stopping at
+// the ends, and that the fixture exposes all three regions.
+func TestRegionNavigationCyclesWithJK(t *testing.T) {
+	app, _, _ := setupConversationStateFixture(t)
+	if len(app.conv.contextItems) == 0 {
+		t.Fatal("fixture has no RESOURCES region")
+	}
+	if app.executionRailItemCount() == 0 {
+		t.Fatal("fixture has no EXECUTION CONTEXTS region")
+	}
+
+	// Start focused on the top region (RESOURCES).
+	app.focusConversationRegion(conversationRegionPinned)
+	if got := app.currentConversationRegion(); got != conversationRegionPinned {
+		t.Fatalf("initial region = %v, want pinned", got)
+	}
+
+	// J descends: pinned → timeline → execution, then stops.
+	app = pressKey(app, "J")
+	if got := app.currentConversationRegion(); got != conversationRegionTimeline {
+		t.Fatalf("after J region = %v, want timeline", got)
+	}
+	app = pressKey(app, "J")
+	if got := app.currentConversationRegion(); got != conversationRegionExecution {
+		t.Fatalf("after JJ region = %v, want execution", got)
+	}
+	app = pressKey(app, "J")
+	if got := app.currentConversationRegion(); got != conversationRegionExecution {
+		t.Fatalf("J past bottom region = %v, want execution (clamped)", got)
+	}
+
+	// K ascends back to the top and stops.
+	app = pressKey(app, "K")
+	if got := app.currentConversationRegion(); got != conversationRegionTimeline {
+		t.Fatalf("after K region = %v, want timeline", got)
+	}
+	app = pressKey(app, "K")
+	if got := app.currentConversationRegion(); got != conversationRegionPinned {
+		t.Fatalf("after KK region = %v, want pinned", got)
+	}
+	app = pressKey(app, "K")
+	if got := app.currentConversationRegion(); got != conversationRegionPinned {
+		t.Fatalf("K past top region = %v, want pinned (clamped)", got)
 	}
 }

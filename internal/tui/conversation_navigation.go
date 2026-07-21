@@ -14,7 +14,81 @@ type conversationRegion int
 const (
 	conversationRegionPinned conversationRegion = iota
 	conversationRegionTimeline
+	conversationRegionExecution
 )
+
+// conversationRegions returns the vertically-stacked focusable regions that
+// currently exist, top to bottom: RESOURCES (pinned), CONVERSATION (timeline),
+// EXECUTION CONTEXTS (rail). Timeline always exists; the other two appear only
+// when populated.
+func (a *App) conversationRegions() []conversationRegion {
+	regions := make([]conversationRegion, 0, 3)
+	if len(a.conv.contextItems) > 0 {
+		regions = append(regions, conversationRegionPinned)
+	}
+	regions = append(regions, conversationRegionTimeline)
+	if a.executionRailItemCount() > 0 {
+		regions = append(regions, conversationRegionExecution)
+	}
+	return regions
+}
+
+// currentConversationRegion reports which vertical region currently has focus.
+func (a *App) currentConversationRegion() conversationRegion {
+	if a.conv.execution.Focused {
+		return conversationRegionExecution
+	}
+	if a.conv.contextActive {
+		return conversationRegionPinned
+	}
+	return conversationRegionTimeline
+}
+
+// focusConversationRegion moves focus to the given region, leaving the others.
+func (a *App) focusConversationRegion(region conversationRegion) {
+	switch region {
+	case conversationRegionExecution:
+		a.focusExecutionRail()
+	case conversationRegionPinned:
+		a.conv.execution.Focused = false
+		index := min(max(a.conv.contextIndex, 0), len(a.conv.contextItems)-1)
+		a.selectConvContext(index)
+	default: // timeline
+		a.conv.execution.Focused = false
+		body := a.convList.VisibleItems()
+		if len(body) > 0 {
+			a.selectConvBody(min(max(a.convList.Index(), 0), len(body)-1))
+		} else {
+			a.conv.contextActive = false
+		}
+	}
+	a.conv.split.CacheKey = ""
+	a.updateConvPreview()
+}
+
+// cycleConversationRegion moves focus one region up (delta<0) or down (delta>0)
+// through the stack of existing regions, stopping at the ends. Returns false if
+// there is nowhere to move.
+func (a *App) cycleConversationRegion(delta int) bool {
+	regions := a.conversationRegions()
+	if len(regions) < 2 {
+		return false
+	}
+	current := a.currentConversationRegion()
+	idx := 0
+	for i, r := range regions {
+		if r == current {
+			idx = i
+			break
+		}
+	}
+	next := idx + delta
+	if next < 0 || next >= len(regions) {
+		return false
+	}
+	a.focusConversationRegion(regions[next])
+	return true
+}
 
 type conversationLocation struct {
 	Region conversationRegion
@@ -291,6 +365,12 @@ func (a *App) selectLastConvMessage() bool {
 		}
 	}
 	return false
+}
+
+// isConvListFiltering reports whether the conversation list's filter input owns
+// key events right now.
+func (a *App) isConvListFiltering() bool {
+	return a.convList.FilterState() == list.Filtering
 }
 
 // switchConversationRegion explicitly toggles between the fixed pinned rows and

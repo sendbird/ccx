@@ -80,6 +80,8 @@ type ConvKeymap struct {
 	JumpToTree        string `yaml:"jump_to_tree"`
 	SwitchRegion      string `yaml:"switch_region"`
 	ExecutionContexts string `yaml:"execution_contexts"`
+	RegionUp          string `yaml:"region_up"`
+	RegionDown        string `yaml:"region_down"`
 	LiveToggle        string `yaml:"live_toggle"`
 	Edit              string `yaml:"edit"`
 	Actions           string `yaml:"actions"`
@@ -158,9 +160,11 @@ func DefaultKeymap() Keymap {
 			Plugins: "p",
 		},
 		Conversation: ConvKeymap{
-			JumpToTree:        "J",
+			JumpToTree:        "o",
 			SwitchRegion:      "P",
 			ExecutionContexts: "A",
+			RegionUp:          "K",
+			RegionDown:        "J",
 			LiveToggle:        "L",
 			Edit:              "e",
 			Actions:           "x",
@@ -350,6 +354,12 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Conversation.ExecutionContexts != "" {
 		dst.Conversation.ExecutionContexts = src.Conversation.ExecutionContexts
+	}
+	if src.Conversation.RegionUp != "" {
+		dst.Conversation.RegionUp = src.Conversation.RegionUp
+	}
+	if src.Conversation.RegionDown != "" {
+		dst.Conversation.RegionDown = src.Conversation.RegionDown
 	}
 	if src.Conversation.LiveToggle != "" {
 		dst.Conversation.LiveToggle = src.Conversation.LiveToggle

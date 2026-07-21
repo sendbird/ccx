@@ -325,6 +325,48 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleExecutionContextMenuKey(key)
 	}
 
+	// Uppercase K/J move focus between the vertically-stacked regions
+	// (RESOURCES ↑ CONVERSATION ↕ EXECUTION CONTEXTS ↓). Handled before the
+	// execution-rail and split-pane branches so it works from any region,
+	// including while the rail itself is focused. Skipped during list filtering,
+	// which owns key input.
+	if !a.isConvListFiltering() {
+		// JumpToTree (origin-turn / tmux-pane jump) is bound to `o` by default; J
+		// is reserved for region navigation. Enter and the x actions menu also
+		// cover jumping where applicable.
+		if jt := a.keymap.Conversation.JumpToTree; jt != "" && key == jt {
+			item, ok := a.selectedConversationItem()
+			if ok && item.kind == convSessionMeta {
+				if target, has := a.currentMetaTarget(); has {
+					if m, cmd, jumped := a.jumpToMetaTarget(target); jumped {
+						return m, cmd
+					}
+				}
+				a.copiedMsg = "no origin turn for this entry"
+				return a, nil
+			}
+			if ok && item.kind != convMsg {
+				return a.jumpToOriginMessage()
+			}
+			if a.config.TmuxEnabled {
+				return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
+			}
+			return a, nil
+		}
+		switch key {
+		case a.keymap.Conversation.RegionUp:
+			if a.cycleConversationRegion(-1) {
+				a.pauseLiveTail()
+			}
+			return a, nil
+		case a.keymap.Conversation.RegionDown:
+			if a.cycleConversationRegion(1) {
+				a.pauseLiveTail()
+			}
+			return a, nil
+		}
+	}
+
 	if a.conv.execution.Focused {
 		if nav, navMsg := a.keymap.TranslateNav(key, msg); nav != "" {
 			key = nav
@@ -439,24 +481,6 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a.openLiveInput(a.currentSess.ProjectPath, a.currentSess.ID)
-	case a.keymap.Conversation.JumpToTree:
-		item, ok := a.selectedConversationItem()
-		if ok && item.kind == convSessionMeta {
-			if target, has := a.currentMetaTarget(); has {
-				if m, cmd, jumped := a.jumpToMetaTarget(target); jumped {
-					return m, cmd
-				}
-			}
-			a.copiedMsg = "no origin turn for this entry"
-			return a, nil
-		}
-		if ok && item.kind != convMsg {
-			return a.jumpToOriginMessage()
-		}
-		if a.config.TmuxEnabled {
-			return a.jumpToTmuxPane(a.currentSess.ProjectPath, a.currentSess.ID)
-		}
-		return a, nil
 	case a.keymap.Conversation.Actions:
 		a.convActionsMenu = true
 		return a, nil
