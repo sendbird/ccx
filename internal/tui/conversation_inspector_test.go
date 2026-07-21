@@ -45,6 +45,64 @@ func setupInspectorFlowApp(t *testing.T) (*App, string, string) {
 	return app, sessPath, agentPath
 }
 
+// setupChangeDiffApp builds a session that edits the same file twice, so change
+// decisions and the Changes facet have multiple occurrences to render.
+func setupChangeDiffApp(t *testing.T) *App {
+	t.Helper()
+	root := t.TempDir()
+	sessID := "change-diff"
+	sessPath := filepath.Join(root, sessID+".jsonl")
+	transcript := `{"type":"user","uuid":"u1","timestamp":"2026-07-01T10:00:00Z","message":{"role":"user","content":"edit the file"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-07-01T10:00:10Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"edit-1","name":"Edit","input":{"file_path":"/repo/svc.go","old_string":"alpha","new_string":"beta"}}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-07-01T10:00:20Z","message":{"role":"user","content":"one more change"}}
+{"type":"assistant","uuid":"a2","timestamp":"2026-07-01T10:00:30Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"edit-2","name":"Edit","input":{"file_path":"/repo/svc.go","old_string":"gamma","new_string":"delta"}}]}}
+`
+	if err := os.WriteFile(sessPath, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sess := session.Session{ID: sessID, ShortID: "chg", FilePath: sessPath, ProjectPath: root, ProjectName: "chg"}
+	app := NewApp([]session.Session{sess}, Config{})
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 150, Height: 45})
+	app = model.(*App)
+	app.openConversation(sess)
+	return app
+}
+
+func TestChangeDecisionInspectorShowsAllChangesWithDiff(t *testing.T) {
+	app := setupChangeDiffApp(t)
+	var decision session.Artifact
+	found := false
+	for _, d := range app.conv.flow.Decisions(session.ScopeSession) {
+		data, _ := d.Data.(session.DecisionData)
+		if data.Kind == session.DecisionFirstChange && d.Key == "first-change:/repo/svc.go" {
+			decision = d
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("no first-change decision for /repo/svc.go")
+	}
+	out := stripANSI(app.renderDecisionInspector(decision))
+	// Both edits to the same file must appear, each with its diff hunk.
+	for _, want := range []string{"1. Edit /repo/svc.go", "2. Edit /repo/svc.go", "alpha", "beta", "gamma", "delta"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("change decision inspector missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestChangesFacetRendersInlineDiff(t *testing.T) {
+	app := setupChangeDiffApp(t)
+	app.conv.inspector.Scope = session.ScopeSession
+	out := stripANSI(app.renderInspectorChanges(app.conv.flow.RootID))
+	for _, want := range []string{"Edit /repo/svc.go", "beta", "delta"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("changes facet missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func selectInspectorItem(t *testing.T, app *App, match func(convItem) bool) convItem {
 	t.Helper()
 	for i, raw := range app.convList.Items() {

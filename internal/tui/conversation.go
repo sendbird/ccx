@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -985,9 +986,11 @@ func (a *App) renderDecisionInspector(artifact session.Artifact) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Decision: %s\n\nKind: %s\n", data.Label, data.Kind)
 	fmt.Fprintf(&b, "Origin: %s · entry %d · block %d\n", artifact.Origin.Transcript, artifact.Origin.EntryIndex+1, artifact.Origin.BlockIndex+1)
-	if a.conv.flow != nil && data.Related != "" {
+	if data.Kind == session.DecisionFirstChange && a.conv.flow != nil {
+		a.writeChangeHistory(&b, artifact)
+	} else if a.conv.flow != nil && data.Related != "" {
 		if related, ok := a.conv.flow.ArtifactByID(data.Related); ok {
-			writeDecisionRelated(&b, related)
+			a.writeDecisionRelated(&b, related)
 		}
 	}
 	if _, ok := a.decisionTask(artifact); ok {
@@ -998,10 +1001,50 @@ func (a *App) renderDecisionInspector(artifact session.Artifact) string {
 	return b.String()
 }
 
+// writeChangeHistory lists every Edit/Write occurrence for the file a
+// first-change decision points at, each with its inline diff — so selecting the
+// decision surfaces the file's full change history, not just the first edit.
+func (a *App) writeChangeHistory(b *strings.Builder, artifact session.Artifact) {
+	path := strings.TrimPrefix(artifact.Key, "first-change:")
+	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+	var occs []session.Artifact
+	for _, art := range a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactChange, session.ScopeSession) {
+		if art.Key == path {
+			occs = append(occs, art)
+		}
+	}
+	// Sort chronologically so cross-transcript edits read as a real timeline,
+	// matching the Changes facet ordering.
+	sort.SliceStable(occs, func(i, j int) bool {
+		return occs[i].Origin.Timestamp.Before(occs[j].Origin.Timestamp)
+	})
+	n := 0
+	for _, art := range occs {
+		data, _ := art.Data.(session.ChangeData)
+		summary := data.Summary
+		if summary == "" {
+			summary = changeInputSummary(data.ToolName, data.ToolInput)
+		}
+		n++
+		fmt.Fprintf(b, "\n## %d. %s %s", n, data.ToolName, art.Key)
+		if summary != "" {
+			fmt.Fprintf(b, " · %s", summary)
+		}
+		b.WriteByte('\n')
+		fmt.Fprintf(b, "origin: %s\n", inspectorArtifactOrigin(art.Origin))
+		if diff := changeDiff(data, diffWidth); diff != "" {
+			b.WriteString("\n" + diff + "\n")
+		}
+	}
+	if n == 0 {
+		b.WriteString("\nNo change occurrences found.\n")
+	}
+}
+
 // writeDecisionRelated inlines the artifact a decision derives from, so each
 // decision marker inspects to its own plan/task/memory content instead of a
 // generic stub.
-func writeDecisionRelated(b *strings.Builder, related session.Artifact) {
+func (a *App) writeDecisionRelated(b *strings.Builder, related session.Artifact) {
 	switch payload := related.Data.(type) {
 	case session.PlanData:
 		if payload.PlanFilePath != "" {
@@ -1031,6 +1074,10 @@ func writeDecisionRelated(b *strings.Builder, related session.Artifact) {
 			fmt.Fprintf(b, " · %s", summary)
 		}
 		b.WriteByte('\n')
+		diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+		if diff := changeDiff(payload, diffWidth); diff != "" {
+			b.WriteString("\n" + diff + "\n")
+		}
 	}
 }
 
