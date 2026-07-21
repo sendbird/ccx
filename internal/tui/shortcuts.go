@@ -18,18 +18,7 @@ type Shortcuts map[string]ViewShortcuts
 func DefaultShortcuts() Shortcuts {
 	return Shortcuts{
 		"sessions": {
-			Left: ShortcutMap{
-				"0": "preview:live",
-				"1": "preview:conv",
-				"2": "preview:contexts",
-				"3": "preview:agents",
-				"4": "preview:tasks",
-				"5": "preview:refs",
-				"6": "preview:mem",
-				"7": "preview:stats",
-				"8": "preview:wf",
-				"9": "preview:shells",
-			},
+			Left: flowOrderSessionsLeft(),
 		},
 		"conversation": {
 			Right: ShortcutMap{
@@ -61,6 +50,11 @@ func DefaultShortcuts() Shortcuts {
 // mergeShortcuts overlays user shortcuts onto defaults.
 // User entries override; unset entries keep defaults.
 func mergeShortcuts(dst Shortcuts, src Shortcuts) {
+	// Detect a stale pre-0 sessions layout from the USER config before the merge
+	// clobbers it — the default (dst) always has a "0" key, so the decision must
+	// be based on what the user actually persisted.
+	staleSessions := isPreZeroSessionsLayout(src)
+
 	for viewName, srcVS := range src {
 		dstVS, ok := dst[viewName]
 		if !ok {
@@ -85,40 +79,52 @@ func mergeShortcuts(dst Shortcuts, src Shortcuts) {
 		}
 		dst[viewName] = dstVS
 	}
-	migrateShortcuts(dst)
+	if staleSessions {
+		dst["sessions"] = ViewShortcuts{Left: flowOrderSessionsLeft(), Right: dst["sessions"].Right}
+	}
 }
 
-func migrateShortcuts(sc Shortcuts) {
-	sess, ok := sc["sessions"]
+// isPreZeroSessionsLayout reports whether the user config's sessions.left is a
+// pre-0-key default layout (1=conv with live at 5 or 6, no 0 key) that should
+// be migrated wholesale to the flow-ordered layout. A customized layout (has a
+// "0", or "1" != preview:conv) returns false and is left alone.
+func isPreZeroSessionsLayout(src Shortcuts) bool {
+	sess, ok := src["sessions"]
 	if !ok || sess.Left == nil {
-		return
+		return false
 	}
-	// Older defaults had no "0" key and put live at 5 or 6 (e.g.
-	// 1conv 2stats 3mem 4tasks 5agents 6live 7contexts 8refs). If the map still
-	// looks like one of those untouched defaults, migrate it wholesale to the
-	// flow-ordered layout with 0=live. A config the user has customized (its "1"
-	// is not the old preview:conv, or a "0" already exists) is left untouched.
 	if _, hasZero := sess.Left["0"]; hasZero {
-		sc["sessions"] = sess
-		return
+		return false
 	}
-	looksLikeOldDefault := sess.Left["1"] == "preview:conv" &&
+	return sess.Left["1"] == "preview:conv" &&
 		(sess.Left["6"] == "preview:live" || sess.Left["5"] == "preview:live")
-	if looksLikeOldDefault {
-		sess.Left = ShortcutMap{
-			"0": "preview:live",
-			"1": "preview:conv",
-			"2": "preview:contexts",
-			"3": "preview:agents",
-			"4": "preview:tasks",
-			"5": "preview:refs",
-			"6": "preview:mem",
-			"7": "preview:stats",
-			"8": "preview:wf",
-			"9": "preview:shells",
-		}
+}
+
+// flowOrderSessionsLeft is the canonical flow-ordered sessions.left layout.
+func flowOrderSessionsLeft() ShortcutMap {
+	return ShortcutMap{
+		"0": "preview:live",
+		"1": "preview:conv",
+		"2": "preview:contexts",
+		"3": "preview:agents",
+		"4": "preview:tasks",
+		"5": "preview:refs",
+		"6": "preview:mem",
+		"7": "preview:stats",
+		"8": "preview:wf",
+		"9": "preview:shells",
 	}
-	sc["sessions"] = sess
+}
+
+// migrateShortcuts rewrites a stale pre-0 sessions layout in place to the
+// flow-ordered layout. Kept for direct callers/tests; mergeShortcuts does the
+// same detection against the user src before the merge clobbers it.
+func migrateShortcuts(sc Shortcuts) {
+	if isPreZeroSessionsLayout(sc) {
+		sess := sc["sessions"]
+		sess.Left = flowOrderSessionsLeft()
+		sc["sessions"] = sess
+	}
 }
 
 // handleShortcutKey checks if a key press matches a shortcut for the current

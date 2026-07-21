@@ -286,6 +286,7 @@ type App struct {
 	sessCtxCursor         int                   // cursor over the flattened context node list
 	sessCtxNodes          []session.ContextNode // flattened drill-targetable nodes, cursor order
 	sessCtxCacheID        string                // session ID the context cursor currently tracks
+	autoStateFilter       bool                  // the active filter is the auto-applied startup default (clear it if it hides everything)
 	sessRefsCache         string
 	sessRefsCacheKey      string
 	sessRefsCacheID       string // session ID the refs cursor currently tracks
@@ -580,11 +581,28 @@ func (a *App) setSessionListFilter(query string) {
 	selectionKey := a.selectedSessionListItemKey()
 	a.sessionList.ResetFilter()
 	a.config.SearchQuery = ""
+	a.autoStateFilter = false // an explicit filter change is no longer the auto default
 	if strings.TrimSpace(query) != "" {
 		applyListFilter(&a.sessionList, query)
 		a.config.SearchQuery = query
 	}
 	a.restoreSessionListSelection(selectionKey)
+}
+
+// applyStartupFilter applies the persisted/default SearchQuery to the freshly
+// built list. When the filter is the auto-applied active-state default and it
+// leaves the browser empty (e.g. no live/input/monitor sessions right now),
+// clear it so the user sees their sessions instead of a blank screen.
+func (a *App) applyStartupFilter() {
+	if a.config.SearchQuery == "" {
+		return
+	}
+	applyListFilter(&a.sessionList, a.config.SearchQuery)
+	if a.autoStateFilter && a.visibleProjectBrowserItems() == 0 {
+		a.sessionList.ResetFilter()
+		a.config.SearchQuery = ""
+		a.autoStateFilter = false
+	}
 }
 
 func (a *App) visibleProjectBrowserItems() int {
@@ -816,6 +834,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	// --search or a persisted filter. The `S` state menu toggles this.
 	if cliSearch == "" && a.config.SearchQuery == "" {
 		a.config.SearchQuery = defaultActiveStateFilter
+		a.autoStateFilter = true
 	}
 
 	// Cleanup stale remote sessions, then restore remaining as virtual items
@@ -1141,9 +1160,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
 			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 			a.sessSplit.CacheKey = ""
-			if a.config.SearchQuery != "" {
-				applyListFilter(&a.sessionList, a.config.SearchQuery)
-			}
+			a.applyStartupFilter()
 			// Restore cursor to previously selected session.
 			// Use VisibleItems() because Select() operates on the visible (filtered) index space.
 			if selectedID != "" {
@@ -7419,9 +7436,7 @@ func (a *App) resizeAll() tea.Cmd {
 		if len(a.sessions) > 0 {
 			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 			a.sessSplit.CacheKey = ""
-			if a.config.SearchQuery != "" {
-				applyListFilter(&a.sessionList, a.config.SearchQuery)
-			}
+			a.applyStartupFilter()
 			cmd = a.autoSelectSession()
 			// Trigger preview lookup for modes restored from preferences whose
 			// update returns an async cmd. View() cannot dispatch a cmd, and this
@@ -7532,8 +7547,8 @@ func (a *App) rebuildSessionList() {
 	}
 
 	// Also re-apply startup search query if no interactive filter was active
-	if filterTerm == "" && a.config.SearchQuery != "" {
-		applyListFilter(&a.sessionList, a.config.SearchQuery)
+	if filterTerm == "" {
+		a.applyStartupFilter()
 	}
 
 	// Restore cursor to previously selected session.
