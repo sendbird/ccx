@@ -75,12 +75,19 @@ func (a *App) cycleConversationRegion(delta int) bool {
 		return false
 	}
 	current := a.currentConversationRegion()
-	idx := 0
+	idx, found := 0, false
 	for i, r := range regions {
 		if r == current {
-			idx = i
+			idx, found = i, true
 			break
 		}
+	}
+	// current can be a region that no longer exists (e.g. the rail was emptied
+	// while still marked focused). Snap to the nearest existing region in the
+	// requested direction rather than mis-clamping off a stale index.
+	if !found {
+		a.focusConversationRegion(regions[0])
+		return true
 	}
 	next := idx + delta
 	if next < 0 || next >= len(regions) {
