@@ -7541,8 +7541,13 @@ func (a *App) rebuildSessionList() {
 	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 	a.sessSplit.CacheKey = ""
 
-	// Reapply filter
-	if filterTerm != "" {
+	// Reapply filter. The auto-applied active-state default goes through the
+	// blank-guard (applyStartupFilter) so a background rebuild that finds nothing
+	// live/input/mon right now clears the filter instead of stranding the user on
+	// a "No items" screen. An explicit user filter is reapplied verbatim.
+	if filterTerm != "" && a.autoStateFilter && filterTerm == defaultActiveStateFilter {
+		a.applyStartupFilter()
+	} else if filterTerm != "" {
 		applyListFilter(&a.sessionList, filterTerm)
 	}
 
