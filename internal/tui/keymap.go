@@ -77,12 +77,13 @@ type NavigationKeymap struct {
 
 // ConvKeymap defines configurable keybindings for the conversation view.
 type ConvKeymap struct {
-	JumpToTree   string `yaml:"jump_to_tree"`
-	SwitchRegion string `yaml:"switch_region"`
-	LiveToggle   string `yaml:"live_toggle"`
-	Edit         string `yaml:"edit"`
-	Actions      string `yaml:"actions"`
-	Input        string `yaml:"input"`
+	JumpToTree        string `yaml:"jump_to_tree"`
+	SwitchRegion      string `yaml:"switch_region"`
+	ExecutionContexts string `yaml:"execution_contexts"`
+	LiveToggle        string `yaml:"live_toggle"`
+	Edit              string `yaml:"edit"`
+	Actions           string `yaml:"actions"`
+	Input             string `yaml:"input"`
 }
 
 // PreviewKeymap defines configurable keybindings for focused preview panes.
@@ -157,12 +158,13 @@ func DefaultKeymap() Keymap {
 			Plugins: "p",
 		},
 		Conversation: ConvKeymap{
-			JumpToTree:   "J",
-			SwitchRegion: "P",
-			LiveToggle:   "L",
-			Edit:         "e",
-			Actions:      "x",
-			Input:        "I",
+			JumpToTree:        "J",
+			SwitchRegion:      "P",
+			ExecutionContexts: "A",
+			LiveToggle:        "L",
+			Edit:              "e",
+			Actions:           "x",
+			Input:             "I",
 		},
 		Preview: PreviewKeymap{
 			FoldAll:   "f",
@@ -345,6 +347,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Conversation.SwitchRegion != "" {
 		dst.Conversation.SwitchRegion = src.Conversation.SwitchRegion
+	}
+	if src.Conversation.ExecutionContexts != "" {
+		dst.Conversation.ExecutionContexts = src.Conversation.ExecutionContexts
 	}
 	if src.Conversation.LiveToggle != "" {
 		dst.Conversation.LiveToggle = src.Conversation.LiveToggle

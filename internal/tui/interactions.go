@@ -153,6 +153,9 @@ func (a *App) conversationEnterHelpAction() interactionAction {
 					action.Enabled = target.messageUUID != "" || target.entryIndex >= 0
 					action.Label = "jump"
 				}
+			case metaTargetTodo:
+				action.Enabled = target.messageUUID != "" || target.entryIndex >= 0
+				action.Label = "jump"
 			case metaTargetTask:
 				action.Enabled = target.messageUUID != "" || target.entryIndex >= 0
 				if task, ok := a.taskByID(target.taskID); ok {
@@ -193,13 +196,14 @@ func (a *App) conversationEnterHelpAction() interactionAction {
 }
 
 func (a *App) conversationPrimaryHelpActions() []interactionAction {
-	regionLabel := "pinned"
+	regionLabel := "resources"
 	if a.conv.contextActive {
 		regionLabel = "conversation"
 	}
 	actions := []interactionAction{
 		a.conversationEnterHelpAction(),
 		bindAction("", a.keymap.Conversation.SwitchRegion, regionLabel),
+		bindAction("", a.keymap.Conversation.ExecutionContexts, "contexts"),
 		bindAction("", a.keymap.Conversation.Edit, "edit"),
 		labelAction("", "p", "page"),
 		bindAction("", a.keymap.Conversation.Actions, "actions"),

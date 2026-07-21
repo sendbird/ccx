@@ -7,6 +7,34 @@ import (
 	"time"
 )
 
+func TestLoadTodosFromEntriesUsesLatestSnapshot(t *testing.T) {
+	entries := []Entry{
+		{Content: []ContentBlock{{Type: "tool_use", ToolName: "TodoWrite", ToolInput: `{"todos":[{"content":"old","status":"pending"}]}`}}},
+		{Content: []ContentBlock{{Type: "tool_use", ToolName: "TodoWrite", ToolInput: `{"todos":[{"content":"new","status":"in_progress"},{"content":"done","status":"completed"}]}`}}},
+	}
+	todos := LoadTodosFromEntries(entries)
+	if len(todos) != 2 || todos[0].Content != "new" || todos[1].Status != "completed" {
+		t.Fatalf("latest todos = %#v", todos)
+	}
+}
+
+func TestLoadTodoSnapshotFromEntriesPreservesEmptyLatestSnapshot(t *testing.T) {
+	entries := []Entry{
+		{Content: []ContentBlock{{Type: "tool_use", ToolName: "TodoWrite", ToolInput: `{"todos":[{"content":"old","status":"pending"}]}`}}},
+		{Content: []ContentBlock{{Type: "tool_use", ToolName: "TodoWrite", ToolInput: `{"todos":[]}`}}},
+	}
+	todos, found := LoadTodoSnapshotFromEntries(entries)
+	if !found {
+		t.Fatal("empty TodoWrite snapshot was treated as absent")
+	}
+	if len(todos) != 0 {
+		t.Fatalf("empty latest snapshot returned %#v", todos)
+	}
+	if got := LoadTodosFromEntries(entries); len(got) != 0 {
+		t.Fatalf("compatibility loader returned %#v", got)
+	}
+}
+
 func TestLoadTasksFromEntries_ResolvesIDLessCreatesFromResults(t *testing.T) {
 	entries := []Entry{
 		{Role: "assistant", Content: []ContentBlock{

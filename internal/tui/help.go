@@ -118,6 +118,9 @@ func (a *App) sessHelpLine() string {
 // --- Conversation view help ---
 
 func (a *App) convHelpLine(badges string) string {
+	if a.conv.execution.Focused {
+		return formatHelp("↑↓/jk:context ↵/→:open A/esc:back q:quit")
+	}
 	if a.conv.blockFiltering {
 		return "  " + a.conv.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
 	}
@@ -143,13 +146,13 @@ func (a *App) convHelpLine(badges string) string {
 			escLabel = "back"
 		case sp.Focus:
 			escLabel = "list"
-		case len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "":
+		case len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.cron.ID != "":
 			escLabel = "parent"
 		default:
 			escLabel = "close"
 		}
 		h = joinHelpSections(h, interactionHelpText(labelAction("", "esc", escLabel), resizeHelpAction(a)))
-	} else if len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.agent.ShortID != "" || a.conv.cron.ID != "" {
+	} else if len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.cron.ID != "" {
 		escLabel = "parent"
 		h = joinHelpSections(h, interactionHelpText(a.conversationPreviewHiddenHelpActions()...), "esc:"+escLabel)
 	} else {

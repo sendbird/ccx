@@ -434,6 +434,7 @@ type App struct {
 		items          []convItem
 		flow           *session.FlowIndex
 		inspector      conversationInspector
+		execution      executionRailState
 		toolUseToAgent map[string]string // tool_use_id → subagent ID (from toolUseResult.agentId)
 		split          SplitPane
 		agent          session.Subagent // non-zero when viewing agent conversation
@@ -7098,7 +7099,7 @@ func (a *App) resizeAll() tea.Cmd {
 	if a.convList.Width() > 0 {
 		selectedID := a.selectedConversationItemID()
 		a.updateConvHeader()
-		a.conv.split.Resize(a.width, a.height, a.splitRatio)
+		a.conv.split.Resize(a.width, a.conversationLayoutHeight(), a.splitRatio)
 		a.restoreConvSelection(selectedID)
 		// Re-render preview content at new dimensions (preserves folds/scroll)
 		if a.conv.split.Show {

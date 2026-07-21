@@ -107,6 +107,34 @@ func TestFilterSideQuestionContext_ThreeEntries(t *testing.T) {
 	}
 }
 
+func TestFilterSideQuestionContext_KeepsToolResultAfterActualQuestion(t *testing.T) {
+	base := time.Now()
+	entries := []session.Entry{
+		makeTextEntry("user", base, "inherited parent prompt"),
+		makeTextEntry("assistant", base.Add(time.Second), "inherited parent answer"),
+		makeTextEntry("user", base.Add(2*time.Second), "actual side question"),
+		{Role: "assistant", Timestamp: base.Add(3 * time.Second), Content: []session.ContentBlock{{
+			Type: "tool_use", ID: "todo-call", ToolName: "TodoWrite",
+			ToolInput: `{"todos":[{"content":"visible todo","status":"pending"}]}`,
+		}}},
+		{Role: "user", Timestamp: base.Add(4 * time.Second), Content: []session.ContentBlock{{
+			Type: "tool_result", ID: "todo-call", Text: "updated",
+		}}},
+		makeTextEntry("assistant", base.Add(5*time.Second), "actual side answer"),
+	}
+
+	result := filterSideQuestionContext(entries)
+	if len(result) != 5 { // summary + question + tool use + result + answer
+		t.Fatalf("got %d entries, want 5", len(result))
+	}
+	if result[1].Content[0].Text != "actual side question" {
+		t.Fatalf("visible question = %q", result[1].Content[0].Text)
+	}
+	if result[2].Content[0].ToolName != "TodoWrite" || result[3].Content[0].Type != "tool_result" {
+		t.Fatalf("side-question tool exchange was not preserved: %#v", result[1:])
+	}
+}
+
 func TestFilterSideQuestionContext_AllAssistant(t *testing.T) {
 	// Edge case: no user messages at all
 	base := time.Now()

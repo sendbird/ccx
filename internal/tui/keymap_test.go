@@ -53,6 +53,9 @@ func TestDefaultKeymap(t *testing.T) {
 	if km.Conversation.SwitchRegion != "P" {
 		t.Errorf("DefaultKeymap().Conversation.SwitchRegion=%q, want P", km.Conversation.SwitchRegion)
 	}
+	if km.Conversation.ExecutionContexts != "A" {
+		t.Errorf("DefaultKeymap().Conversation.ExecutionContexts=%q, want A", km.Conversation.ExecutionContexts)
+	}
 }
 
 func TestLoadKeymapConversationSwitchRegionOverride(t *testing.T) {

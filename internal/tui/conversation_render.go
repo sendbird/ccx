@@ -721,10 +721,10 @@ func buildConvContextItems(sess session.Session, merged []mergedMsg, flow *sessi
 		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "summary", label: label, facets: facets, aggregate: true})
 	}
 	if sess.HasMemory || len(sess.Todos) > 0 {
-		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "memory", label: "Session Memory"})
+		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "memory", label: "Session Memory & Todos"})
 	}
 	if sess.HasPlan || len(sess.Tasks) > 0 || len(sess.Crons) > 0 || sess.HasTasks || sess.HasCrons || sess.HasAgents {
-		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "tasksplan", label: "Session Tasks/Plan"})
+		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "tasksplan", label: "Session Tasks/Plans"})
 	}
 	return items
 }

@@ -169,6 +169,35 @@ func loadFileTodos(sessionID, home string) []TodoItem {
 	return todos
 }
 
+// LoadTodoSnapshotFromEntries returns the latest TodoWrite snapshot and whether
+// any snapshot was present. The boolean distinguishes "all todos deleted" from
+// transcripts that never wrote todos.
+func LoadTodoSnapshotFromEntries(entries []Entry) ([]TodoItem, bool) {
+	var latest []TodoItem
+	found := false
+	for _, entry := range entries {
+		for _, block := range entry.Content {
+			if block.Type != "tool_use" || block.ToolName != "TodoWrite" {
+				continue
+			}
+			var input struct {
+				Todos []TodoItem `json:"todos"`
+			}
+			if json.Unmarshal([]byte(block.ToolInput), &input) == nil && input.Todos != nil {
+				latest = append([]TodoItem(nil), input.Todos...)
+				found = true
+			}
+		}
+	}
+	return latest, found
+}
+
+// LoadTodosFromEntries returns the latest TodoWrite snapshot.
+func LoadTodosFromEntries(entries []Entry) []TodoItem {
+	latest, _ := LoadTodoSnapshotFromEntries(entries)
+	return latest
+}
+
 var taskCreatedResultRE = regexp.MustCompile(`(?i)\bTask\s+#?([A-Za-z0-9._:-]+)\s+created successfully\b`)
 
 // LoadTasksFromEntries extracts the latest task states from parsed conversation

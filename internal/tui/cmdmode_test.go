@@ -1,6 +1,11 @@
 package tui
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestMatchCommand_ExactName(t *testing.T) {
 	registry := buildCmdRegistry()
@@ -124,6 +129,26 @@ func TestSetRatioParsing(t *testing.T) {
 		}
 		if ok && got != c.want {
 			t.Errorf("parseCmdSetRatioValue(%q)=%d, want %d", c.input, got, c.want)
+		}
+	}
+}
+
+func TestBootstrapConfigIncludesConversationKeymap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("EDITOR", "true")
+
+	app := NewApp(nil, Config{})
+	_, _ = app.bootstrapAndEditConfig()
+	path := filepath.Join(home, ".config", "ccx", "config.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{"conversation:", "execution_contexts: A"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("bootstrapped config missing %q:\n%s", want, text)
 		}
 	}
 }

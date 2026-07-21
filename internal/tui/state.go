@@ -28,10 +28,11 @@ type Preferences struct {
 
 // KeymapsConfig groups all keybinding sections under one key.
 type KeymapsConfig struct {
-	Session    SessionKeymap    `yaml:"session,omitempty"`
-	Actions    ActionsKeymap    `yaml:"actions,omitempty"`
-	Views      ViewsKeymap      `yaml:"views,omitempty"`
-	Navigation NavigationKeymap `yaml:"navigation,omitempty"`
+	Session      SessionKeymap    `yaml:"session,omitempty"`
+	Actions      ActionsKeymap    `yaml:"actions,omitempty"`
+	Views        ViewsKeymap      `yaml:"views,omitempty"`
+	Conversation ConvKeymap       `yaml:"conversation,omitempty"`
+	Navigation   NavigationKeymap `yaml:"navigation,omitempty"`
 }
 
 // CCXConfig is the unified config file containing keybindings + preferences.
@@ -74,10 +75,11 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config,
 
 	// Merge keymap overrides from keymaps section
 	override := Keymap{
-		Session:    cfg.Keymaps.Session,
-		Actions:    cfg.Keymaps.Actions,
-		Views:      cfg.Keymaps.Views,
-		Navigation: cfg.Keymaps.Navigation,
+		Session:      cfg.Keymaps.Session,
+		Actions:      cfg.Keymaps.Actions,
+		Views:        cfg.Keymaps.Views,
+		Conversation: cfg.Keymaps.Conversation,
+		Navigation:   cfg.Keymaps.Navigation,
 	}
 	mergeKeymap(&km, override)
 
@@ -230,6 +232,29 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	}
 	if a.Remote == "" {
 		a.Remote = d.Actions.Remote
+	}
+
+	c := &cfg.Keymaps.Conversation
+	if c.JumpToTree == "" {
+		c.JumpToTree = d.Conversation.JumpToTree
+	}
+	if c.SwitchRegion == "" {
+		c.SwitchRegion = d.Conversation.SwitchRegion
+	}
+	if c.ExecutionContexts == "" {
+		c.ExecutionContexts = d.Conversation.ExecutionContexts
+	}
+	if c.LiveToggle == "" {
+		c.LiveToggle = d.Conversation.LiveToggle
+	}
+	if c.Edit == "" {
+		c.Edit = d.Conversation.Edit
+	}
+	if c.Actions == "" {
+		c.Actions = d.Conversation.Actions
+	}
+	if c.Input == "" {
+		c.Input = d.Conversation.Input
 	}
 
 	v := &cfg.Keymaps.Views
