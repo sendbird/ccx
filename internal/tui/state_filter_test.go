@@ -48,6 +48,43 @@ func containsID(ids []string, want string) bool {
 	return false
 }
 
+// TestRebuildClearsAutoFilterWhenLiveGone reproduces the "[filtered] / No items"
+// regression: startup applies the auto default filter while a session is live
+// (guard passes), then a background rebuild finds nothing live/input/mon and must
+// clear the auto filter instead of reapplying it onto an empty list.
+func TestRebuildClearsAutoFilterWhenLiveGone(t *testing.T) {
+	now := time.Now()
+	app := newTestApp([]session.Session{
+		{ID: "s1", ShortID: "s1", ProjectPath: "/tmp/s1", ProjectName: "s1", ModTime: now, IsLive: true},
+	})
+	app.sessGroupMode = groupProjectCentric
+	app.rebuildSessionList()
+
+	// Arm + apply the auto default filter with a live session present.
+	app.config.SearchQuery = defaultActiveStateFilter
+	app.autoStateFilter = true
+	app.applyStartupFilter()
+	if app.config.SearchQuery == "" {
+		t.Fatal("precondition: filter should stay applied while a session is live")
+	}
+
+	// The session goes non-live; a background refresh rebuilds the list.
+	app.sessions[0].IsLive = false
+	for i := range app.sessionList.Items() {
+		// (list holds snapshots; rebuild reads a.sessions)
+		_ = i
+	}
+	app.rebuildSessionList()
+
+	if app.config.SearchQuery != "" {
+		t.Fatalf("auto filter should be cleared on rebuild when nothing matches, got %q (filterState=%v)",
+			app.config.SearchQuery, app.sessionList.FilterState())
+	}
+	if visibleSessionIDs(app) == nil {
+		t.Fatal("expected the non-live session visible after auto filter cleared")
+	}
+}
+
 // TestAutoStateFilterNotPersisted verifies the auto-applied default filter is
 // NOT written to preferences (persisting it would bypass the blank-guard on the
 // next launch and strand the user on an empty browser).
