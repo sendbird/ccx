@@ -287,6 +287,7 @@ type App struct {
 	sessCtxNodes          []session.ContextNode // flattened drill-targetable nodes, cursor order
 	sessCtxCacheID        string                // session ID the context cursor currently tracks
 	autoStateFilter       bool                  // the active filter is the auto-applied startup default (clear it if it hides everything)
+	langmap               map[rune]string       // CJK jamo/letter → Latin key, for shortcuts under a CJK input source
 	sessRefsCache         string
 	sessRefsCacheKey      string
 	sessRefsCacheID       string // session ID the refs cursor currently tracks
@@ -828,6 +829,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	a.applyPreferences(prefs)
 	a.shortcuts = sc
 	a.remoteDefaults = rc
+	a.langmap = LoadLangmap(configPath())
 
 	// Default the project view to "active" sessions (running / awaiting input /
 	// with an in-flight monitor) unless the user asked for something specific via
@@ -1278,6 +1280,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "ctrl+c" {
 			return a.quit()
+		}
+
+		// Under a CJK input source, rewrite single-jamo keys to the Latin key at
+		// the same physical position so shortcuts (q/x/R/jk/…) still fire. Skipped
+		// while a text input owns keys (search/filter/live input) so Korean can be
+		// typed verbatim, and while the live pane proxy is focused (keys are
+		// forwarded to the tmux pane untouched).
+		if !a.isInTextInput() && !a.isPaneProxyFocused() {
+			msg = NormalizeCJKKey(msg, a.langmap)
 		}
 
 		// Live input modal intercepts all keys
