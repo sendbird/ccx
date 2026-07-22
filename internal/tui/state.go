@@ -38,12 +38,13 @@ type KeymapsConfig struct {
 // CCXConfig is the unified config file containing keybindings + preferences.
 // Stored at ~/.config/ccx/config.yaml.
 type CCXConfig struct {
-	Keymaps     KeymapsConfig    `yaml:"keymaps,omitempty"`
-	Preferences Preferences      `yaml:"preferences,omitempty"`
-	Shortcuts   Shortcuts        `yaml:"shortcuts,omitempty"`
-	Remote      remote.Config    `yaml:"remote,omitempty"`
-	Claude      claudecmd.Config `yaml:"claude,omitempty"`
-	Open        opener.Config    `yaml:"open,omitempty"`
+	Keymaps     KeymapsConfig     `yaml:"keymaps,omitempty"`
+	Preferences Preferences       `yaml:"preferences,omitempty"`
+	Shortcuts   Shortcuts         `yaml:"shortcuts,omitempty"`
+	Remote      remote.Config     `yaml:"remote,omitempty"`
+	Claude      claudecmd.Config  `yaml:"claude,omitempty"`
+	Open        opener.Config     `yaml:"open,omitempty"`
+	Langmap     map[string]string `yaml:"langmap,omitempty"`
 }
 
 // configPath returns the path to the unified config file.
@@ -94,6 +95,22 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config,
 	return &km, cfg.Preferences, sc, cfg.Remote, cfg.Claude, cfg.Open
 }
 
+// LoadLangmap reads the optional `langmap` override from the config file and
+// resolves it against the built-in Korean 2-set default. A missing/unreadable
+// file yields the default map. Kept separate from LoadCCXConfig so its wide
+// signature and many callers stay untouched.
+func LoadLangmap(path string) map[rune]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ResolveLangmap(nil)
+	}
+	var cfg CCXConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return ResolveLangmap(nil)
+	}
+	return ResolveLangmap(cfg.Langmap)
+}
+
 // SavePreferences updates the preferences section in the config file,
 // preserving existing keymap settings and filling in missing defaults. The
 // caller passes the running app's open/claude config so those sections survive
@@ -136,7 +153,7 @@ func SavePreferences(prefs Preferences, open opener.Config, claude claudecmd.Con
 		return
 	}
 
-	header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Open: command_template controls how URLs open; {{url}} expands to the URL (empty = OS default open/xdg-open).\n\n"
+	header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Open: command_template controls how URLs open; {{url}} expands to the URL (empty = OS default open/xdg-open).\n# Langmap: map CJK input-source keys to Latin shortcut keys, e.g. langmap: {\"\\u3142\": q}; built-in Korean 2-set default, empty value removes a mapping.\n\n"
 	os.WriteFile(path, []byte(header+string(data)), 0644)
 }
 

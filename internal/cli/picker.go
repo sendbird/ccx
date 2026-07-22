@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tui"
 )
 
 var pickerDiffStyles = extract.DiffStyles{
@@ -88,9 +90,14 @@ type pickerModel struct {
 	// ctx is what the picker needs to re-extract its items on `R` (refresh):
 	// the subcommand and the session file to reload.
 	ctx pickerContext
+
+	// langmap maps CJK jamo/letters to the Latin key at the same physical
+	// position, so picker shortcuts fire under a CJK input source.
+	langmap map[rune]string
 }
 
 func newPickerModel(kind string, items []PickerItem, openerCfg opener.Config, ctx pickerContext) pickerModel {
+	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
 	return pickerModel{
 		kind:             kind,
 		allItems:         items,
@@ -102,6 +109,7 @@ func newPickerModel(kind string, items []PickerItem, openerCfg opener.Config, ct
 		refStatus:        make(map[string]session.SessionRef),
 		opener:           openerCfg,
 		ctx:              ctx,
+		langmap:          tui.LoadLangmap(configPath),
 	}
 }
 
@@ -221,6 +229,12 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			m.quit = true
 			return m, tea.Quit
+		}
+		// Under a CJK input source, map single-jamo keys to the Latin key at the
+		// same physical position so picker shortcuts work. Skipped while searching
+		// so Korean can be typed into the filter verbatim.
+		if !m.searching {
+			msg = tui.NormalizeCJKKey(msg, m.langmap)
 		}
 		if m.refPicking {
 			return m.handleRefKey(msg)
