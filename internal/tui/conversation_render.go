@@ -726,6 +726,9 @@ func buildConvContextItems(sess session.Session, merged []mergedMsg, flow *sessi
 	if sess.HasPlan || len(sess.Tasks) > 0 || len(sess.Crons) > 0 || sess.HasTasks || sess.HasCrons || sess.HasAgents {
 		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "tasksplan", label: "Session Tasks/Plans"})
 	}
+	if sess.HasRefs {
+		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "refs", label: "Session Refs & URLs"})
+	}
 	return items
 }
 
