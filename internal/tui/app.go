@@ -599,7 +599,8 @@ func (a *App) applyStartupFilter() {
 		return
 	}
 	applyListFilter(&a.sessionList, a.config.SearchQuery)
-	if a.autoStateFilter && a.visibleProjectBrowserItems() == 0 {
+	vis := a.visibleProjectBrowserItems()
+	if a.autoStateFilter && vis == 0 {
 		a.sessionList.ResetFilter()
 		a.config.SearchQuery = ""
 		a.autoStateFilter = false
@@ -3703,7 +3704,7 @@ func (a *App) bulkDelete(selected []session.Session) (tea.Model, tea.Cmd) {
 		a.config.SearchQuery = ""
 	}
 	items := buildGroupedItems(remaining, a.sessGroupMode, a.sessFolded)
-	a.sessionList.SetItems(items)
+	setListItemsPreservingFilter(&a.sessionList, items)
 	idx := a.sessionList.Index()
 	if idx >= len(items) {
 		idx = len(items) - 1
@@ -3921,7 +3922,7 @@ func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
 	}
 
 	items := buildGroupedItems(remaining, a.sessGroupMode, a.sessFolded)
-	a.sessionList.SetItems(items)
+	setListItemsPreservingFilter(&a.sessionList, items)
 	if idx >= len(items) {
 		idx = len(items) - 1
 	}
@@ -4015,7 +4016,7 @@ func (a *App) executeMove(sess session.Session, newPath string) (tea.Model, tea.
 		items[i] = sessionItem{sess: s}
 	}
 	idx := a.sessionList.Index()
-	a.sessionList.SetItems(items)
+	setListItemsPreservingFilter(&a.sessionList, items)
 	a.sessionList.Select(idx)
 	a.sessSplit.CacheKey = ""
 	a.copiedMsg = fmt.Sprintf("Moved → %s", newName)
@@ -5971,7 +5972,7 @@ func (a *App) syncSessionRefsToList(id string) bool {
 			v.sess.Refs = fresh.Refs
 			v.sess.RefsResolved = fresh.RefsResolved
 			items[i] = v
-			a.sessionList.SetItems(items)
+			setListItemsPreservingFilter(&a.sessionList, items)
 			return true
 		case projectItem:
 			// In projectCentric mode the badge is on the project head row, which
@@ -5996,7 +5997,7 @@ func (a *App) syncSessionRefsToList(id string) bool {
 			}
 			v.openPRs = openPRs
 			items[i] = v
-			a.sessionList.SetItems(items)
+			setListItemsPreservingFilter(&a.sessionList, items)
 			return true
 		}
 	}
