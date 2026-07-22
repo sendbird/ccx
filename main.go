@@ -164,6 +164,7 @@ func main() {
 		claudeDir    string
 		tmuxEnabled  bool
 		tmuxAutoLive bool
+		initialFocus string
 		worktreeDir  string
 		searchQuery  string
 		groupMode    string
@@ -255,6 +256,7 @@ func main() {
 		flag.StringVar(&claudeDir, "dir", "", "path to Claude data directory (default: ~/.claude)")
 		flag.BoolVar(&tmuxEnabled, "tmux", false, "enable tmux integration (auto-detected if inside tmux)")
 		flag.BoolVar(&tmuxAutoLive, "tmux-auto-live", false, "auto-enter live session in same tmux window on startup")
+		flag.StringVar(&initialFocus, "initial-focus", "", "startup focus strategy: tmux (default: tmux window match, else most recent) | cwd (adds a CWD-based directory-walk fallback before most recent)")
 		flag.StringVar(&worktreeDir, "worktree-dir", ".worktree", "subdirectory name for git worktrees")
 		flag.StringVar(&searchQuery, "search", "", "start with session list filtered by search query")
 		flag.StringVar(&groupMode, "group", "", "initial group mode (flat|proj|tree|chain|fork)")
@@ -320,6 +322,7 @@ func main() {
 		ClaudeDir:    claudeDir,
 		TmuxEnabled:  tmuxEnabled,
 		TmuxAutoLive: tmuxAutoLive,
+		InitialFocus: initialFocus,
 		WorktreeDir:  worktreeDir,
 		SearchQuery:  searchQuery,
 		Keymap:       km,

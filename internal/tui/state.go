@@ -20,6 +20,7 @@ type Preferences struct {
 	ConvDetailLevel int      `yaml:"conv_detail_level,omitempty"` // 0=compact,1=standard,2=verbose
 	SplitRatio      int      `yaml:"split_ratio,omitempty"`       // 15-85
 	WorktreeDir     string   `yaml:"worktree_dir,omitempty"`      // worktree subdirectory name
+	InitialFocus    string   `yaml:"initial_focus,omitempty"`     // startup focus strategy: tmux (default) | cwd
 	HiddenBadges    []string `yaml:"hidden_badges,omitempty"`     // badge keys to hide: M,W,T,K,P,A,C,S,X,F
 	FilterTerm      string   `yaml:"filter_term,omitempty"`       // last applied session filter
 	EditorInput     bool     `yaml:"editor_input,omitempty"`      // true = open $EDITOR for live input
@@ -397,6 +398,7 @@ func (a *App) capturePreferences() Preferences {
 		ConvDetailLevel: int(a.conv.rightPaneMode),
 		SplitRatio:      a.splitRatio,
 		WorktreeDir:     a.config.WorktreeDir,
+		InitialFocus:    a.config.InitialFocus,
 		HiddenBadges:    hidden,
 		FilterTerm:      filterTerm,
 		EditorInput:     a.editorInput,
@@ -423,6 +425,9 @@ func (a *App) applyPreferences(p Preferences) {
 	}
 	if p.WorktreeDir != "" && a.config.WorktreeDir == ".worktree" {
 		a.config.WorktreeDir = p.WorktreeDir
+	}
+	if a.config.InitialFocus == "" && p.InitialFocus != "" {
+		a.config.InitialFocus = p.InitialFocus
 	}
 	if len(p.HiddenBadges) > 0 {
 		if a.hiddenBadges == nil {
