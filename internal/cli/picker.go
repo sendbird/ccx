@@ -84,9 +84,13 @@ type pickerModel struct {
 	// falling back to the OS default). Shared with the TUI so both open paths
 	// honor the same config.
 	opener opener.Config
+
+	// ctx is what the picker needs to re-extract its items on `R` (refresh):
+	// the subcommand and the session file to reload.
+	ctx pickerContext
 }
 
-func newPickerModel(kind string, items []PickerItem, openerCfg opener.Config) pickerModel {
+func newPickerModel(kind string, items []PickerItem, openerCfg opener.Config, ctx pickerContext) pickerModel {
 	return pickerModel{
 		kind:             kind,
 		allItems:         items,
@@ -97,6 +101,7 @@ func newPickerModel(kind string, items []PickerItem, openerCfg opener.Config) pi
 		termFocused:      true,
 		refStatus:        make(map[string]session.SessionRef),
 		opener:           openerCfg,
+		ctx:              ctx,
 	}
 }
 
@@ -412,6 +417,19 @@ func (m pickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.quit = true
 		return m, tea.Quit
+
+	case "R":
+		// Refresh: re-read the session file and rebuild the item list, keeping
+		// the active search term. Selection is reset (indices may have shifted).
+		if fresh, err := extractItems(m.ctx.command, m.ctx.filePath, m.ctx.sessID); err == nil {
+			m.allItems = fresh
+			m.selected = make(map[int]bool)
+			m.refPicking = false
+			m.filterItems() // reapplies m.searchTerm and clamps the cursor
+			m.updatePreview()
+			return m, m.resolveRefsCmd()
+		}
+		return m, nil
 
 	case "up", "k":
 		if m.cursor > 0 {
@@ -847,7 +865,7 @@ func (m pickerModel) View() string {
 	} else if m.previewFocused {
 		footer = dim.Render("j/k:scroll  ^d/^u:page  g/G:top/bottom  ←/esc:back")
 	} else {
-		footer = dim.Render(actions + "  y:copy  sp:select  a:all  A:none  →:preview  /:search  esc:quit")
+		footer = dim.Render(actions + "  y:copy  sp:select  a:all  A:none  →:preview  /:search  R:refresh  esc:quit")
 	}
 
 	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, listBox, previewBox) + "\n" + footer + m.kittyImageLayer(contentH, listW, pw)
@@ -1156,11 +1174,12 @@ func (m pickerModel) conversationPreview() string {
 
 // RunPicker launches the interactive picker and returns the result. openerCfg
 // controls how selected URLs open (shared with the TUI via open.command_template).
-func RunPicker(kind string, items []PickerItem, openerCfg opener.Config) (*PickerResult, error) {
+// ctx lets the picker re-extract items when the user presses `R` (refresh).
+func RunPicker(kind string, items []PickerItem, openerCfg opener.Config, ctx pickerContext) (*PickerResult, error) {
 	if len(items) == 0 {
 		return nil, fmt.Errorf("no %s found in session", kind)
 	}
-	model := newPickerModel(kind, items, openerCfg)
+	model := newPickerModel(kind, items, openerCfg, ctx)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	// Clear any Kitty inline images before returning so they don't linger

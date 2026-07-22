@@ -96,34 +96,17 @@ func runPlain(command, filePath, sessID, claudeDir string) error {
 }
 
 func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, error) {
-	entries, err := session.LoadMessages(filePath)
+	items, err := extractItems(command, filePath, sessID)
 	if err != nil {
 		return nil, err
-	}
-
-	home, _ := os.UserHomeDir()
-	var items []PickerItem
-	switch command {
-	case "urls":
-		items = extractURLsWithContext(entries, sessID)
-	case "refs":
-		items = extractRefsWithContext(entries, sessID)
-	case "files":
-		items = extractFilesWithContext(entries, sessID)
-	case "changes":
-		items = extractChangesWithContext(entries, sessID)
-	case "images":
-		items = extractImagesWithContext(entries, sessID, home)
-	case "conversation":
-		items = extractConversationWithContext(entries, sessID)
-	default:
-		return nil, fmt.Errorf("unknown command: %s", command)
 	}
 
 	// Load the URL-opener config so the picker's open action honors
 	// open.command_template, exactly like the TUI's open paths.
 	openerCfg := loadOpenerConfig()
-	result, err := RunPicker(command, items, openerCfg)
+	// Hand the picker the context it needs to re-extract on `R` (refresh).
+	ctx := pickerContext{command: command, filePath: filePath, sessID: sessID}
+	result, err := RunPicker(command, items, openerCfg, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +117,40 @@ func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, er
 		}, nil
 	}
 	return nil, nil
+}
+
+// pickerContext carries what the picker needs to re-extract its items when the
+// user presses `R` (refresh): the subcommand and the session file it reads.
+type pickerContext struct {
+	command  string
+	filePath string
+	sessID   string
+}
+
+// extractItems loads the session transcript and builds the picker items for the
+// given subcommand. Shared by initial launch and the picker's refresh.
+func extractItems(command, filePath, sessID string) ([]PickerItem, error) {
+	entries, err := session.LoadMessages(filePath)
+	if err != nil {
+		return nil, err
+	}
+	home, _ := os.UserHomeDir()
+	switch command {
+	case "urls":
+		return extractURLsWithContext(entries, sessID), nil
+	case "refs":
+		return extractRefsWithContext(entries, sessID), nil
+	case "files":
+		return extractFilesWithContext(entries, sessID), nil
+	case "changes":
+		return extractChangesWithContext(entries, sessID), nil
+	case "images":
+		return extractImagesWithContext(entries, sessID, home), nil
+	case "conversation":
+		return extractConversationWithContext(entries, sessID), nil
+	default:
+		return nil, fmt.Errorf("unknown command: %s", command)
+	}
 }
 
 func isTerminal() bool {
@@ -188,6 +205,7 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "  a          Select all visible items\n")
 	fmt.Fprintf(os.Stderr, "  A          Deselect all\n")
 	fmt.Fprintf(os.Stderr, "  /          Search filter\n")
+	fmt.Fprintf(os.Stderr, "  R          Refresh (re-read the session)\n")
 	fmt.Fprintf(os.Stderr, "  esc        Quit\n\n")
 	fmt.Fprintf(os.Stderr, "TUI flags:\n")
 	fmt.Fprintf(os.Stderr, "  -v, --version         Print version\n")
