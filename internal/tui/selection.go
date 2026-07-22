@@ -50,6 +50,15 @@ func startListSearch(l *list.Model) tea.Cmd {
 	if l.Width() == 0 {
 		return nil
 	}
+	// If a filter is already applied, its value stays in the input when we open
+	// the filter for editing. bubbles only repopulates filteredItems when the
+	// input is EMPTY (see handleFiltering's Filter case), so opening "/" over a
+	// non-empty applied filter whose filteredItems were cleared (e.g. by a prior
+	// SetItems) leaves the list blank. Re-apply the value synchronously first so
+	// filteredItems is correct, then open the filter for editing.
+	if v := l.FilterInput.Value(); v != "" {
+		l.SetFilterText(v)
+	}
 	// Simulate "/" to open filter — must assign back because Update is a value receiver
 	openMsg := tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	newL, cmd := l.Update(openMsg)

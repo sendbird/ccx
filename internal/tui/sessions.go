@@ -749,14 +749,24 @@ func newSessionList(sessions []session.Session, width, height int, groupMode int
 func wrapPinCurrentWindow(items []list.Item, base list.FilterFunc) list.FilterFunc {
 	pinned := make(map[int]bool)
 	hasCurrent := false
+	// Track the nearest preceding projectItem so a pinned current-window session
+	// keeps its project header visible under a filter — otherwise the session
+	// row renders orphaned (no project line above it).
+	lastProject := -1
 	for i, item := range items {
 		switch v := item.(type) {
 		case headerItem:
 			pinned[i] = true
+			lastProject = -1
+		case projectItem:
+			lastProject = i
 		case sessionItem:
 			if v.sess.IsCurrentWindow {
 				pinned[i] = true
 				hasCurrent = true
+				if v.treeDepth > 0 && lastProject >= 0 {
+					pinned[lastProject] = true
+				}
 			}
 		}
 	}
