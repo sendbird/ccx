@@ -66,6 +66,24 @@ func applyListFilter(l *list.Model, query string) {
 	l.SetFilterText(query)
 }
 
+// setListItemsPreservingFilter replaces a list's items and, when a filter is
+// applied, re-runs it synchronously. bubbles' SetItems clears filteredItems and
+// returns the re-filter as a tea.Cmd; callers that mutate items in place (e.g.
+// syncing resolved PR/Jira state) discard that cmd, which leaves filteredItems
+// nil → VisibleItems() returns 0 → the list renders "No items" even though the
+// filter still matches. Re-applying the filter text here filters synchronously
+// (SetFilterText), so the visible set is correct immediately.
+func setListItemsPreservingFilter(l *list.Model, items []list.Item) {
+	filter := ""
+	if l.FilterState() != list.Unfiltered {
+		filter = l.FilterInput.Value()
+	}
+	l.SetItems(items)
+	if filter != "" {
+		l.SetFilterText(filter)
+	}
+}
+
 // syncFilterVisibility is intentionally a no-op. The filter bar inside the
 // list is always hidden; the filter input is rendered in the bottom help line.
 func syncFilterVisibility(_ *list.Model) {}

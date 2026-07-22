@@ -372,5 +372,5 @@ func (a *App) updateSessionBadges(sessionID string, badges []string) {
 			}
 		}
 	}
-	a.sessionList.SetItems(items)
+	setListItemsPreservingFilter(&a.sessionList, items)
 }

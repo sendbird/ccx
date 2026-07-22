@@ -783,7 +783,7 @@ func (a *App) executeCmdBadgeRm(input string) (tea.Model, tea.Cmd) {
 			items[i] = si
 		}
 	}
-	a.sessionList.SetItems(items)
+	setListItemsPreservingFilter(&a.sessionList, items)
 
 	// Update tag list
 	a.tagList = a.badgeStore.AllBadges()
