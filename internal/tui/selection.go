@@ -80,11 +80,17 @@ func applyListFilter(l *list.Model, query string) {
 // snapping the selection back to the first row. The item count is unchanged by
 // these in-place updates, so restoring the saved visible index is safe.
 func setListItemsPreservingFilter(l *list.Model, items []list.Item) {
-	savedIndex := l.Index()
-	filter := ""
-	if l.FilterState() != list.Unfiltered {
-		filter = l.FilterInput.Value()
+	// Only re-run the filter when one is APPLIED. If the user is actively typing
+	// in the filter (state Filtering), calling SetFilterText here would force the
+	// input closed into FilterApplied — so a background refresh landing while the
+	// user just pressed "/" would slam the search box shut. Leave Filtering (and
+	// Unfiltered) alone; SetItems keeps the live input intact.
+	if l.FilterState() != list.FilterApplied {
+		l.SetItems(items)
+		return
 	}
+	savedIndex := l.Index()
+	filter := l.FilterInput.Value()
 	l.SetItems(items)
 	if filter != "" {
 		l.SetFilterText(filter)

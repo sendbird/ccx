@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -75,5 +76,36 @@ func TestSetItemsPreservesCursor(t *testing.T) {
 
 	if got := app.sessionList.Index(); got != 3 {
 		t.Fatalf("ref sync reset the cursor: got %d, want 3", got)
+	}
+}
+
+// TestSetItemsDoesNotCloseActiveSearch verifies that an in-place row update
+// (async ref-status resolve) does NOT force the search box shut while the user
+// is actively typing a filter — state must stay Filtering, not flip to
+// FilterApplied.
+func TestSetItemsDoesNotCloseActiveSearch(t *testing.T) {
+	now := time.Now()
+	sessions := []session.Session{
+		{ID: "a", ShortID: "a", ProjectPath: "/tmp/a", ProjectName: "a", ModTime: now, HasRefs: true},
+		{ID: "b", ShortID: "b", ProjectPath: "/tmp/b", ProjectName: "b", ModTime: now},
+	}
+	app := newTestApp(sessions)
+	app.sessGroupMode = groupFlat
+	app.rebuildSessionList()
+
+	// Open the search (state → Filtering) and type a character, as a user does.
+	startListSearch(&app.sessionList)
+	app.sessionList.FilterInput.SetValue("a")
+	if app.sessionList.FilterState() != list.Filtering {
+		t.Fatalf("precondition: expected Filtering state, got %v", app.sessionList.FilterState())
+	}
+
+	// A ref-status resolve lands mid-typing.
+	app.sessions[0].Refs = []session.SessionRef{{URL: "https://example.test/pr/1", Resolved: true}}
+	app.sessions[0].RefsResolved = true
+	app.syncSessionRefsToList("a")
+
+	if got := app.sessionList.FilterState(); got != list.Filtering {
+		t.Fatalf("ref sync closed the active search: state=%v, want Filtering", got)
 	}
 }
