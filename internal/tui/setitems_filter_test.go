@@ -42,3 +42,38 @@ func TestSetItemsPreservesFilterVisibility(t *testing.T) {
 			before, after, app.sessionList.FilterState())
 	}
 }
+
+// TestSetItemsPreservesCursor verifies an in-place row update (fired repeatedly
+// as async ref statuses resolve) does not snap the selection back to the top.
+// The reset only happens under an applied filter (SetFilterText calls GoToStart),
+// so the list is filtered here.
+func TestSetItemsPreservesCursor(t *testing.T) {
+	now := time.Now()
+	var sessions []session.Session
+	for i := 0; i < 6; i++ {
+		id := string(rune('a' + i))
+		sessions = append(sessions, session.Session{
+			ID: id, ShortID: id, ProjectPath: "/tmp/" + id, ProjectName: id,
+			ModTime: now.Add(-time.Duration(i) * time.Hour), HasRefs: true, IsLive: true,
+		})
+	}
+	app := newTestApp(sessions)
+	app.sessGroupMode = groupFlat
+	app.rebuildSessionList()
+	applyListFilter(&app.sessionList, "is:live") // all six match
+
+	// Move the cursor off the top.
+	app.sessionList.Select(3)
+	if app.sessionList.Index() != 3 {
+		t.Fatalf("precondition: cursor should be at 3, got %d", app.sessionList.Index())
+	}
+
+	// A ref-status resolve lands for a row → in-place SetItems.
+	app.sessions[3].Refs = []session.SessionRef{{URL: "https://example.test/pr/9", Resolved: true}}
+	app.sessions[3].RefsResolved = true
+	app.syncSessionRefsToList(app.sessions[3].ID)
+
+	if got := app.sessionList.Index(); got != 3 {
+		t.Fatalf("ref sync reset the cursor: got %d, want 3", got)
+	}
+}
