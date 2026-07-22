@@ -767,6 +767,7 @@ type Config struct {
 	ClaudeDir    string           // path to Claude data directory (empty = ~/.claude)
 	TmuxEnabled  bool             // enable tmux integration (I, J, live modal)
 	TmuxAutoLive bool             // auto-enter live session in same tmux window on startup
+	InitialFocus string           // startup focus strategy: "" / "tmux" (default) | "cwd" (adds CWD directory-walk fallback)
 	WorktreeDir  string           // subdirectory name for worktrees (default ".worktree")
 	SearchQuery  string           // initial search filter for session list
 	Keymap       *Keymap          // nil = use defaults
@@ -7380,10 +7381,23 @@ func (a *App) updateActiveComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+// initialFocusCWD is the InitialFocus value that adds the CWD directory-walk
+// fallback (autoSelectByCWD) between the tmux-window match and the
+// most-recent-session fallback. Any other value (including "") keeps the
+// original "tmux" default: tmux-window match, else most recent session.
+const initialFocusCWD = "cwd"
+
 // autoSelectSession selects the session matching a Claude process in the same tmux window.
 // When multiple sessions share the same project path, prefer the most recently modified
 // one (sessions are sorted by ModTime descending, so first match wins).
 // If the matched session is live, auto-enters it with live tail enabled.
+//
+// If no tmux match is found and InitialFocus is "cwd", falls back to a
+// directory walk from the working directory (see autoSelectByCWD) before
+// finally falling back to the most recent session overall.
+//
+// The chosen strategy is surfaced via copiedMsg so it's visible in the status
+// line on startup.
 func (a *App) autoSelectSession() tea.Cmd {
 	visible := a.sessionList.VisibleItems()
 	for _, projPath := range tmux.CurrentWindowClaudes() {
@@ -7391,30 +7405,98 @@ func (a *App) autoSelectSession() tea.Cmd {
 		if absProj == "" {
 			absProj = projPath
 		}
-		for i, item := range visible {
-			si, ok := item.(sessionItem)
-			if !ok {
-				continue
-			}
-			sp := si.sess.ProjectPath
-			absSP, _ := filepath.Abs(sp)
-			if absSP == "" {
-				absSP = sp
-			}
-			if absSP == absProj {
-				a.sessionList.Select(i)
-				// Auto-enter live sessions (only if TmuxAutoLive is enabled)
-				if si.sess.IsLive && a.config.TmuxAutoLive {
-					a.currentSess = si.sess
-					return a.openConversation(si.sess)
-				}
-				return nil
-			}
+		if i, ok := firstSessionAtPath(visible, absProj); ok {
+			a.copiedMsg = "Focused: tmux window match"
+			return a.selectAutoSessionAt(visible, i)
 		}
 	}
+
+	if a.config.InitialFocus == initialFocusCWD {
+		if i, ok := autoSelectByCWD(visible); ok {
+			a.copiedMsg = "Focused: CWD search"
+			return a.selectAutoSessionAt(visible, i)
+		}
+	}
+
 	// Fallback: ensure cursor isn't parked on a header.
+	a.copiedMsg = "Focused: most recent session"
 	a.bumpPastHeader(0, +1)
 	return nil
+}
+
+// selectAutoSessionAt selects visible[i] and, if it's a live session with
+// TmuxAutoLive enabled, opens it directly into the conversation view.
+func (a *App) selectAutoSessionAt(visible []list.Item, i int) tea.Cmd {
+	si := visible[i].(sessionItem)
+	a.sessionList.Select(i)
+	if si.sess.IsLive && a.config.TmuxAutoLive {
+		a.currentSess = si.sess
+		return a.openConversation(si.sess)
+	}
+	return nil
+}
+
+// firstSessionAtPath returns the index of the first sessionItem in visible
+// whose absolute project path equals absPath.
+func firstSessionAtPath(visible []list.Item, absPath string) (int, bool) {
+	for i, item := range visible {
+		si, ok := item.(sessionItem)
+		if !ok {
+			continue
+		}
+		absSP, _ := filepath.Abs(si.sess.ProjectPath)
+		if absSP == "" {
+			absSP = si.sess.ProjectPath
+		}
+		if absSP == absPath {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// autoSelectByCWD walks up from the process working directory looking for a
+// session whose project path matches exactly, stopping (with no match) once
+// it reaches $HOME or the root of the current git worktree.
+func autoSelectByCWD(visible []list.Item) (int, bool) {
+	d, err := os.Getwd()
+	if err != nil {
+		return 0, false
+	}
+	d, err = filepath.Abs(d)
+	if err != nil {
+		return 0, false
+	}
+	home, _ := os.UserHomeDir()
+	gitRoot := gitWorktreeRoot(d)
+
+	for {
+		if i, ok := firstSessionAtPath(visible, d); ok {
+			return i, true
+		}
+		if (home != "" && d == home) || (gitRoot != "" && d == gitRoot) {
+			return 0, false
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return 0, false
+		}
+		d = parent
+	}
+}
+
+// gitWorktreeRoot returns the absolute top-level directory of the git
+// worktree containing dir, or "" if dir isn't inside a git worktree.
+func gitWorktreeRoot(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	root, err := filepath.Abs(strings.TrimSpace(string(out)))
+	if err != nil {
+		return ""
+	}
+	return root
 }
 
 // bumpPastHeader moves the list cursor in `dir` until it lands on a session
