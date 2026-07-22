@@ -812,6 +812,29 @@ func trimEmptyHeaders(ranks []list.Rank, items []list.Item) []list.Rank {
 	return out
 }
 
+// parentIdentityMatches reports whether a parent row matches the query on its
+// OWN identity (project name / path / branch), independent of its children.
+// Non-parent items never match here. Uses the same space-AND / comma-OR term
+// semantics as substringFilter, so `is:live` (a child-only token) does NOT
+// count as a parent-identity match and won't reveal all children.
+func parentIdentityMatches(item list.Item, term string) bool {
+	pi, ok := item.(projectItem)
+	if !ok {
+		return false
+	}
+	identity := strings.ToLower(strings.Join([]string{pi.displayName, pi.basePath, pi.branch, "is:project"}, " "))
+	terms := strings.Fields(strings.ToLower(term))
+	if len(terms) == 0 {
+		return false
+	}
+	for _, t := range terms {
+		if !termContains(identity, t) {
+			return false
+		}
+	}
+	return true
+}
+
 // buildChainAwareFilter returns a filter function that preserves parent-child
 // relationships. When a depth=0 parent matches, all its depth=1 children stay
 // visible. When a depth=1 child matches, its parent also stays visible.
@@ -846,17 +869,28 @@ func buildChainAwareFilter(items []list.Item) list.FilterFunc {
 			matchSet[r.Index] = r
 		}
 
-		// Expand: parent match includes children; child match includes parent.
+		// Expand parent/child relationships, but scope child visibility to the
+		// filter's intent:
+		//   - A child match always pulls in its parent header (so the row has
+		//     context).
+		//   - A parent match includes ALL its children only when the parent
+		//     matched on its OWN identity (name/path/branch) — e.g. searching a
+		//     project name. When the parent row matched merely because a child's
+		//     concatenated FilterValue did (e.g. `is:live` matching one live
+		//     session), we must NOT reveal the parent's other, non-matching
+		//     children; only the individually-matched children show.
 		expanded := make(map[int]bool)
 		for idx := range matchSet {
 			expanded[idx] = true
-			// If this is a parent, include all children
-			for _, childIdx := range childrenOf[idx] {
-				expanded[childIdx] = true
-			}
-			// If this is a child, include parent
+			// child → parent
 			if pIdx, ok := parentOf[idx]; ok {
 				expanded[pIdx] = true
+			}
+			// parent → all children, only if the parent matched on its identity
+			if len(childrenOf[idx]) > 0 && parentIdentityMatches(items[idx], term) {
+				for _, childIdx := range childrenOf[idx] {
+					expanded[childIdx] = true
+				}
 			}
 		}
 
