@@ -206,7 +206,7 @@ func TestConversationPreviewModeCycle(t *testing.T) {
 	m := newPickerModel("conversation", []PickerItem{{
 		Item:             extract.Item{URL: "conversation:1", Label: "#1", Category: "conversation"},
 		ConversationText: "hello",
-	}}, opener.Config{})
+	}}, opener.Config{}, pickerContext{})
 	if m.previewMode != pickerPreviewConversation {
 		t.Fatalf("initial preview mode = %v, want conversation", m.previewMode)
 	}

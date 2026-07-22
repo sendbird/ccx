@@ -16,7 +16,7 @@ func TestKittyImageLayerOnlyForImagesKind(t *testing.T) {
 	t.Setenv("CCX_KITTY", "1")
 	m := newPickerModel("urls", []PickerItem{
 		{Item: extract.Item{URL: "https://example.com", Label: "example", Category: "url"}},
-	}, opener.Config{})
+	}, opener.Config{}, pickerContext{})
 	m.width = 120
 	m.height = 40
 	out := m.kittyImageLayer(m.height-2, m.listWidth(), m.previewWidth())
@@ -36,7 +36,7 @@ func TestKittyImageLayerClearsWhenPreviewFocused(t *testing.T) {
 
 	m := newPickerModel("images", []PickerItem{
 		{Item: extract.Item{URL: imagePath, Label: "#1", Category: "image"}},
-	}, opener.Config{})
+	}, opener.Config{}, pickerContext{})
 	m.width = 120
 	m.height = 40
 	m.previewFocused = true
@@ -59,7 +59,7 @@ func TestKittyImageLayerEmitsDrawForImage(t *testing.T) {
 
 	m := newPickerModel("images", []PickerItem{
 		{Item: extract.Item{URL: imagePath, Label: "#1", Category: "image"}},
-	}, opener.Config{})
+	}, opener.Config{}, pickerContext{})
 	m.width = 120
 	m.height = 40
 	out := m.kittyImageLayer(m.height-2, m.listWidth(), m.previewWidth())
@@ -74,7 +74,7 @@ func TestKittyImageLayerClearsWhenFileMissing(t *testing.T) {
 	t.Setenv("CCX_KITTY", "1")
 	m := newPickerModel("images", []PickerItem{
 		{Item: extract.Item{URL: "/nonexistent/path.png", Label: "#1", Category: "image"}},
-	}, opener.Config{})
+	}, opener.Config{}, pickerContext{})
 	m.width = 120
 	m.height = 40
 	out := m.kittyImageLayer(m.height-2, m.listWidth(), m.previewWidth())
@@ -96,7 +96,7 @@ func TestKittyImageLayerClearsWhenTermBlurred(t *testing.T) {
 
 	m := newPickerModel("images", []PickerItem{
 		{Item: extract.Item{URL: imagePath, Label: "#1", Category: "image"}},
-	}, opener.Config{})
+	}, opener.Config{}, pickerContext{})
 	m.width = 120
 	m.height = 40
 	m.termFocused = false
