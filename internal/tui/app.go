@@ -272,38 +272,40 @@ type App struct {
 	stateMenu          bool // sessions state-filter toggle popup ("l" prefix)
 
 	// Session preview mode
-	sessPreviewMode       sessPreview
-	sessStatsCache        *session.SessionStats
-	sessStatsCacheKey     string
-	sessMemoryCache       string // rendered memory content
-	sessMemoryCacheKey    string
-	sessTasksCache        string
-	sessTasksCacheKey     string
-	sessShellsCache       string
-	sessShellsCacheKey    string
-	sessContextsCache     string
-	sessContextsCacheKey  string
-	sessCtxCursor         int                   // cursor over the flattened context node list
-	sessCtxNodes          []session.ContextNode // flattened drill-targetable nodes, cursor order
-	sessCtxCacheID        string                // session ID the context cursor currently tracks
-	autoStateFilter       bool                  // the active filter is the auto-applied startup default (clear it if it hides everything)
-	langmap               map[rune]string       // CJK jamo/letter → Latin key, for shortcuts under a CJK input source
-	sessRefsCache         string
-	sessRefsCacheKey      string
-	sessRefsCacheID       string // session ID the refs cursor currently tracks
-	sessWorkflowsCache    string
-	sessWorkflowsCacheKey string
-	sessWfRuns            []session.WorkflowRun // parsed runs for the selected session
-	sessWfAgents          []session.Subagent    // workflow-nested agents (label-joined), drill-down targets
-	sessWfCursor          int                   // cursor within the workflow agent list
-	sessPreviewAgents     []session.Subagent    // agents shown in Tasks/Plan preview
-	sessAgentCursor       int                   // cursor within agents list
-	sessPreviewRefs       []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
-	sessRefsCursor        int                   // cursor within the References preview list
-	sessRefsSelected      map[string]bool       // selected ref URLs for multi-open/copy (keyed by SessionRef.URL)
-	sessRefsResolved      bool                  // whether the currently-previewed session's refs have been resolved
-	refsInFlight          map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
-	openURL               func(string) error    // opens a URL in the browser; overridable in tests (defaults to `open`)
+	sessPreviewMode        sessPreview
+	sessStatsCache         *session.SessionStats
+	sessStatsCacheKey      string
+	sessMemoryCache        string // rendered memory content
+	sessMemoryCacheKey     string
+	sessScratchpadCache    string // rendered scratchpad content
+	sessScratchpadCacheKey string
+	sessTasksCache         string
+	sessTasksCacheKey      string
+	sessShellsCache        string
+	sessShellsCacheKey     string
+	sessContextsCache      string
+	sessContextsCacheKey   string
+	sessCtxCursor          int                   // cursor over the flattened context node list
+	sessCtxNodes           []session.ContextNode // flattened drill-targetable nodes, cursor order
+	sessCtxCacheID         string                // session ID the context cursor currently tracks
+	autoStateFilter        bool                  // the active filter is the auto-applied startup default (clear it if it hides everything)
+	langmap                map[rune]string       // CJK jamo/letter → Latin key, for shortcuts under a CJK input source
+	sessRefsCache          string
+	sessRefsCacheKey       string
+	sessRefsCacheID        string // session ID the refs cursor currently tracks
+	sessWorkflowsCache     string
+	sessWorkflowsCacheKey  string
+	sessWfRuns             []session.WorkflowRun // parsed runs for the selected session
+	sessWfAgents           []session.Subagent    // workflow-nested agents (label-joined), drill-down targets
+	sessWfCursor           int                   // cursor within the workflow agent list
+	sessPreviewAgents      []session.Subagent    // agents shown in Tasks/Plan preview
+	sessAgentCursor        int                   // cursor within agents list
+	sessPreviewRefs        []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
+	sessRefsCursor         int                   // cursor within the References preview list
+	sessRefsSelected       map[string]bool       // selected ref URLs for multi-open/copy (keyed by SessionRef.URL)
+	sessRefsResolved       bool                  // whether the currently-previewed session's refs have been resolved
+	refsInFlight           map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
+	openURL                func(string) error    // opens a URL in the browser; overridable in tests (defaults to `open`)
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -342,6 +344,17 @@ type App struct {
 	tagInput   textinput.Model
 	tagList    []string
 	badgeStore *session.BadgeStore
+
+	// Share-reference picker (share:ref): two-step modal that injects an
+	// @<path> prompt into another live session's tmux pane.
+	shareRefMenu     bool
+	shareRefStage    int            // shareRefStageItem | shareRefStageTarget
+	shareRefItems    []shareRefItem // stage 0: shareable artifacts
+	shareRefTargets  []session.Session
+	shareRefPicked   shareRefItem // chosen artifact once in stage 1
+	shareRefCursor   int
+	shareRefSrcShort string // display label of the source session
+	shareRefSrcID    string // ID of the source session (captured at open)
 
 	// URL menu (u key in actions)
 	urlMenu        bool
@@ -751,6 +764,7 @@ const (
 	sessPreviewConversation sessPreview = iota // text-only, expandable
 	sessPreviewStats
 	sessPreviewMemory
+	sessPreviewScratchpad
 	sessPreviewTasksPlan
 	sessPreviewAgents
 	sessPreviewWorkflows
@@ -759,7 +773,7 @@ const (
 	sessPreviewRefs     // PR / Jira references with resolved status
 	sessPreviewLive     // tmux pane capture
 	sessPreviewRemote   // remote session status/stream
-	numSessPreviewModes = 11
+	numSessPreviewModes = 12
 )
 
 // Config holds application configuration from CLI flags.
@@ -872,7 +886,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	// of the projects view.
 	a.sessGroupMode = groupProjectCentric
 	if a.config.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "refs": sessPreviewRefs, "pr": sessPreviewRefs, "live": sessPreviewLive}
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "scratch": sessPreviewScratchpad, "scratchpad": sessPreviewScratchpad, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "refs": sessPreviewRefs, "pr": sessPreviewRefs, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
@@ -1566,6 +1580,14 @@ func (a *App) View() string {
 		}
 	}
 
+	// Share-reference picker centered modal
+	if a.shareRefMenu {
+		modal := a.renderShareRefMenu()
+		if modal != "" {
+			content = overlayCenteredModal(content, modal, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 40), maxHeight: max(ContentHeight(a.height)-4, 8)})
+		}
+	}
+
 	// Config actions menu hint box
 	if a.cfgActionsMenu && a.state == viewConfig {
 		hintBox := a.renderCfgActionsHintBox()
@@ -1742,6 +1764,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Tag menu: manage custom badges
 	if a.tagMenu {
 		return a.handleTagMenuKey(msg)
+	}
+
+	// Share-reference picker: two-step artifact → target session
+	if a.shareRefMenu {
+		return a.handleShareRefKey(msg)
 	}
 
 	// Clear actions menu on any unrelated key
@@ -2842,6 +2869,8 @@ func (a *App) handleSessPageMenu(key string) (tea.Model, tea.Cmd) {
 		return a, a.setSessPreviewMode(sessPreviewStats)
 	case "m":
 		return a, a.setSessPreviewMode(sessPreviewMemory)
+	case "x":
+		return a, a.setSessPreviewMode(sessPreviewScratchpad)
 	case "t":
 		return a, a.setSessPreviewMode(sessPreviewTasksPlan)
 	case "a":
@@ -2868,7 +2897,7 @@ func (a *App) renderSessPageHintBox() string {
 	d := dimStyle
 	sp := "  "
 	line1 := hl.Render("v") + d.Render(":conv") + sp + hl.Render("s") + d.Render(":stats")
-	line2 := hl.Render("m") + d.Render(":mem") + sp + hl.Render("t") + d.Render(":tasks")
+	line2 := hl.Render("m") + d.Render(":mem") + sp + hl.Render("x") + d.Render(":scratch") + sp + hl.Render("t") + d.Render(":tasks")
 	line3 := hl.Render("a") + d.Render(":agents") + sp + hl.Render("l") + d.Render(":live")
 	line4 := hl.Render("w") + d.Render(":workflows") + sp + hl.Render("c") + d.Render(":contexts")
 	body := strings.Join([]string{line1, line2, line3, line4, d.Render("esc:cancel")}, "\n")
@@ -4572,6 +4601,8 @@ func (a *App) invalidateOpenPreviewCaches() {
 		a.sessStatsCacheKey = ""
 	case sessPreviewMemory:
 		a.sessMemoryCacheKey = ""
+	case sessPreviewScratchpad:
+		a.sessScratchpadCacheKey = ""
 	case sessPreviewTasksPlan:
 		a.sessTasksCacheKey = ""
 	case sessPreviewShells:
@@ -5009,6 +5040,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		a.updateSessionStatsPreview(sess)
 	case sessPreviewMemory:
 		a.updateSessionMemoryPreview(sess)
+	case sessPreviewScratchpad:
+		a.updateSessionScratchpadPreview(sess)
 	case sessPreviewTasksPlan:
 		a.updateSessionTasksPlanPreview(sess)
 	case sessPreviewAgents:
@@ -5639,6 +5672,18 @@ func (a *App) updateSessionMemoryPreview(sess session.Session) {
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessMemoryCache)
+}
+
+func (a *App) updateSessionScratchpadPreview(sess session.Session) {
+	if a.sessScratchpadCacheKey != sess.ID {
+		a.sessScratchpadCache = a.buildScratchpadContent(sess)
+		a.sessScratchpadCacheKey = sess.ID
+	}
+
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	contentH := max(a.height-3, 1)
+	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	a.sessSplit.Preview.SetContent(a.sessScratchpadCache)
 }
 
 func (a *App) updateSessionTasksPlanPreview(sess session.Session) {
@@ -6773,6 +6818,66 @@ func (a *App) buildAgentsPreviewContent(sess session.Session) string {
 }
 
 // buildMemoryContent produces the styled memory text for a session.
+// buildScratchpadContent renders the session's per-session scratchpad files
+// (/tmp/claude-<uid>/<enc>/<sid>/scratchpad/) as one card per file: header with
+// name + size + mtime, then the (markdown-rendered) body for text files. This
+// is the same level/surface as the memory preview — reachable via the `x` page
+// menu key, `tab` cycling, and `preview:scratch`.
+func (a *App) buildScratchpadContent(sess session.Session) string {
+	if sess.ProjectPath == "" || sess.ID == "" {
+		return dimStyle.Render("(no session context)")
+	}
+	files := session.LoadScratchpadFiles(sess.ProjectPath, sess.ID)
+	if len(files) == 0 {
+		return dimStyle.Render("No scratchpad files.")
+	}
+
+	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 20)
+	var sb strings.Builder
+	sb.WriteString(dimStyle.Render("── Scratchpad ──") + "\n\n")
+	for _, f := range files {
+		sb.WriteString(a.renderScratchpadFile(f, previewW))
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// renderScratchpadFile renders one scratchpad file as a titled card: a header
+// line (name + size + mtime), then the body. Binary files show a placeholder;
+// truncated text files get a marker.
+func (a *App) renderScratchpadFile(f session.ScratchpadFile, width int) string {
+	var sb strings.Builder
+
+	size := humanSize(f.Size)
+	mtime := time.Unix(f.ModTime, 0).Format("2006-01-02 15:04")
+	header := dimStyle.Render("── ") + lipgloss.NewStyle().Foreground(colorAccent).Render(f.Name) +
+		dimStyle.Render(" ── ") + dimStyle.Render(size+"  "+mtime)
+	sb.WriteString(header + "\n")
+
+	if f.IsText {
+		body := renderMarkdownText(f.Body, max(width-2, 20))
+		sb.WriteString(strings.TrimRight(body, "\n") + "\n")
+		if f.Truncated {
+			sb.WriteString(dimStyle.Render("  (truncated)") + "\n")
+		}
+	} else {
+		sb.WriteString(dimStyle.Render("  "+f.Body) + "\n")
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// humanSize formats a byte count compactly (e.g. 1.2 KB, 340 B).
+func humanSize(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
+}
+
 func (a *App) buildMemoryContent(sess session.Session) string {
 	if sess.ProjectPath == "" {
 		return dimStyle.Render("(no project path)")
@@ -6924,6 +7029,10 @@ func (a *App) refreshSessionPreviewLive() {
 			a.sessSplit.CacheKey = ""
 			a.sessMemoryCacheKey = ""
 			a.updateSessionMemoryPreview(sess)
+		case sessPreviewScratchpad:
+			a.sessSplit.CacheKey = ""
+			a.sessScratchpadCacheKey = ""
+			a.updateSessionScratchpadPreview(sess)
 		case sessPreviewWorkflows:
 			a.sessSplit.CacheKey = ""
 			a.sessWorkflowsCacheKey = ""
@@ -7915,6 +8024,8 @@ func (a *App) renderBreadcrumb() string {
 			label := "[Stats]"
 			if a.sessPreviewMode == sessPreviewMemory {
 				label = "[Memory]"
+			} else if a.sessPreviewMode == sessPreviewScratchpad {
+				label = "[Scratchpad]"
 			} else if a.sessPreviewMode == sessPreviewTasksPlan {
 				label = "[Tasks]"
 			}

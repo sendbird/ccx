@@ -85,6 +85,10 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewStats) }},
 		{name: "preview:mem", aliases: []string{"p:mem"}, desc: "memory preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewMemory) }},
+		{name: "preview:scratch", aliases: []string{"p:scratch", "p:scratchpad", "preview:scratchpad"}, desc: "scratchpad preview", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewScratchpad) }},
+		{name: "share:ref", aliases: []string{"share:reference", "sr"}, desc: "share @<path> reference to another live session", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.openShareRef() }},
 		{name: "preview:tasks", aliases: []string{"p:tasks"}, desc: "tasks/plan preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewTasksPlan) }},
 		{name: "preview:agents", aliases: []string{"p:agents"}, desc: "agents preview", views: cmdSessions,
@@ -553,7 +557,8 @@ func (a *App) updateCmdSuggestions() {
 		case viewSessions:
 			a.cmdSuggestions = append(a.cmdSuggestions,
 				cmdEntry{name: "group:", desc: "flat proj tree chain fork repo"},
-				cmdEntry{name: "preview:", desc: "conv stats mem tasks live"},
+				cmdEntry{name: "preview:", desc: "conv stats mem scratch tasks live"},
+				cmdEntry{name: "share:ref", desc: "share @path to another live session"},
 				cmdEntry{name: "set:ratio", desc: "N  (15-85)"},
 				cmdEntry{name: "refresh", desc: "reload sessions"})
 		case viewConfig:
