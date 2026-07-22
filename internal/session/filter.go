@@ -76,7 +76,14 @@ func FilterValueFor(s Session, cwdProjectPaths []string) string {
 		parts = append(parts, "has:mcp")
 	}
 	if s.HasMonitorJobs {
-		parts = append(parts, "has:monitor", "is:mon")
+		parts = append(parts, "has:monitor")
+		// is:mon means "a Monitor is running right now", matching the MON badge
+		// (sessions.go): the process must be live AND at least one Monitor job
+		// still active. HasMonitorJobs alone stays true after every monitor has
+		// ended, so gating is:mon on it would keep matching dead sessions.
+		if s.IsLive && s.ActiveMonitorCount() > 0 {
+			parts = append(parts, "is:mon")
+		}
 	}
 	if s.AwaitingInput {
 		parts = append(parts, "is:input", "is:waiting-input")

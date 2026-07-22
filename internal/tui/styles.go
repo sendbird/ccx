@@ -39,7 +39,7 @@ const (
 	iconTrendUp       = "▴"
 	iconTrendDown     = "▾"
 	iconStatusDot     = "●" // live/busy status dot before the session ID
-	iconBadgePR       = ""  // open pull request (code-fork glyph)
+	iconBadgePR       = ""  // open pull request (code-fork glyph)
 	iconBarFull       = "█"
 	iconBarLight      = "▓"
 	iconBarMid        = "▒"

@@ -7074,9 +7074,10 @@ func (a *App) renderSearchHintBox() string {
 	switch a.state {
 	case viewSessions:
 		lines = []string{
-			h.Render("is:") + d.Render("live wt team"),
+			h.Render("is:") + d.Render("live busy input mon wait bg done stuck"),
+			h.Render("is:") + d.Render("here wt team fork remote"),
 			h.Render("has:") + d.Render("mem todo task plan agent compact skill mcp"),
-			h.Render("tag:") + d.Render("badge-name"),
+			h.Render("proj:") + d.Render("name") + "  " + h.Render("team:") + d.Render("name") + "  " + h.Render("tag:") + d.Render("badge"),
 			d.Render("text: project branch prompt"),
 		}
 	case viewConversation:

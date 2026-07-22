@@ -38,6 +38,8 @@ func TestFilterValueFor_AllFlags(t *testing.T) {
 		HasSkills:       true,
 		HasMCP:          true,
 		HasMonitorJobs:  true,
+		HasShellJobs:    true,
+		ShellJobs:       []ShellJob{{ToolName: "Monitor", Status: "running"}},
 		TeamName:        "squad",
 		TeammateName:    "bob",
 		ParentSessionID: "parent",
@@ -55,6 +57,43 @@ func TestFilterValueFor_AllFlags(t *testing.T) {
 		"is:team", "team:squad", "bob", "is:fork",
 		"tag:tag1", "tag1", "is:remote", "pod-x", "running",
 	)
+}
+
+// TestFilterValueFor_IsMonOnlyWhenActive verifies is:mon is emitted only when a
+// Monitor is actually running (live session + active Monitor job), matching the
+// MON badge. HasMonitorJobs stays true after monitors end, so a dead session
+// must NOT match is:mon (it still matches has:monitor for history search).
+func TestFilterValueFor_IsMonOnlyWhenActive(t *testing.T) {
+	// Live with an active Monitor → is:mon.
+	active := Session{
+		IsLive:         true,
+		HasShellJobs:   true,
+		HasMonitorJobs: true,
+		ShellJobs:      []ShellJob{{ToolName: "Monitor", Status: "running"}},
+	}
+	fv := FilterValueFor(active, nil)
+	mustContain(t, fv, "has:monitor", "is:mon")
+
+	// Live but every Monitor has ended → has:monitor, but NOT is:mon.
+	ended := Session{
+		IsLive:         true,
+		HasShellJobs:   true,
+		HasMonitorJobs: true,
+		ShellJobs:      []ShellJob{{ToolName: "Monitor", Status: "completed"}},
+	}
+	fv = FilterValueFor(ended, nil)
+	mustContain(t, fv, "has:monitor")
+	mustNotContain(t, fv, "is:mon")
+
+	// Not live (had monitors historically) → has:monitor, but NOT is:mon.
+	dead := Session{
+		HasMonitorJobs: true,
+		HasShellJobs:   true,
+		ShellJobs:      []ShellJob{{ToolName: "Monitor", Status: "running"}},
+	}
+	fv = FilterValueFor(dead, nil)
+	mustContain(t, fv, "has:monitor")
+	mustNotContain(t, fv, "is:mon")
 }
 
 func TestFilterValueFor_IsCurrent(t *testing.T) {
