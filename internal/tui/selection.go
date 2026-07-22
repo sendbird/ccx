@@ -89,20 +89,29 @@ func applyListFilter(l *list.Model, query string) {
 // snapping the selection back to the first row. The item count is unchanged by
 // these in-place updates, so restoring the saved visible index is safe.
 func setListItemsPreservingFilter(l *list.Model, items []list.Item) {
-	// Only re-run the filter when one is APPLIED. If the user is actively typing
-	// in the filter (state Filtering), calling SetFilterText here would force the
-	// input closed into FilterApplied — so a background refresh landing while the
-	// user just pressed "/" would slam the search box shut. Leave Filtering (and
-	// Unfiltered) alone; SetItems keeps the live input intact.
-	if l.FilterState() != list.FilterApplied {
+	state := l.FilterState()
+	filter := l.FilterInput.Value()
+
+	// Unfiltered, or an empty filter box: nothing to preserve. SetItems is safe;
+	// its dropped re-filter cmd is a no-op when there is no filter value.
+	if state == list.Unfiltered || filter == "" {
 		l.SetItems(items)
 		return
 	}
+
+	// A filter value is present (state is FilterApplied or Filtering). SetItems
+	// nils filteredItems and returns the re-filter as a tea.Cmd that this caller
+	// drops — leaving VisibleItems() == 0 and a blank list. SetFilterText re-runs
+	// the filter synchronously so filteredItems is correct immediately, but it
+	// also forces the state to FilterApplied. That's correct when a filter was
+	// applied, but would slam the search box shut if the user is mid-edit
+	// (Filtering, e.g. right after pressing "/"). Restore Filtering afterward so
+	// the live input stays open while the rows repopulate.
 	savedIndex := l.Index()
-	filter := l.FilterInput.Value()
 	l.SetItems(items)
-	if filter != "" {
-		l.SetFilterText(filter)
+	l.SetFilterText(filter)
+	if state == list.Filtering {
+		l.SetFilterState(list.Filtering)
 	}
 	if n := len(l.VisibleItems()); n > 0 {
 		if savedIndex < 0 {
