@@ -53,6 +53,7 @@ type ActionsKeymap struct {
 	Fork      string `yaml:"fork"`
 	New       string `yaml:"new"`
 	Remote    string `yaml:"remote"`
+	Edit      string `yaml:"edit"`
 }
 
 // ViewsKeymap defines configurable keybindings for the views menu.
@@ -114,16 +115,16 @@ func DefaultKeymap() Keymap {
 			Quit:         "q",
 			Escape:       "esc",
 			Open:         "enter",
-			Edit:         "e",
+			Edit:         "",
 			Actions:      "x",
-			Views:        "v",
+			Views:        "V",
 			Refresh:      "R",
 			Group:        "",
 			Help:         "?",
 			Search:       "/",
 			GlobalSearch: "ctrl+s",
-			Live:         "L",
-			Switch:       "s",
+			Live:         "",
+			Switch:       "",
 			Select:       " ",
 			Preview:      "tab",
 			PreviewBack:  "shift+tab",
@@ -153,6 +154,7 @@ func DefaultKeymap() Keymap {
 			Fork:      "F",
 			New:       "n",
 			Remote:    "R",
+			Edit:      "e",
 		},
 		Views: ViewsKeymap{
 			Stats:   "s",

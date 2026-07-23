@@ -11,20 +11,20 @@ import (
 func TestDefaultKeymap(t *testing.T) {
 	km := DefaultKeymap()
 
-	// Verify all session keys are non-empty
+	// Verify all session keys are non-empty. Edit/Live/Switch are intentionally
+	// empty by default (Edit moved into the actions menu as x→e; Live is reached
+	// via the page menu p→l; Switch has no default top-level binding).
 	checks := []struct {
 		name, val string
 	}{
 		{"Quit", km.Session.Quit},
 		{"Escape", km.Session.Escape},
 		{"Open", km.Session.Open},
-		{"Edit", km.Session.Edit},
 		{"Actions", km.Session.Actions},
 		{"Views", km.Session.Views},
 		{"Refresh", km.Session.Refresh},
 		{"Help", km.Session.Help},
 		{"Search", km.Session.Search},
-		{"Live", km.Session.Live},
 		{"Select", km.Session.Select},
 		{"Preview", km.Session.Preview},
 		{"PreviewBack", km.Session.PreviewBack},
@@ -38,6 +38,15 @@ func TestDefaultKeymap(t *testing.T) {
 		if c.val == "" {
 			t.Errorf("DefaultKeymap().Session.%s is empty", c.name)
 		}
+	}
+	if km.Session.Edit != "" || km.Session.Live != "" || km.Session.Switch != "" {
+		t.Errorf("Edit/Live/Switch should be empty by default, got Edit=%q Live=%q Switch=%q", km.Session.Edit, km.Session.Live, km.Session.Switch)
+	}
+	if km.Actions.Edit != "e" {
+		t.Errorf("Actions.Edit = %q, want e (actions-menu edit)", km.Actions.Edit)
+	}
+	if km.Session.Views != "V" {
+		t.Errorf("Session.Views = %q, want V", km.Session.Views)
 	}
 
 	// Verify actions keys

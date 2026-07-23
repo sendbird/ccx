@@ -107,18 +107,22 @@ func TestCompletedProjectsToggleKey(t *testing.T) {
 	app := newTestApp(sessions)
 	app.sessGroupMode = groupProjectCentric
 	app.rebuildSessionList()
-	m, _ := app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	// Completed-only filter is now s → d (state menu), not the old top-level D.
+	m, _ := app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	app = m.(*App)
+	m, _ = app.handleStateMenu("d")
 	app = m.(*App)
 	if got := strings.TrimSpace(app.activeFilterValue()); got != "is:done" {
-		t.Fatalf("expected D to apply is:done filter, got %q", got)
+		t.Fatalf("expected s→d to apply is:done filter, got %q", got)
 	}
 	if app.copiedMsg != "Showing completed projects" {
 		t.Fatalf("expected completed filter status message, got %q", app.copiedMsg)
 	}
-	m, _ = app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	app.stateMenu = true
+	m, _ = app.handleStateMenu("d")
 	app = m.(*App)
 	if got := strings.TrimSpace(app.activeFilterValue()); got != "" {
-		t.Fatalf("expected second D to clear filter, got %q", got)
+		t.Fatalf("expected second s→d to clear filter, got %q", got)
 	}
 	if app.copiedMsg != "Completed filter cleared" {
 		t.Fatalf("expected clear status message, got %q", app.copiedMsg)
@@ -132,10 +136,12 @@ func TestCompletedProjectsToggleFallsBackWhenNoDoneMatches(t *testing.T) {
 	app := newTestApp(sessions)
 	app.sessGroupMode = groupProjectCentric
 	app.rebuildSessionList()
-	m, _ := app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	m, _ := app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	app = m.(*App)
+	m, _ = app.handleStateMenu("d")
 	app = m.(*App)
 	if got := strings.TrimSpace(app.activeFilterValue()); got != "" {
-		t.Fatalf("expected D to clear back out when there are no done matches, got %q", got)
+		t.Fatalf("expected s→d to clear back out when there are no done matches, got %q", got)
 	}
 	if app.copiedMsg != "No completed projects found" {
 		t.Fatalf("expected no-match status message, got %q", app.copiedMsg)

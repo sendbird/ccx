@@ -269,7 +269,7 @@ type App struct {
 	statsPageMenu      bool // "p" page jump popup
 	inspectorMenu      bool // conversation inspector facet picker
 	sessPageMenu       bool // sessions preview page jump popup
-	stateMenu          bool // sessions state-filter toggle popup ("l" prefix)
+	stateMenu          bool // sessions state-filter toggle popup ("s" prefix)
 
 	// Session preview mode
 	sessPreviewMode        sessPreview
@@ -650,7 +650,7 @@ func (a *App) toggleCompletedProjectsFilter() {
 }
 
 // stateFilterTokens are the mutually-orthogonal session-state tokens the state
-// toggle menu ("l" prefix) manages. They are combined with comma-OR so several
+// toggle menu ("s" prefix) manages. They are combined with comma-OR so several
 // states can be shown at once, e.g. "is:live,is:input,is:mon".
 var stateFilterTokens = map[string]string{
 	"l": "is:live",
@@ -1335,8 +1335,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// Esc clears an applied search filter before doing normal navigation
-		if msg.String() == "esc" && a.hasFilterApplied() {
+		// Esc clears an applied search filter before doing normal navigation.
+		// In the session list we only clear via esc while the "/" search input
+		// is active (isFiltering, handled above) — an applied filter (e.g. the
+		// auto state filter) must survive esc so closing the preview / clearing
+		// multi-select doesn't wipe it.
+		if msg.String() == "esc" && a.hasFilterApplied() && a.state != viewSessions {
 			a.resetActiveFilter()
 			a.syncAllFilterVisibility()
 			return a, nil
@@ -1773,7 +1777,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleActionsMenu(key)
 	}
 
-	// State-filter toggle menu ("l" prefix)
+	// State-filter toggle menu ("s" prefix)
 	if a.stateMenu {
 		return a.handleStateMenu(key)
 	}
@@ -1973,6 +1977,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.actionsSess = sess
 		return a, nil
 	case km.Session.Live:
+		// Live preview. Default has no top-level key (reach it via the page
+		// menu p→l); the case stays for user-configured bindings.
 		// Remote sessions: spawn kubectl exec in hidden tmux pane, use as live preview
 		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
 			return a.openRemoteLivePreview(sess)
@@ -1987,6 +1993,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.openLivePreview(sess)
 	case km.Session.Switch:
 		// Jump straight to the session's live tmux window (client switch).
+		// Default has no top-level key; the case stays for user-configured bindings.
 		if !a.config.TmuxEnabled || !tmux.InTmux() {
 			a.copiedMsg = "Requires tmux"
 			return a, nil
@@ -2001,6 +2008,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a.jumpToTmuxPane(sess.ProjectPath, sess.ID)
 	case km.Session.Edit:
+		// Edit session files. Default moved into the actions menu (x→e);
+		// the case stays for user-configured top-level bindings.
 		sess, ok := a.selectedSession()
 		if !ok {
 			return a, nil
@@ -2077,10 +2086,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "F":
 			a.setAllSessGroupsFolded(false)
 			return a, nil
-		case "D":
-			a.toggleCompletedProjectsFilter()
-			return a, a.updateSessionPreview()
-		case "S":
+		case "s":
 			a.stateMenu = true
 			return a, nil
 		}
@@ -2915,6 +2921,12 @@ func (a *App) handleStateMenu(key string) (tea.Model, tea.Cmd) {
 		a.setSessionListFilter("")
 		a.copiedMsg = "Showing all sessions"
 		return a, a.updateSessionPreview()
+	case "d":
+		// "Completed-only" filter (formerly the top-level D key), now reached
+		// via the state menu as s → d. Sets the filter to is:done exclusively
+		// rather than OR-ing done into the active set.
+		a.toggleCompletedProjectsFilter()
+		return a, a.updateSessionPreview()
 	case "esc":
 		return a, nil
 	}
@@ -3485,6 +3497,8 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a, nil
 	case akm.Resume:
 		return a.resumeSession(sess)
+	case akm.Edit:
+		return a.openEditMenu(sess)
 	case akm.CopyPath:
 		return a.copySelectedSessionPath()
 	case akm.Copy:
@@ -7166,7 +7180,7 @@ func (a *App) renderActionsHintBox() string {
 		} else {
 			lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Copy))+d.Render(":copy")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
 		}
-		line2 := hl.Render(displayKey(akm.Worktree)) + d.Render(":worktree") + sp + hl.Render(displayKey(akm.URLs)) + d.Render(":urls") + sp + hl.Render(displayKey(akm.Files)) + d.Render(":files") + sp + hl.Render(displayKey(akm.Changes)) + d.Render(":changes") + sp + hl.Render(displayKey(akm.Tags)) + d.Render(":tags")
+		line2 := hl.Render(displayKey(akm.Edit)) + d.Render(":edit") + sp + hl.Render(displayKey(akm.Worktree)) + d.Render(":worktree") + sp + hl.Render(displayKey(akm.URLs)) + d.Render(":urls") + sp + hl.Render(displayKey(akm.Files)) + d.Render(":files") + sp + hl.Render(displayKey(akm.Changes)) + d.Render(":changes") + sp + hl.Render(displayKey(akm.Tags)) + d.Render(":tags")
 		if sess.HasMemory {
 			line2 += sp + hl.Render(displayKey(akm.RemoveMem)) + d.Render(":rm-mem")
 		}
