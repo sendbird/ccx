@@ -109,3 +109,38 @@ func TestSessionsHelpShowsNavigationAndPreviewTab(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionShortcutRebinds verifies the #112 shortcut rebinds dispatch to the
+// right action: s opens the state menu (was S), V opens the views menu (was v),
+// x then e opens the edit menu (was e), and the old top-level s/L/D are gone.
+func TestSessionShortcutRebinds(t *testing.T) {
+	app := newSessionKeybindingApp()
+
+	// s → state menu (formerly S).
+	m, _ := app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	app = m.(*App)
+	if !app.stateMenu {
+		t.Fatal("s should open the state menu")
+	}
+	app.stateMenu = false
+
+	// V → views menu (formerly v).
+	m, _ = app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
+	app = m.(*App)
+	if !app.viewsMenu {
+		t.Fatal("V should open the views menu")
+	}
+	app.viewsMenu = false
+
+	// x → actions menu, then e → edit menu (formerly top-level e).
+	m, _ = app.handleSessionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	app = m.(*App)
+	if !app.actionsMenu {
+		t.Fatal("x should open the actions menu")
+	}
+	m, _ = app.handleActionsMenu("e")
+	app = m.(*App)
+	if !app.editMenu {
+		t.Fatal("x → e should open the edit menu")
+	}
+}

@@ -380,3 +380,35 @@ func TestLoadKeymap_WithNavigation(t *testing.T) {
 		t.Errorf("Navigation.Home should keep default %v, got %v", def.Navigation.Home, km.Navigation.Home)
 	}
 }
+
+// TestMigrateKeymapDefaults verifies old default keymap values are rewritten to
+// the new defaults, while user-customized values are preserved.
+func TestMigrateKeymapDefaults(t *testing.T) {
+	cfg := &CCXConfig{}
+	cfg.Keymaps.Session.Edit = "e"
+	cfg.Keymaps.Session.Views = "v"
+	cfg.Keymaps.Session.Live = "L"
+	cfg.Keymaps.Session.Switch = "s"
+	cfg.Keymaps.Session.Refresh = "R" // unchanged default
+	cfg.Keymaps.Session.Help = "H"    // user-customized, must survive
+	migrateKeymapDefaults(cfg)
+
+	if cfg.Keymaps.Session.Edit != "" {
+		t.Errorf("Edit = %q, want empty (moved to actions menu)", cfg.Keymaps.Session.Edit)
+	}
+	if cfg.Keymaps.Session.Views != "V" {
+		t.Errorf("Views = %q, want V", cfg.Keymaps.Session.Views)
+	}
+	if cfg.Keymaps.Session.Live != "" {
+		t.Errorf("Live = %q, want empty (removed)", cfg.Keymaps.Session.Live)
+	}
+	if cfg.Keymaps.Session.Switch != "" {
+		t.Errorf("Switch = %q, want empty (removed)", cfg.Keymaps.Session.Switch)
+	}
+	if cfg.Keymaps.Actions.Edit != "e" {
+		t.Errorf("Actions.Edit = %q, want e", cfg.Keymaps.Actions.Edit)
+	}
+	if cfg.Keymaps.Session.Help != "H" {
+		t.Errorf("Help = %q, want H preserved (user override)", cfg.Keymaps.Session.Help)
+	}
+}
