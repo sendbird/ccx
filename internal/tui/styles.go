@@ -96,6 +96,7 @@ var (
 	compactBadgeStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 	taskBadgeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#FB923C")).Bold(true)
 	memoryBadge         = lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true)
+	memoryMatchStyle    = lipgloss.NewStyle().Foreground(colorFilter).Bold(true)
 	planBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 	liveBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true)
 	busyBadge           = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Bold(true)

@@ -123,6 +123,8 @@ type inspectorNavFrame struct {
 	previewOffset  int
 	metaDrill      string
 	metaPlanDrill  string
+	memorySearch   string
+	changesByFile  bool
 	rightPaneMode  int
 }
 
@@ -268,6 +270,8 @@ func (a *App) captureInspectorNavFrame() inspectorNavFrame {
 		previewOffset:  sp.Preview.YOffset,
 		metaDrill:      a.conv.inspector.MetaDrill,
 		metaPlanDrill:  a.conv.inspector.MetaPlanDrill,
+		memorySearch:   a.conv.inspector.MemorySearch,
+		changesByFile:  a.conv.inspector.ChangesByFile,
 		rightPaneMode:  a.conv.rightPaneMode,
 	}
 	if sp.Folds != nil {
@@ -296,6 +300,8 @@ func (a *App) restoreInspectorFrame(frame inspectorNavFrame) {
 	a.conv.inspector.Explicit = frame.explicit
 	a.conv.inspector.MetaDrill = frame.metaDrill
 	a.conv.inspector.MetaPlanDrill = frame.metaPlanDrill
+	a.conv.inspector.MemorySearch = frame.memorySearch
+	a.conv.inspector.ChangesByFile = frame.changesByFile
 	a.conv.rightPaneMode = frame.rightPaneMode
 	sp.Show = frame.splitShow
 	sp.Focus = frame.splitFocus
@@ -474,6 +480,7 @@ func (a *App) clearInspectorHistory() {
 	a.conv.inspector.ReturnToID = ""
 	a.conv.inspector.MetaDrill = ""
 	a.conv.inspector.MetaPlanDrill = ""
+	a.conv.inspector.MemorySearch = ""
 }
 
 func (a *App) pushNavFrame() {

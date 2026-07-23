@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -52,8 +53,14 @@ func (a *App) buildSessionMetaEntry(item convItem) (session.Entry, []metaEntryTa
 // metaMemoryEntries builds the memory rows. In list mode (MetaDrill empty) each
 // memory note is one selectable row showing name, type, description, and its
 // first→last write history. In drill mode it renders the single note's body.
+// When MemorySearch is set, the list is replaced by cross-file match rows
+// (one snippet per matching line) that Enter drills into.
 func (a *App) metaMemoryEntries() []metaEntry {
 	sess := a.conv.sess
+
+	if a.conv.inspector.MemorySearch != "" {
+		return a.metaMemorySearchEntries(a.conv.inspector.MemorySearch)
+	}
 
 	var out []metaEntry
 	// Todos are independent selectable resources. When the transcript contains
@@ -141,6 +148,230 @@ func (a *App) metaMemoryDrillEntries(note session.MemoryNote) []metaEntry {
 		{block: session.ContentBlock{Type: "text", Text: head.String()}, target: target},
 		{block: session.ContentBlock{Type: "text", Text: strings.TrimRight(body, "\n")}, target: target},
 	}
+}
+
+// memoryMatch is one matching line within a memory note body.
+type memoryMatch struct {
+	line   string // raw body line (original casing)
+	lineNo int    // 1-based line number within the body
+}
+
+// metaMemorySearchEntries replaces the memory file list with a flat list of
+// matches across every note: a leading summary header, then per-file group
+// headers each followed by one selectable snippet row per matching line. Enter
+// on a snippet drills into the containing file; J jumps to its last write turn
+// when one is recorded.
+func (a *App) metaMemorySearchEntries(query string) []metaEntry {
+	sess := a.conv.sess
+	if sess.ProjectPath == "" {
+		return []metaEntry{textMeta(dimStyle.Render("(no project path)"))}
+	}
+	notes := session.LoadMemoryNotes(sess.ProjectPath, homeDir())
+	q := strings.ToLower(strings.TrimSpace(query))
+	previewW := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+	// Reserve room for the cursor indicator, the "L<n>  " line-number prefix,
+	// and the renderMarkdownText wrap margin so the styled snippet stays on one
+	// rendered line (wrapText would split ANSI and break the highlight).
+	snippetBudget := max(previewW-14, 20)
+
+	const (
+		maxPerFile = 10
+		maxTotal   = 50
+	)
+
+	var rows []metaEntry
+	shown := 0
+	for _, note := range notes {
+		if shown >= maxTotal {
+			break
+		}
+		matches := memorySearchMatches(note, q)
+		if len(matches) == 0 {
+			continue
+		}
+		n := len(matches)
+		if n > maxPerFile {
+			n = maxPerFile
+		}
+		if shown+n > maxTotal {
+			n = maxTotal - shown
+		}
+		rows = append(rows, textMeta(memorySearchGroupHeader(note, n, len(matches))))
+
+		origin, hasOrigin := a.lastMemoryWriteOrigin(note.FileName)
+		for _, m := range matches[:n] {
+			target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, entryIndex: -1, blockIdx: -1}
+			if hasOrigin {
+				t := a.originTarget(metaTargetMemoryFile, origin)
+				t.fileName = note.FileName
+				target = t
+			}
+			rows = append(rows, metaEntry{
+				block:  session.ContentBlock{Type: "text", Text: memorySearchMatchRow(m, q, snippetBudget)},
+				target: target,
+			})
+		}
+		shown += n
+	}
+
+	header := dimStyle.Render(fmt.Sprintf("══ Memory search · %q · %d match(es) · ↵ open ══", query, shown))
+	out := []metaEntry{textMeta(header)}
+	if shown == 0 {
+		out = append(out, textMeta(dimStyle.Render("No matches.")))
+		return out
+	}
+	return append(out, rows...)
+}
+
+// memorySearchMatches returns every body line of note whose lowercased text
+// contains the query (case-insensitive). Line numbers are 1-based within the
+// body. An empty query yields no matches.
+func memorySearchMatches(note session.MemoryNote, q string) []memoryMatch {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return nil
+	}
+	var out []memoryMatch
+	for i, line := range strings.Split(note.Body, "\n") {
+		if strings.Contains(strings.ToLower(line), q) {
+			out = append(out, memoryMatch{line: line, lineNo: i + 1})
+		}
+	}
+	return out
+}
+
+// memorySearchGroupHeader renders one non-selectable per-file header above its
+// match rows: the note name, type tag, and a match count (shown vs total, with
+// a "+" marker when truncated).
+func memorySearchGroupHeader(note session.MemoryNote, shown, total int) string {
+	title := note.Name
+	if note.IsIndex {
+		title = "MEMORY.md"
+	}
+	head := memTypeStyle(note.Type).Render(title)
+	if note.Type != "" && !note.IsIndex {
+		head += "  " + memTypeStyle(note.Type).Render("["+note.Type+"]")
+	}
+	count := fmt.Sprintf("%d match(es)", shown)
+	if total > shown {
+		count = fmt.Sprintf("%d of %d+ matches", shown, total)
+	}
+	return head + "  " + dimStyle.Render(count)
+}
+
+// memorySearchMatchRow renders one selectable match as a line-number prefix
+// plus a width-bound snippet with the matched substring highlighted.
+func memorySearchMatchRow(m memoryMatch, q string, budget int) string {
+	line := strings.TrimSpace(m.line)
+	if line == "" {
+		line = "(blank line)"
+	}
+	return dimStyle.Render(fmt.Sprintf("L%d  ", m.lineNo)) + highlightMemorySnippet(line, q, budget)
+}
+
+// highlightMemorySnippet builds a single-line snippet of line that contains the
+// first occurrence of q (case-insensitive), with the matched runes rendered in
+// memoryMatchStyle and the surrounding context dimmed. The visible width is
+// bounded by budget (in display cells) so the fold renderer does not word-wrap
+// the styled string — wrapText would split mid-ANSI and break the highlight.
+// Windowing is display-width-aware so CJK/emoji wide runes are accounted for.
+// Ellipses mark truncation on either side.
+func highlightMemorySnippet(line, q string, budget int) string {
+	q = strings.ToLower(q)
+	lower := strings.ToLower(line)
+	idx := strings.Index(lower, q)
+	if q == "" || idx < 0 {
+		return dimStyle.Render(truncateDisplayWidth(line, budget))
+	}
+	matchEnd := idx + len(q)
+	matched := line[idx:matchEnd]
+	matchW := runewidth.StringWidth(matched)
+	avail := budget - matchW
+	if avail < 4 {
+		avail = 4
+	}
+	side := (avail - 2) / 2 // 1 cell reserved for each ellipsis
+	if side < 0 {
+		side = 0
+	}
+	before, preEll := trimTrailingDisplay(line[:idx], side)
+	after, postEll := trimLeadingDisplay(line[matchEnd:], side)
+	return dimStyle.Render(preEll+before) + memoryMatchStyle.Render(matched) + dimStyle.Render(after+postEll)
+}
+
+// trimTrailingDisplay returns the trailing up to cells display cells of s, with
+// an ellipsis prefix when content was dropped.
+func trimTrailingDisplay(s string, cells int) (string, string) {
+	if s == "" {
+		return "", ""
+	}
+	if cells <= 0 {
+		return "", "…"
+	}
+	runes := []rune(s)
+	w := 0
+	start := len(runes)
+	for i := len(runes) - 1; i >= 0; i-- {
+		rw := runewidth.RuneWidth(runes[i])
+		if w+rw > cells {
+			break
+		}
+		w += rw
+		start = i
+	}
+	if start == 0 {
+		return s, ""
+	}
+	return string(runes[start:]), "…"
+}
+
+// trimLeadingDisplay returns the leading up to cells display cells of s, with
+// an ellipsis suffix when content was dropped.
+func trimLeadingDisplay(s string, cells int) (string, string) {
+	if s == "" {
+		return "", ""
+	}
+	if cells <= 0 {
+		return "", "…"
+	}
+	runes := []rune(s)
+	w := 0
+	end := 0
+	for i, r := range runes {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > cells {
+			break
+		}
+		w += rw
+		end = i + 1
+	}
+	if end == len(runes) {
+		return s, ""
+	}
+	return string(runes[:end]), "…"
+}
+
+// truncateDisplayWidth returns s trimmed to at most maxCells display cells,
+// appending an ellipsis when truncation occurs.
+func truncateDisplayWidth(s string, maxCells int) string {
+	if maxCells <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(s) <= maxCells {
+		return s
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxCells-1 {
+			b.WriteString("…")
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String()
 }
 
 // memoryListRow formats one memory note as a single selectable row: name, type
