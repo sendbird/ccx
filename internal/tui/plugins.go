@@ -261,7 +261,11 @@ func (a *App) openPluginExplorer() (tea.Model, tea.Cmd) {
 	a.plgSplit.Show = true
 	a.plgSplit.Focus = false
 	a.plgSplit.CacheKey = ""
-	a.state = viewPlugins
+	// Plugins live as a page inside the config view now: enter config view and
+	// switch to the PLUGINS page.
+	a.state = viewConfig
+	a.cfgPluginsPage = true
+	a.cfgFilterCat = cfgFilterAll
 	a.updatePluginPreview()
 	return a, nil
 }
@@ -380,6 +384,137 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Pass navigation keys to list
+	if isNavKey(msg) {
+		if sp.Focus {
+			var cmd tea.Cmd
+			sp.Preview, cmd = sp.Preview.Update(msg)
+			return a, cmd
+		}
+		var cmd tea.Cmd
+		a.plgList, cmd = a.plgList.Update(msg)
+		return a, tea.Batch(cmd, a.schedulePreviewUpdate())
+	}
+
+	return a, nil
+}
+
+// handleCfgPluginKeys handles keys on the PLUGINS page of the config view. It
+// mirrors handlePluginKeys but Esc returns to the config ALL page instead of
+// leaving to the sessions view, and [ / ] / tab / p (page cycling) are handled
+// upstream in handleConfigKeys.
+func (a *App) handleCfgPluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if a.plgDetailActive {
+		return a.handlePluginDetailKeys(msg)
+	}
+
+	sp := &a.plgSplit
+	key := msg.String()
+
+	if a.plgSearching {
+		return a.handlePlgSearch(msg)
+	}
+	if a.plgActionsMenu {
+		return a.handlePlgActionsMenu(msg.String())
+	}
+	if a.plgCompActionsMenu {
+		return a.handlePlgCompActionsMenu(msg.String())
+	}
+
+	if nav, navMsg := a.keymap.TranslateNav(key, msg); nav != "" {
+		key = nav
+		msg = navMsg
+	}
+
+	if a.viewsMenu {
+		return a.handleViewsMenu(key)
+	}
+
+	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, func(delta int) {
+		newRatio := a.splitRatio + delta
+		if newRatio < 20 {
+			newRatio = 20
+		}
+		if newRatio > 80 {
+			newRatio = 80
+		}
+		a.splitRatio = newRatio
+	})
+	switch result {
+	case splitKeyClosed:
+		if a.plgSearchTerm != "" {
+			a.plgSearchTerm = ""
+			a.rebuildPlgList()
+			return a, nil
+		}
+		return a, nil
+	case splitKeyOpened, splitKeyFocused:
+		a.updatePluginPreview()
+		return a, nil
+	case splitKeyUnfocused:
+		return a, nil
+	case splitKeyHandled, splitKeyScrolled:
+		return a, nil
+	}
+
+	switch key {
+	case a.keymap.Session.Quit:
+		return a.quit()
+	case "esc":
+		if a.plgHasSelection() {
+			a.clearPlgSelection()
+			return a, nil
+		}
+		if a.plgSearchTerm != "" {
+			a.plgSearchTerm = ""
+			a.rebuildPlgList()
+			return a, nil
+		}
+		// Esc from the PLUGINS page returns to the config ALL page. If the
+		// config tree was never scanned (e.g. entered via :plugins directly),
+		// open the config explorer first to avoid a nil-cfgTree panic.
+		if a.cfgTree == nil {
+			return a.openConfigExplorer()
+		}
+		a.enterCfgPage(0)
+		return a, nil
+	case a.keymap.Session.Open:
+		if pi, ok := a.plgList.SelectedItem().(plgItem); ok && !pi.isHeader {
+			return a.openPluginDetail(pi.plugin)
+		}
+		return a, nil
+	case a.keymap.Session.Views:
+		a.viewsMenu = true
+		return a, nil
+	case "x":
+		a.plgActionsMenu = true
+		return a, nil
+	case " ":
+		if pi, ok := a.plgList.SelectedItem().(plgItem); ok && !pi.isHeader {
+			if a.plgSelectedSet[pi.plugin.ID] {
+				delete(a.plgSelectedSet, pi.plugin.ID)
+			} else {
+				a.plgSelectedSet[pi.plugin.ID] = true
+			}
+			a.applyPlgDelegate()
+		}
+		return a, nil
+	case a.keymap.Session.Search:
+		return a, a.startPlgSearch()
+	case "n":
+		if a.plgSearchTerm != "" {
+			a.plgSearchNext(1)
+		}
+		return a, nil
+	case "N":
+		if a.plgSearchTerm != "" {
+			a.plgSearchNext(-1)
+		}
+		return a, nil
+	case a.keymap.Session.Refresh:
+		a.copiedMsg = "Refreshing plugins…"
+		return a.openPluginExplorer()
+	}
+
 	if isNavKey(msg) {
 		if sp.Focus {
 			var cmd tea.Cmd

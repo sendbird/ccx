@@ -102,6 +102,12 @@ func (a *App) activeSplitPane() *SplitPane {
 	case viewConversation:
 		return &a.conv.split
 	case viewConfig:
+		if a.cfgPluginsPage {
+			if a.plgDetailActive {
+				return &a.plgDetailSplit
+			}
+			return &a.plgSplit
+		}
 		return &a.cfgSplit
 	case viewPlugins:
 		if a.plgDetailActive {
@@ -160,9 +166,23 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case viewConfig:
-		a.cfgSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
-		if !scrolledPreview {
-			a.updateConfigPreview()
+		if a.cfgPluginsPage {
+			if a.plgDetailActive {
+				a.plgDetailSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+				if !scrolledPreview {
+					a.updatePluginDetailPreview()
+				}
+			} else {
+				a.plgSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+				if !scrolledPreview {
+					a.updatePluginPreview()
+				}
+			}
+		} else {
+			a.cfgSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+			if !scrolledPreview {
+				a.updateConfigPreview()
+			}
 		}
 
 	case viewPlugins:
@@ -263,8 +283,18 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case viewConfig:
-		a.cfgSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
-		a.updateConfigPreview()
+		if a.cfgPluginsPage {
+			if a.plgDetailActive {
+				a.plgDetailSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+				a.updatePluginDetailPreview()
+			} else {
+				a.plgSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+				a.updatePluginPreview()
+			}
+		} else {
+			a.cfgSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+			a.updateConfigPreview()
+		}
 
 	case viewPlugins:
 		if a.plgDetailActive {

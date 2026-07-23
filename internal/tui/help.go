@@ -189,6 +189,10 @@ func (a *App) configHelpLine() string {
 		h += " " + a.helpSuffix()
 		return formatHelp(h)
 	}
+	if a.cfgPluginsPage {
+		// PLUGINS page reuses the plugins help line plus page-cycling hints.
+		return a.pluginsHelpLine()
+	}
 	if a.cfgSearchTerm != "" {
 		badge := fmt.Sprintf("[%d/%d]", a.cfgSearchIdx+1, len(a.cfgSearchMatch))
 		if len(a.cfgSearchMatch) == 0 {
@@ -197,22 +201,19 @@ func (a *App) configHelpLine() string {
 		return "  " + filterBadge.Render(badge) + formatHelp(" n/N:next/prev esc:clear")
 	}
 
-	h := "↵:open x:actions " + a.keymap.Session.Search + ":search " + a.keymap.Session.Views + ":views"
+	h := "↵:open x:actions []:page " + a.keymap.Session.Search + ":search " + a.keymap.Session.Views + ":views"
 	if a.cfgHasSelection() {
-		h = "sp:sel x:actions esc:clear"
+		h = "sp:sel x:actions []:page esc:clear"
 	}
 	if a.cfgSplit.Show {
 		if a.cfgSplit.Focus {
 			h = "↑↓:scroll esc:unfocus"
 		} else {
-			h = "↑↓:nav →:focus x:actions " + a.keymap.Session.Views + ":views"
+			h = "↑↓:nav →:focus x:actions []:page " + a.keymap.Session.Views + ":views"
 		}
 	}
 	h += " " + a.helpSuffix()
 	var badges string
-	if fl := a.cfgFilterLabel(); fl != "" {
-		badges += filterBadge.Render(fl) + " "
-	}
 	if a.cfgHasSelection() {
 		badges += filterBadge.Render(fmt.Sprintf("%d selected", len(a.cfgSelectedSet))) + " "
 	}
@@ -235,9 +236,9 @@ func (a *App) pluginsHelpLine() string {
 	if a.plgSearchTerm != "" {
 		return "  " + filterBadge.Render(a.plgSearchTerm) + formatHelp(" n/N:next/prev esc:clear")
 	}
-	h := "↵:open →:preview x:actions " + a.keymap.Session.Search + ":search"
+	h := "↵:open →:preview x:actions []:page " + a.keymap.Session.Search + ":search"
 	if a.plgSplit.Show && a.plgSplit.Focus {
-		h = "↑↓:scroll ←:unfocus"
+		h = "↑↓:scroll ←:unfocus []:page"
 	}
 	h += " " + a.helpSuffix()
 	if a.plgHasSelection() {
