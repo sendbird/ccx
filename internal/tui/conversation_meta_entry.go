@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -33,6 +34,8 @@ func (a *App) buildSessionMetaEntry(item convItem) (session.Entry, []metaEntryTa
 		entries = a.metaTasksPlanEntries()
 	case "refs":
 		entries = a.metaRefsEntries()
+	case "scratchpad":
+		entries = a.metaScratchpadEntries()
 	default:
 		entries = a.metaSummaryEntries()
 	}
@@ -48,6 +51,16 @@ func (a *App) buildSessionMetaEntry(item convItem) (session.Entry, []metaEntryTa
 		targets = append(targets, metaEntryTarget{entryIndex: -1, blockIdx: -1})
 	}
 	return session.Entry{Content: blocks}, targets
+}
+
+// memoryNotePath returns the absolute on-disk path of a memory note basename
+// for the current session's project, used to open it in $EDITOR.
+func (a *App) memoryNotePath(fileName string) string {
+	sess := a.conv.sess
+	if sess.ProjectPath == "" || fileName == "" {
+		return ""
+	}
+	return filepath.Join(homeDir(), ".claude", "projects", session.EncodeProjectPath(sess.ProjectPath), "memory", fileName)
 }
 
 // metaMemoryEntries builds the memory rows. In list mode (MetaDrill empty) each
@@ -100,10 +113,11 @@ func (a *App) metaMemoryEntries() []metaEntry {
 	for _, note := range notes {
 		// Enter drills into the file; J jumps to its last write turn, so bind the
 		// write origin here too (entryIndex defaults to -1 when never written).
-		target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, entryIndex: -1, blockIdx: -1}
+		target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, filePath: a.memoryNotePath(note.FileName), entryIndex: -1, blockIdx: -1}
 		if origin, ok := a.lastMemoryWriteOrigin(note.FileName); ok {
 			t := a.originTarget(metaTargetMemoryFile, origin)
 			t.fileName = note.FileName
+			t.filePath = a.memoryNotePath(note.FileName)
 			target = t
 		}
 		out = append(out, metaEntry{
@@ -119,10 +133,11 @@ func (a *App) metaMemoryEntries() []metaEntry {
 func (a *App) metaMemoryDrillEntries(note session.MemoryNote) []metaEntry {
 	hist := a.conv.flow.MemoryTouchHistory()[note.FileName]
 	origin, hasOrigin := a.lastMemoryWriteOrigin(note.FileName)
-	target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, entryIndex: -1, blockIdx: -1}
+	target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, filePath: a.memoryNotePath(note.FileName), entryIndex: -1, blockIdx: -1}
 	if hasOrigin {
 		t := a.originTarget(metaTargetMemoryFile, origin)
 		t.fileName = note.FileName
+		t.filePath = a.memoryNotePath(note.FileName)
 		target = t
 	}
 
@@ -200,10 +215,11 @@ func (a *App) metaMemorySearchEntries(query string) []metaEntry {
 
 		origin, hasOrigin := a.lastMemoryWriteOrigin(note.FileName)
 		for _, m := range matches[:n] {
-			target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, entryIndex: -1, blockIdx: -1}
+			target := metaEntryTarget{kind: metaTargetMemoryFile, fileName: note.FileName, filePath: a.memoryNotePath(note.FileName), entryIndex: -1, blockIdx: -1}
 			if hasOrigin {
 				t := a.originTarget(metaTargetMemoryFile, origin)
 				t.fileName = note.FileName
+				t.filePath = a.memoryNotePath(note.FileName)
 				target = t
 			}
 			rows = append(rows, metaEntry{
@@ -641,6 +657,13 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 		}
 		a.copiedMsg = "Opened " + target.url
 		return true, a, nil
+	case metaTargetScratchpad:
+		if target.filePath == "" {
+			a.copiedMsg = "No file path for this scratchpad"
+			return true, a, nil
+		}
+		m, cmd := a.openInEditor(target.filePath)
+		return true, m, cmd
 	default:
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
 			return true, m, cmd
@@ -991,6 +1014,7 @@ func (a *App) planEntries() []metaEntry {
 		data, _ := art.Data.(session.PlanData)
 		target := a.originTarget(metaTargetPlan, art.Origin)
 		target.planKey = key
+		target.filePath = planFilePath(data, key)
 		out = append(out, metaEntry{
 			block:  session.ContentBlock{Type: "text", Text: planRow(key, data, hist[key])},
 			target: target,
@@ -1016,6 +1040,7 @@ func (a *App) metaPlanDrillEntries(art session.Artifact) []metaEntry {
 	data, _ := art.Data.(session.PlanData)
 	target := a.originTarget(metaTargetPlan, art.Origin)
 	target.planKey = art.Key
+	target.filePath = planFilePath(data, art.Key)
 
 	name := filepath.Base(art.Key)
 	if data.PlanFilePath != "" {
@@ -1102,6 +1127,15 @@ func cronRow(c session.CronItem) string {
 	return style.Render(icon+" ") + headline + suffix
 }
 
+// planFilePath returns the absolute plan file path for $EDITOR open: prefer
+// the recorded PlanFilePath, fall back to the artifact key.
+func planFilePath(data session.PlanData, key string) string {
+	if data.PlanFilePath != "" {
+		return data.PlanFilePath
+	}
+	return key
+}
+
 func planRow(key string, data session.PlanData, hist session.TouchHistory) string {
 	name := key
 	if data.PlanFilePath != "" {
@@ -1167,6 +1201,47 @@ func (a *App) metaRefsEntries() []metaEntry {
 		})
 	}
 	return out
+}
+
+// metaScratchpadEntries builds one selectable row per scratchpad file. Enter
+// opens the file in $EDITOR (metaTargetScratchpad). Scratchpad files are not
+// tracked as flow artifacts, so there is no origin turn to jump to.
+func (a *App) metaScratchpadEntries() []metaEntry {
+	sess := a.conv.sess
+	if sess.ProjectPath == "" || sess.ID == "" {
+		return []metaEntry{textMeta(dimStyle.Render("(no session context)"))}
+	}
+	files := session.LoadScratchpadFiles(sess.ProjectPath, sess.ID)
+	if len(files) == 0 {
+		return []metaEntry{textMeta(dimStyle.Render("No scratchpad files."))}
+	}
+	out := []metaEntry{textMeta(dimStyle.Render(fmt.Sprintf("── Scratchpad · %d file(s) · ↵ open in editor ──", len(files))))}
+	for _, f := range files {
+		out = append(out, metaEntry{
+			block:  session.ContentBlock{Type: "text", Text: scratchpadFileRow(f)},
+			target: metaEntryTarget{kind: metaTargetScratchpad, filePath: f.Path, entryIndex: -1, blockIdx: -1},
+		})
+	}
+	return out
+}
+
+// scratchpadFileRow renders one scratchpad file as a selectable row: name, size,
+// and mtime. Binary files are marked.
+func scratchpadFileRow(f session.ScratchpadFile) string {
+	row := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(f.Name)
+	row += dimStyle.Render(fmt.Sprintf("  %s  %s", humanSize(f.Size), scratchpadMtime(f.ModTime)))
+	if !f.IsText {
+		row += dimStyle.Render("  (binary)")
+	}
+	return row
+}
+
+func scratchpadMtime(unixSec int64) string {
+	if unixSec <= 0 {
+		return ""
+	}
+	t := time.Unix(unixSec, 0).UTC()
+	return t.Format("01-02 15:04")
 }
 
 // buildRefsListText is a flat (non-selectable) fallback render of the session's
