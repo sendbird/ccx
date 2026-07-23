@@ -3194,16 +3194,21 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 		})
 	}
 
-	// Non-live session in tmux: spawn a new tmux window
+	// Non-live session in tmux: spawn a new tmux window, reusing the window
+	// the session originally used when its normalized name still matches an
+	// idle-shell window in the current tmux session.
 	if tmux.InTmux() {
-		windowName := sess.ProjectName
+		windowName := tmux.NormalizeWindowName(sess.TmuxWindowName)
+		if windowName == "" {
+			windowName = tmux.NormalizeWindowName(sess.ProjectName)
+		}
 		if windowName == "" {
 			windowName = "claude"
 		}
-		if err := tmux.NewWindowClaudeWithConfig(windowName, dir, sess.ID, a.config.Claude); err != nil {
+		if err := tmux.ResumeInNamedWindow(windowName, dir, sess.ID, a.config.Claude); err != nil {
 			a.copiedMsg = "Spawn failed"
 		} else {
-			a.copiedMsg = "Resumed in new window"
+			a.copiedMsg = "Resumed in " + windowName
 		}
 		return a, nil
 	}
@@ -3763,11 +3768,14 @@ func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 		if dir == "" {
 			dir, _ = os.UserHomeDir()
 		}
-		name := s.ProjectName
+		name := tmux.NormalizeWindowName(s.TmuxWindowName)
+		if name == "" {
+			name = tmux.NormalizeWindowName(s.ProjectName)
+		}
 		if name == "" {
 			name = s.ShortID
 		}
-		if err := tmux.NewWindowClaudeWithConfig(name, dir, s.ID, a.config.Claude); err == nil {
+		if err := tmux.ResumeInNamedWindow(name, dir, s.ID, a.config.Claude); err == nil {
 			count++
 		}
 	}
