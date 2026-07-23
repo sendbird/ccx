@@ -1171,6 +1171,11 @@ func (a *App) rebuildCfgList() {
 // restores the main config list via rebuildCfgList.
 func (a *App) enterCfgSkillBrowser(ci cfgItem) (tea.Model, tea.Cmd) {
 	dir := filepath.Dir(ci.item.Path)
+	// Save the main-list context so Esc returns to the original position.
+	a.cfgSkillSavedSearch = a.cfgSearchTerm
+	a.cfgSkillSavedFilter = a.cfgFilterCat
+	a.cfgSkillSavedSelected = a.cfgSelectedSet
+	a.cfgSkillSavedPath = ci.item.Path
 	a.cfgSkillBrowse = true
 	a.cfgSkillDir = dir
 	a.cfgSkillName = ci.item.Name
@@ -1216,15 +1221,37 @@ func (a *App) rebuildSkillBrowserList() {
 }
 
 // exitCfgSkillBrowser returns from the skill directory browser to the main
-// config list.
+// config list, restoring the filter/search/selection and cursor position that
+// were active when the browser was entered.
 func (a *App) exitCfgSkillBrowser() {
 	a.cfgSkillBrowse = false
 	a.cfgSkillDir = ""
 	a.cfgSkillName = ""
+	// Drop any browser-scoped search before restoring the main-list context.
 	a.cfgSearchTerm = ""
 	a.cfgSearchMatch = nil
 	a.cfgSearchIdx = 0
+	a.cfgSearchTerm = a.cfgSkillSavedSearch
+	a.cfgFilterCat = a.cfgSkillSavedFilter
+	a.cfgSelectedSet = a.cfgSkillSavedSelected
+	returnPath := a.cfgSkillSavedPath
+	a.cfgSkillSavedSearch = ""
+	a.cfgSkillSavedFilter = cfgFilterAll
+	a.cfgSkillSavedSelected = nil
+	a.cfgSkillSavedPath = ""
 	a.rebuildCfgList()
+	// Reselect the skill row that was entered, so Esc returns to it.
+	if returnPath != "" {
+		for i, it := range a.cfgList.Items() {
+			ci, ok := it.(cfgItem)
+			if ok && !ci.isHeader && ci.item.Path == returnPath {
+				a.cfgList.Select(i)
+				break
+			}
+		}
+	}
+	a.cfgSplit.CacheKey = ""
+	a.updateConfigPreview()
 }
 
 // buildSkillFileItems walks dir recursively and returns one cfgItem per file
