@@ -142,13 +142,24 @@ func TestCompletedProjectsToggleFallsBackWhenNoDoneMatches(t *testing.T) {
 	}
 }
 
-func TestNewAppForcesProjectsBrowserModeOnStartup(t *testing.T) {
-	app := NewApp(fakeSessions(), Config{TmuxEnabled: true, GroupMode: "repo"})
+func TestNewAppDefaultsToProjectsBrowserModeOnStartup(t *testing.T) {
+	app := NewApp(fakeSessions(), Config{TmuxEnabled: true})
 	if app.sessGroupMode != groupProjectCentric {
-		t.Fatalf("expected startup group mode to be project-centric, got %d", app.sessGroupMode)
+		t.Fatalf("expected default startup group mode to be project-centric, got %d", app.sessGroupMode)
 	}
 	prefs := app.capturePreferences()
 	if prefs.GroupMode != "projects" {
 		t.Fatalf("expected persisted group mode to be projects, got %q", prefs.GroupMode)
+	}
+}
+
+func TestNewAppHonorsExplicitGroupModeOnStartup(t *testing.T) {
+	app := NewApp(fakeSessions(), Config{TmuxEnabled: true, GroupMode: "repo"})
+	if app.sessGroupMode != groupBaseProject {
+		t.Fatalf("expected explicit --group repo to be honored at startup, got %d", app.sessGroupMode)
+	}
+	prefs := app.capturePreferences()
+	if prefs.GroupMode != "repo" {
+		t.Fatalf("expected persisted group mode to reflect actual mode (repo), got %q", prefs.GroupMode)
 	}
 }

@@ -859,18 +859,15 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	a.tagInput.Placeholder = "badge-name"
 	a.tagInput.CharLimit = 20
 
-	// Apply group/preview/view mode from CLI flags or restored preferences
+	// Apply group mode from CLI flags or restored preferences. Default
+	// (struct literal above) is groupProjectCentric; an explicit choice here
+	// overrides it.
 	if a.config.GroupMode != "" {
 		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork, "repo": groupBaseProject, "projects": groupProjectCentric}
 		if m, ok := modeMap[a.config.GroupMode]; ok {
 			a.sessGroupMode = m
 		}
 	}
-	// The main browser is canonically project-centric now. Preserve legacy
-	// group-mode parsing for explicit in-session commands/tests, but do not
-	// let persisted historical values (flat/repo/...) drag startup back out
-	// of the projects view.
-	a.sessGroupMode = groupProjectCentric
 	if a.config.PreviewMode != "" {
 		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "refs": sessPreviewRefs, "pr": sessPreviewRefs, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {

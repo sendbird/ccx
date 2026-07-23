@@ -412,7 +412,7 @@ func (a *App) capturePreferences() Preferences {
 	}
 
 	return Preferences{
-		GroupMode:       "projects",
+		GroupMode:       groupModeString(a.sessGroupMode),
 		PreviewMode:     sessPreviewString(a.sessPreviewMode),
 		ViewMode:        viewStateString(a.state),
 		ConvDetailLevel: int(a.conv.rightPaneMode),
