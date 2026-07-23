@@ -290,7 +290,7 @@ func main() {
 	}
 
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
-	km, _, _, _, cc, oc := tui.LoadCCXConfig(configPath)
+	km, _, _, _, cc, oc, _ := tui.LoadCCXConfig(configPath)
 
 	initialSessions := session.LoadCachedSessions(claudeDir)
 	if len(initialSessions) == 0 {

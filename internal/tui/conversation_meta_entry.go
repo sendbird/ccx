@@ -908,6 +908,21 @@ func (a *App) metaRefsEntries() []metaEntry {
 		if !ok || ref.URL == "" {
 			continue
 		}
+		// Decorate with already-resolved status from the process-wide cache so
+		// PR/Jira refs show their state in the flow row without blocking. The
+		// cache is populated by the refs preview's async resolve and by
+		// openConversation's background resolve; if not cached yet, the row
+		// renders the link only and fills in on a later tick once refStatusMsg
+		// re-renders.
+		if cached, ok := session.CachedRefStatus(ref.URL); ok {
+			ref.State = cached.State
+			ref.ReviewDecision = cached.ReviewDecision
+			ref.ChecksState = cached.ChecksState
+			ref.IsDraft = cached.IsDraft
+			ref.JiraStatus = cached.JiraStatus
+			ref.JiraStatusDone = cached.JiraStatusDone
+			ref.Resolved = cached.Resolved
+		}
 		target := metaEntryTarget{kind: metaTargetRef, url: ref.URL, entryIndex: -1, blockIdx: -1}
 		if art.Origin.MessageUUID != "" || art.Origin.EntryIndex >= 0 {
 			target.transcript = art.Origin.Transcript

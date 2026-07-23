@@ -108,7 +108,31 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 
 	// Non-live sessions start on Session Flow (or the first available context).
 	a.updateConvPreview()
-	return nil
+
+	// Kick off background PR/Jira ref resolution so the Session Refs & URLs
+	// flow row (and the References preview) fill in status. Extract offline
+	// first, store on the session so refStatusMsg can merge by URL, then
+	// resolve each ref async (results stream back via refStatusMsg).
+	var resolveCmd tea.Cmd
+	if sess.FilePath != "" {
+		refs := session.ExtractSessionRefsFromFile(sess.FilePath)
+		if len(refs) > 0 {
+			for i := range a.sessions {
+				if a.sessions[i].ID == sess.ID {
+					if len(a.sessions[i].Refs) == 0 {
+						a.sessions[i].Refs = refs
+					} else {
+						refs = a.sessions[i].Refs
+					}
+					break
+				}
+			}
+			if !a.refsInFlight[sess.ID] {
+				resolveCmd = a.resolveRefsStatusCmd(sess.ID, refs)
+			}
+		}
+	}
+	return tea.Batch(resolveCmd)
 }
 
 func (a *App) pauseLiveTail() {
