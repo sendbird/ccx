@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aymanbagabas/go-udiff"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -63,6 +64,11 @@ type conversationInspector struct {
 	// MetaPlanDrill is the artifact key of the plan currently shown in detail.
 	// Empty means the combined tasks/plans list is shown.
 	MetaPlanDrill string
+	// ChangesByFile flips the Changes tab from the default per-occurrence list
+	// (one diff per Edit/Write) to a per-file view that merges every
+	// occurrence of a file under one header, showing a cumulative net diff
+	// when reconstruction is reliable and per-occurrence diffs otherwise.
+	ChangesByFile bool
 }
 
 // metaEntryTarget describes the jump/drill action bound to one selectable block
@@ -580,6 +586,9 @@ func (a *App) renderInspectorChanges(nodeID string) string {
 	if len(arts) == 0 {
 		return fmt.Sprintf("# Changes\n\nNo changes in this %s scope.\n", strings.ToLower(inspectorScopeName(a.conv.inspector.Scope)))
 	}
+	if a.conv.inspector.ChangesByFile {
+		return a.renderInspectorChangesByFile(arts)
+	}
 	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
 	var b strings.Builder
 	b.WriteString("# Changes\n")
@@ -616,6 +625,134 @@ func changeDiff(data session.ChangeData, width int) string {
 	}
 	block := session.ContentBlock{Type: "tool_use", ToolName: data.ToolName, ToolInput: data.ToolInput}
 	return strings.TrimRight(toolDiffOutput(block, width), "\n")
+}
+
+// renderInspectorChangesByFile groups change occurrences by file path (in
+// first-seen order) and renders one section per file. When the file's history
+// can be reliably reconstructed (the first occurrence is a Write establishing a
+// baseline and every later Edit applies cleanly), the section shows a single
+// cumulative net diff from that baseline to the final state. Otherwise it falls
+// back to the per-occurrence diffs so the user still sees every change.
+func (a *App) renderInspectorChangesByFile(arts []session.Artifact) string {
+	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+
+	order := make([]string, 0, len(arts))
+	byFile := make(map[string][]session.Artifact, len(arts))
+	for _, art := range arts {
+		fp := art.Key
+		if fp == "" {
+			fp = "(unknown)"
+		}
+		if _, seen := byFile[fp]; !seen {
+			order = append(order, fp)
+		}
+		byFile[fp] = append(byFile[fp], art)
+	}
+
+	var b strings.Builder
+	b.WriteString("# Changes (by file)\n")
+	for _, fp := range order {
+		occ := byFile[fp]
+		fmt.Fprintf(&b, "\n## %s%s\n", session.ShortenPath(fp, homeDir()), dimStyle.Render(fmt.Sprintf(" · %d occurrence(s)", len(occ))))
+		if initial, final, ok := reconstructFileChanges(occ); ok {
+			if diff := renderCumulativeFileDiff(fp, initial, final, diffWidth); diff != "" {
+				b.WriteString("\n" + diff + "\n")
+			} else {
+				b.WriteString(dimStyle.Render("  (no net change across occurrences)\n"))
+			}
+			continue
+		}
+		b.WriteString(dimStyle.Render("  (cumulative diff unavailable — showing per-occurrence)\n"))
+		for i, art := range occ {
+			data, _ := art.Data.(session.ChangeData)
+			summary := data.Summary
+			if summary == "" {
+				summary = changeInputSummary(data.ToolName, data.ToolInput)
+			}
+			fmt.Fprintf(&b, "\n%d. %s %s", i+1, data.ToolName, session.ShortenPath(art.Key, homeDir()))
+			if summary != "" {
+				fmt.Fprintf(&b, " · %s", summary)
+			}
+			b.WriteByte('\n')
+			fmt.Fprintf(&b, "   origin: %s\n", inspectorArtifactOrigin(art.Origin))
+			if diff := changeDiff(data, diffWidth); diff != "" {
+				b.WriteString("\n" + diff + "\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+// reconstructFileChanges replays the change occurrences (already filtered to
+// one file path, in chronological order) to recover the file's initial and
+// final content. ok is true only when reconstruction is reliable: the first
+// occurrence must be a Write (establishing a baseline) and every subsequent
+// Edit must apply cleanly. Unknown tools (MultiEdit/NotebookEdit) or a missing
+// old_string make reconstruction bail so the caller can fall back.
+func reconstructFileChanges(occ []session.Artifact) (initial, final string, ok bool) {
+	if len(occ) == 0 {
+		return "", "", false
+	}
+	sort.SliceStable(occ, func(i, j int) bool {
+		return occ[i].Origin.Timestamp.Before(occ[j].Origin.Timestamp)
+	})
+	first, _ := occ[0].Data.(session.ChangeData)
+	if !isWriteTool(first.ToolName) {
+		return "", "", false
+	}
+	content, ho := writeContent(first.ToolInput)
+	if !ho {
+		return "", "", false
+	}
+	initial = content
+	for _, op := range occ[1:] {
+		d, _ := op.Data.(session.ChangeData)
+		switch {
+		case isWriteTool(d.ToolName):
+			c, ok := writeContent(d.ToolInput)
+			if !ok {
+				return "", "", false
+			}
+			content = c
+		case d.ToolName == "Edit":
+			c, ok := applyEditToContent(content, d.ToolInput)
+			if !ok {
+				return "", "", false
+			}
+			content = c
+		default:
+			// MultiEdit/NotebookEdit/unknown — bail to per-occurrence fallback.
+			return "", "", false
+		}
+	}
+	return initial, content, true
+}
+
+// renderCumulativeFileDiff produces a colorized unified diff between initial
+// and final file contents. Returns empty string when the two are identical.
+func renderCumulativeFileDiff(filePath, initial, final string, width int) string {
+	short := session.ShortenPath(filePath, homeDir())
+	raw := udiff.Unified(short, short, initial, final)
+	raw = strings.TrimRight(raw, "\n")
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(raw, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			b.WriteString(diffHeaderStyle.Render("  "+line) + "\n")
+		case strings.HasPrefix(line, "@@"):
+			b.WriteString(diffHunkStyle.Render("  "+line) + "\n")
+		case strings.HasPrefix(line, "+"):
+			b.WriteString(renderDiffLine("+", line[1:], width-4, diffAddStyle) + "\n")
+		case strings.HasPrefix(line, "-"):
+			b.WriteString(renderDiffLine("-", line[1:], width-4, diffDelStyle) + "\n")
+		default:
+			b.WriteString(diffCtxStyle.Render("  "+line) + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (a *App) renderInspectorFiles(nodeID string) string {

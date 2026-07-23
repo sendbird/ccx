@@ -124,6 +124,10 @@ func (a *App) convHelpLine(badges string) string {
 			} else {
 				h = joinHelpSections(h, interactionHelpText(a.conversationPreviewStructuredHelpActions(next)...))
 			}
+			// On the Changes tab, `m` toggles per-occurrence vs per-file merge.
+			if a.conv.inspector.Tab == inspectorChanges {
+				h = joinHelpSections(h, interactionHelpText(labelAction("", "m", "merge")))
+			}
 		} else {
 			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions("inspector")...))
 		}

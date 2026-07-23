@@ -429,6 +429,15 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "s":
 			a.cycleInspectorScope()
 			return a, nil
+		case "m":
+			// On the Changes tab, `m` toggles between per-occurrence diffs and
+			// a per-file cumulative view (merged diffs / net diff when reliable).
+			if a.conv.inspector.Tab == inspectorChanges {
+				a.conv.inspector.ChangesByFile = !a.conv.inspector.ChangesByFile
+				a.conv.split.CacheKey = ""
+				a.updateConvPreview()
+				return a, nil
+			}
 		}
 	}
 
@@ -814,7 +823,7 @@ func (a *App) updateConvPreview() {
 		a.conv.inspector.Rendered = content
 		// baseKey keeps rows that share a flow node distinct (all session
 		// context rows map to the root node; decisions map to their turn).
-		cacheKey := fmt.Sprintf("inspector:%s:%s:%d:%d:%t", baseKey, node.ID, a.conv.inspector.Tab, a.conv.inspector.Scope, a.conv.inspector.Zoom)
+		cacheKey := fmt.Sprintf("inspector:%s:%s:%d:%d:%t:%t", baseKey, node.ID, a.conv.inspector.Tab, a.conv.inspector.Scope, a.conv.inspector.Zoom, a.conv.inspector.ChangesByFile)
 		a.setConvPreviewTextKey(content, cacheKey)
 		return
 	}

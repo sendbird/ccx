@@ -205,6 +205,32 @@ func isWriteTool(name string) bool {
 	return name == "Write"
 }
 
+// writeContent extracts the full file content from a Write tool input.
+func writeContent(toolInput string) (string, bool) {
+	var w writeInput
+	if err := json.Unmarshal([]byte(toolInput), &w); err != nil {
+		return "", false
+	}
+	return w.Content, true
+}
+
+// applyEditToContent applies one Edit tool input to content, replacing the
+// first occurrence of old_string (or all when replace_all is set). Returns
+// ok=false when old_string is absent from content so the caller can bail.
+func applyEditToContent(content, toolInput string) (string, bool) {
+	var e editInput
+	if err := json.Unmarshal([]byte(toolInput), &e); err != nil {
+		return "", false
+	}
+	if !strings.Contains(content, e.OldString) {
+		return "", false
+	}
+	if e.ReplaceAll {
+		return strings.ReplaceAll(content, e.OldString, e.NewString), true
+	}
+	return strings.Replace(content, e.OldString, e.NewString, 1), true
+}
+
 // --- Bash pretty-print ---
 
 type bashInput struct {
