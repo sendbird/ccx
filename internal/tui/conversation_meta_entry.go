@@ -30,6 +30,8 @@ func (a *App) buildSessionMetaEntry(item convItem) (session.Entry, []metaEntryTa
 		entries = a.metaMemoryEntries()
 	case "tasksplan":
 		entries = a.metaTasksPlanEntries()
+	case "refs":
+		entries = a.metaRefsEntries()
 	default:
 		entries = a.metaSummaryEntries()
 	}
@@ -396,6 +398,17 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 			a.enterPlanDrill(target.planKey)
 			return true, a, nil
 		}
+		return true, a, nil
+	case metaTargetRef:
+		if target.url == "" {
+			a.copiedMsg = "No URL for this reference"
+			return true, a, nil
+		}
+		if err := a.openInBrowser(target.url); err != nil {
+			a.copiedMsg = "Open failed: " + err.Error()
+			return true, a, nil
+		}
+		a.copiedMsg = "Opened " + target.url
 		return true, a, nil
 	default:
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
@@ -875,4 +888,81 @@ func planRow(key string, data session.PlanData, hist session.TouchHistory) strin
 // textMeta wraps a rendered string as a non-selectable-target metaEntry.
 func textMeta(text string) metaEntry {
 	return metaEntry{block: session.ContentBlock{Type: "text", Text: text}, target: metaEntryTarget{entryIndex: -1, blockIdx: -1}}
+}
+
+// metaRefsEntries builds one selectable row per PR/Jira reference found in the
+// session flow, deduped by URL. Enter on a row opens the URL in the browser
+// (metaTargetRef); J jumps to the ref's first-seen turn when available.
+func (a *App) metaRefsEntries() []metaEntry {
+	if a.conv.flow == nil {
+		return nil
+	}
+	arts := session.DedupeArtifactsByKey(
+		a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactRef, session.ScopeSession))
+	if len(arts) == 0 {
+		return nil
+	}
+	out := []metaEntry{textMeta(dimStyle.Render("── Refs & URLs · ↵ open · J jump ──"))}
+	for _, art := range arts {
+		ref, ok := art.Data.(session.SessionRef)
+		if !ok || ref.URL == "" {
+			continue
+		}
+		target := metaEntryTarget{kind: metaTargetRef, url: ref.URL, entryIndex: -1, blockIdx: -1}
+		if art.Origin.MessageUUID != "" || art.Origin.EntryIndex >= 0 {
+			target.transcript = art.Origin.Transcript
+			target.messageUUID = art.Origin.MessageUUID
+			target.entryIndex = art.Origin.EntryIndex
+			target.blockIdx = art.Origin.BlockIndex
+		}
+		out = append(out, metaEntry{
+			block:  session.ContentBlock{Type: "text", Text: refRow(ref)},
+			target: target,
+		})
+	}
+	return out
+}
+
+// buildRefsListText is a flat (non-selectable) fallback render of the session's
+// refs, used when the inspector routes the refs meta row through the facet
+// render path instead of the synthetic selectable-entry path.
+func (a *App) buildRefsListText() string {
+	if a.conv.flow == nil {
+		return "# Refs & URLs\n\nNo flow index available.\n"
+	}
+	arts := session.DedupeArtifactsByKey(
+		a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactRef, session.ScopeSession))
+	if len(arts) == 0 {
+		return "# Refs & URLs\n\nNo PR or Jira references in this session.\n"
+	}
+	var b strings.Builder
+	b.WriteString("# Refs & URLs\n\n")
+	for i, art := range arts {
+		ref, ok := art.Data.(session.SessionRef)
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, refRow(ref), ref.URL)
+	}
+	return b.String()
+}
+
+// refRow renders one PR/Jira reference as a single-line row: a kind tag, the
+// label, and (when known) the resolved state.
+func refRow(ref session.SessionRef) string {
+	tag := "URL"
+	style := dimStyle
+	switch ref.Kind {
+	case session.RefPR:
+		tag = "PR"
+		style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	case session.RefJira:
+		tag = "Jira"
+		style = lipgloss.NewStyle().Foreground(colorUser).Bold(true)
+	}
+	row := style.Render("["+tag+"]") + " " + ref.Label
+	if ref.State != "" {
+		row += " " + dimStyle.Render("("+string(ref.State)+")")
+	}
+	return row
 }

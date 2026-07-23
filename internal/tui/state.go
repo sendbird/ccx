@@ -346,6 +346,8 @@ func sessPreviewString(mode sessPreview) string {
 		return "stats"
 	case sessPreviewMemory:
 		return "mem"
+	case sessPreviewScratchpad:
+		return "scratch"
 	case sessPreviewTasksPlan:
 		return "tasks"
 	case sessPreviewAgents:

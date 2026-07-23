@@ -72,6 +72,7 @@ type metaEntryTarget struct {
 	blockIdx    int    // block within the source entry to focus (-1 = none)
 	taskID      string // task ID (task targets)
 	planKey     string // plan artifact key (plan-detail target)
+	url         string // ref/URL row → Enter opens in browser (metaTargetRef)
 }
 
 type metaTargetKind int
@@ -84,6 +85,7 @@ const (
 	metaTargetTodo                      // todo row → jump to latest TodoWrite occurrence
 	metaTargetPlan                      // plan row → Enter opens data; J jumps to origin
 	metaTargetCron                      // cron row (informational; no origin to jump to)
+	metaTargetRef                       // PR/Jira ref row → Enter opens URL in browser
 )
 
 // jumpable reports whether a target kind can jump to a conversation turn. None,
@@ -91,7 +93,7 @@ const (
 // those rows must not fall back to a bare entry-index of 0.
 func (t metaTargetKind) jumpable() bool {
 	switch t {
-	case metaTargetMemoryFile, metaTargetDecision, metaTargetTask, metaTargetTodo, metaTargetPlan:
+	case metaTargetMemoryFile, metaTargetDecision, metaTargetTask, metaTargetTodo, metaTargetPlan, metaTargetRef:
 		return true
 	default:
 		return false
@@ -497,6 +499,8 @@ func (a *App) renderInspectorOverview(item convItem, node session.FlowNode) stri
 			content = a.renderFlowSummary()
 		case "memory":
 			content = a.buildMemoryContent(a.conv.sess)
+		case "refs":
+			content = a.buildRefsListText()
 		default:
 			content = a.buildTasksPlanContent(a.conv.sess)
 		}
