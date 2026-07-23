@@ -130,3 +130,33 @@ func TestEscFromPluginsWithNilCfgTreeOpensConfig(t *testing.T) {
 		t.Fatal("Esc should have opened the config explorer (cfgTree set)")
 	}
 }
+
+// TestPluginsPageNavNoPanicWithZeroList guards against a nil/zero plgList
+// (e.g. plugin scan failed) causing a list.Update panic on the PLUGINS page.
+func TestPluginsPageNavNoPanicWithZeroList(t *testing.T) {
+	app := setupCfgApp(t)
+	// Simulate the broken state: PLUGINS page active but plgList never built.
+	app.cfgPluginsPage = true
+	app.plgTree = nil
+	// A nav key must not panic.
+	app.handleConfigKeys(tea.KeyMsg{Type: tea.KeyDown})
+	app.handleConfigKeys(tea.KeyMsg{Type: tea.KeyUp})
+}
+
+// TestEnterPluginsPageScansWhenPlgTreeNil ensures cycling to the PLUGINS page
+// with no plugin tree triggers a scan (builds plgList) instead of leaving a
+// zero-value list that panics on nav.
+func TestEnterPluginsPageScansWhenPlgTreeNil(t *testing.T) {
+	app := setupCfgApp(t)
+	app.config.ClaudeDir = t.TempDir()
+	app.cfgTree = &session.ConfigTree{} // so config pages work
+	app.plgTree = nil
+	app.enterCfgPage(len(cfgPages) - 1) // PLUGINS
+	if !app.cfgPluginsPage {
+		t.Fatal("enterCfgPage(PLUGINS) should set cfgPluginsPage")
+	}
+	// openPluginExplorer should have run and built plgList (Width > 0).
+	if app.plgList.Width() == 0 {
+		t.Fatal("enterCfgPage(PLUGINS) with nil plgTree should scan and build plgList")
+	}
+}
