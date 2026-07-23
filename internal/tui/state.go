@@ -58,6 +58,37 @@ type CCXConfig struct {
 	Langmap     map[string]string `yaml:"langmap,omitempty"`
 }
 
+// migrateKeymapDefaults rewrites config keymap entries that still hold a
+// previous default value when a default changes. Only entries matching the old
+// default are touched — user-chosen values are preserved. Called from both
+// LoadCCXConfig (so the running app sees new defaults) and SavePreferences (so
+// the file is persisted).
+//
+// Current migrations (CPLAT-10985 session-list shortcut rebind):
+//   - Session.Edit "e" → "" (moved into the actions menu as x→e)
+//   - Session.Views "v" → "V"
+//   - Session.Live "L" → "" (removed; live via page menu p→l)
+//   - Session.Switch "s" → "" (removed)
+//   - Actions.Edit "" → "e" (new field)
+func migrateKeymapDefaults(cfg *CCXConfig) {
+	s := &cfg.Keymaps.Session
+	if s.Edit == "e" {
+		s.Edit = ""
+	}
+	if s.Views == "v" {
+		s.Views = "V"
+	}
+	if s.Live == "L" {
+		s.Live = ""
+	}
+	if s.Switch == "s" {
+		s.Switch = ""
+	}
+	if cfg.Keymaps.Actions.Edit == "" {
+		cfg.Keymaps.Actions.Edit = "e"
+	}
+}
+
 // configPath returns the path to the unified config file.
 func configPath() string {
 	home, _ := os.UserHomeDir()
@@ -85,6 +116,7 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config,
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return &km, prefs, sc, rc, cc, oc, jc
 	}
+	migrateKeymapDefaults(&cfg)
 
 	// Merge keymap overrides from keymaps section
 	override := Keymap{
@@ -138,6 +170,10 @@ func SavePreferences(prefs Preferences, open opener.Config, claude claudecmd.Con
 	if data, err := os.ReadFile(path); err == nil {
 		yaml.Unmarshal(data, &cfg)
 	}
+
+	// Apply keymap default migrations (old default values → new) so the file
+	// self-heals on save.
+	migrateKeymapDefaults(&cfg)
 
 	// Fill in missing keymap defaults so the file shows all keys
 	defaults := DefaultKeymap()
@@ -284,6 +320,9 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	}
 	if a.Remote == "" {
 		a.Remote = d.Actions.Remote
+	}
+	if a.Edit == "" {
+		a.Edit = d.Actions.Edit
 	}
 
 	c := &cfg.Keymaps.Conversation
