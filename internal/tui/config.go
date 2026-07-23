@@ -1178,6 +1178,12 @@ func (a *App) enterCfgPage(idx int) {
 		a.rebuildCfgList()
 	} else {
 		a.cfgFilterCat = cfgFilterAll
+		if a.plgTree == nil {
+			// Plugin tree not scanned yet — scan now so plgList is built and
+			// later nav keys don't hit a zero-value list.Model.
+			a.openPluginExplorer()
+			return
+		}
 		a.rebuildPlgList()
 		a.updatePluginPreview()
 	}

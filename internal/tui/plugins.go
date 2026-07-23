@@ -390,6 +390,12 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			sp.Preview, cmd = sp.Preview.Update(msg)
 			return a, cmd
 		}
+		// Guard against a zero-value plgList (e.g. plugin scan failed or the
+		// page was entered before plgTree was set): bubbles list panics on
+		// Update when its items delegate is nil.
+		if a.plgTree == nil || a.plgList.Width() == 0 {
+			return a, nil
+		}
 		var cmd tea.Cmd
 		a.plgList, cmd = a.plgList.Update(msg)
 		return a, tea.Batch(cmd, a.schedulePreviewUpdate())
@@ -520,6 +526,9 @@ func (a *App) handleCfgPluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			sp.Preview, cmd = sp.Preview.Update(msg)
 			return a, cmd
+		}
+		if a.plgTree == nil || a.plgList.Width() == 0 {
+			return a, nil
 		}
 		var cmd tea.Cmd
 		a.plgList, cmd = a.plgList.Update(msg)
