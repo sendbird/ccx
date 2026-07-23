@@ -159,6 +159,7 @@ func (a *App) openConfigExplorer() (tea.Model, tea.Cmd) {
 
 	a.cfgTree = tree
 	a.cfgSelectedSet = make(map[string]bool)
+	a.cfgPluginsPage = false
 	items := buildConfigItemsFiltered(tree, a.cfgFilterCat, a.cfgSearchTerm)
 	contentH := ContentHeight(a.height)
 	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
@@ -270,12 +271,6 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleCfgProjectPicker(msg)
 	}
 
-	// Page jump menu: second key picks the section (before nav translation so h/l work)
-	if a.cfgPageMenu {
-		a.cfgPageMenu = false
-		return a.handleCfgPageMenu(key)
-	}
-
 	// Translate navigation aliases (vim hjkl, etc.)
 	if nav, navMsg := a.keymap.TranslateNav(key, msg); nav != "" {
 		key = nav
@@ -296,6 +291,28 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.cfgDeleteConfirm && key != "d" {
 		a.cfgDeleteConfirm = false
 		a.copiedMsg = ""
+	}
+
+	// Page cycling ([ / ] / tab / shift+tab / p) is uniform across all config
+	// pages, including the PLUGINS page. Disabled inside the skill browser and
+	// plugin detail, where the keys keep their split/detail meaning.
+	if !a.cfgSkillBrowse && !(a.cfgPluginsPage && a.plgDetailActive) && !a.plgCompActionsMenu {
+		switch key {
+		case "[", "shift+tab":
+			a.cycleCfgPage(-1)
+			return a, nil
+		case "]", "tab":
+			a.cycleCfgPage(1)
+			return a, nil
+		case "p":
+			a.cycleCfgPage(1)
+			return a, nil
+		}
+	}
+
+	// PLUGINS page delegates the rest to the plugin key handler.
+	if a.cfgPluginsPage {
+		return a.handleCfgPluginKeys(msg)
 	}
 
 	switch key {
@@ -335,12 +352,6 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.cfgActionsMenu = true
 		return a, nil
-	case "p":
-		if a.cfgSkillBrowse {
-			return a, nil
-		}
-		a.cfgPageMenu = true
-		return a, nil
 	case " ":
 		// Toggle multi-select on non-header items
 		if ci, ok := a.cfgList.SelectedItem().(cfgItem); ok && !ci.isHeader {
@@ -357,12 +368,6 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.updateConfigPreview()
 			}
 		}
-		return a, nil
-	case "tab":
-		a.cycleCfgFilter(1)
-		return a, nil
-	case "shift+tab":
-		a.cycleCfgFilter(-1)
 		return a, nil
 	case "P":
 		if a.cfgSkillBrowse {
@@ -1117,15 +1122,96 @@ type configTestDoneMsg struct{ tmpDir string }
 const cfgFilterAll = -1    // show everything
 const cfgFilterMemory = -2 // show global + project + local (all "memory" scopes)
 
-func (a *App) cycleCfgFilter(dir int) {
-	a.cfgFilterCat += dir
-	count := session.ConfigCategoryCount()
-	if a.cfgFilterCat >= count {
-		a.cfgFilterCat = cfgFilterAll
-	} else if a.cfgFilterCat < cfgFilterAll {
-		a.cfgFilterCat = count - 1
+// cfgPage is one header tab in the config view: either a config category
+// filter or the integrated PLUGINS page.
+type cfgPage struct {
+	label     string
+	filter    int  // cfgFilterAll / cfgFilterMemory / ConfigCategory; ignored when isPlugins
+	isPlugins bool
+}
+
+// cfgPages is the ordered set of pages shown as header tabs. Cycling with
+// [ / ] / tab / shift+tab walks this list.
+var cfgPages = []cfgPage{
+	{"ALL", cfgFilterAll, false},
+	{"MEMORY", cfgFilterMemory, false},
+	{"SKILLS", int(session.ConfigSkill), false},
+	{"AGENTS", int(session.ConfigAgent), false},
+	{"COMMANDS", int(session.ConfigCommand), false},
+	{"HOOKS", int(session.ConfigHook), false},
+	{"MCP", int(session.ConfigMCP), false},
+	{"ENTERPRISE", int(session.ConfigEnterprise), false},
+	{"PLUGINS", 0, true},
+}
+
+// currentCfgPage returns the index in cfgPages matching the active page.
+func (a *App) currentCfgPage() int {
+	if a.cfgPluginsPage {
+		for i, p := range cfgPages {
+			if p.isPlugins {
+				return i
+			}
+		}
 	}
-	a.rebuildCfgList()
+	for i, p := range cfgPages {
+		if !p.isPlugins && p.filter == a.cfgFilterCat {
+			return i
+		}
+	}
+	return 0
+}
+
+// enterCfgPage switches to the page at index idx, rebuilding the appropriate
+// list (config files or plugins).
+func (a *App) enterCfgPage(idx int) {
+	if idx < 0 || idx >= len(cfgPages) {
+		return
+	}
+	p := cfgPages[idx]
+	a.cfgPluginsPage = p.isPlugins
+	if !p.isPlugins {
+		a.cfgFilterCat = p.filter
+		if a.cfgTree == nil {
+			// Config tree not scanned yet; caller should openConfigExplorer.
+			return
+		}
+		a.rebuildCfgList()
+	} else {
+		a.cfgFilterCat = cfgFilterAll
+		a.rebuildPlgList()
+		a.updatePluginPreview()
+	}
+}
+
+// cycleCfgPage moves the active page by delta (wraps) and enters it.
+func (a *App) cycleCfgPage(delta int) {
+	idx := a.currentCfgPage()
+	next := (idx + delta) % len(cfgPages)
+	if next < 0 {
+		next += len(cfgPages)
+	}
+	a.enterCfgPage(next)
+}
+
+// renderCfgPageTabs renders the config view's page tabs as a single header
+// line with the active page highlighted. Returns the rendered string.
+func (a *App) renderCfgPageTabs() string {
+	active := a.currentCfgPage()
+	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Background(colorTitleBg)
+	dim := lipgloss.NewStyle().Foreground(colorDim).Background(colorTitleBg)
+	gap := " "
+	sep := dim.Render(gap)
+	parts := make([]string, 0, len(cfgPages))
+	for i, p := range cfgPages {
+		label := p.label
+		if i == active {
+			label = hl.Render("[" + p.label + "]")
+		} else {
+			label = dim.Render(p.label)
+		}
+		parts = append(parts, label)
+	}
+	return sep + strings.Join(parts, sep) + sep
 }
 
 func (a *App) cfgFilterLabel() string {
@@ -2059,54 +2145,6 @@ func (a *App) renderCfgActionsHintBox() string {
 		BorderForeground(colorDim).
 		Padding(0, 1)
 	return boxStyle.Render(body)
-}
-
-func (a *App) renderCfgPageHintBox() string {
-	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	d := dimStyle
-	sp := "  "
-
-	line1 := hl.Render("m") + d.Render(":memory") + sp + hl.Render("p") + d.Render(":project") + sp + hl.Render("l") + d.Render(":local")
-	line2 := hl.Render("s") + d.Render(":skills") + sp + hl.Render("a") + d.Render(":agents") + sp + hl.Render("c") + d.Render(":cmds")
-	line3 := hl.Render("h") + d.Render(":hooks") + sp + hl.Render("i") + d.Render(":mcp") + sp + hl.Render("e") + d.Render(":enterprise")
-	line4 := hl.Render("o") + d.Render(":all")
-
-	body := strings.Join([]string{line1, line2, line3, line4, d.Render("esc:cancel")}, "\n")
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorDim).
-		Padding(0, 1)
-	return boxStyle.Render(body)
-}
-
-func (a *App) handleCfgPageMenu(key string) (tea.Model, tea.Cmd) {
-	a.cfgPageMenu = false
-	switch key {
-	case "m":
-		a.cfgFilterCat = cfgFilterMemory
-	case "p":
-		a.cfgFilterCat = int(session.ConfigProject)
-	case "l":
-		a.cfgFilterCat = int(session.ConfigLocal)
-	case "s":
-		a.cfgFilterCat = int(session.ConfigSkill)
-	case "a":
-		a.cfgFilterCat = int(session.ConfigAgent)
-	case "c":
-		a.cfgFilterCat = int(session.ConfigCommand)
-	case "h":
-		a.cfgFilterCat = int(session.ConfigHook)
-	case "i":
-		a.cfgFilterCat = int(session.ConfigMCP)
-	case "e":
-		a.cfgFilterCat = int(session.ConfigEnterprise)
-	case "o":
-		a.cfgFilterCat = cfgFilterAll
-	default:
-		return a, nil
-	}
-	a.rebuildCfgList()
-	return a, nil
 }
 
 // --- Project picker (fuzzy search overlay) ---

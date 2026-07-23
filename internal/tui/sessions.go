@@ -1720,8 +1720,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{"↑↓ / jk", "Navigate"},
 			{"↵ / →", "Open / preview"},
 			{displayKey(km.Session.Search), "Search"},
-			{"p", "Page menu"},
-			{"tab", "Cycle filter"},
+			{"[ / ] / p / tab", "Cycle page"},
 			{"1-9", "Jump to section"},
 			{"esc / ←", "Back / close"},
 		}

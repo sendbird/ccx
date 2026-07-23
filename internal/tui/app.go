@@ -113,7 +113,11 @@ func (a *App) runDebouncedPreview() tea.Cmd {
 		// in, alongside the selected session's preview update.
 		return tea.Batch(a.updateSessionPreview(), a.resolveVisibleRefsCmd())
 	case viewConfig:
-		a.updateConfigPreview()
+		if a.cfgPluginsPage {
+			a.updatePluginPreview()
+		} else {
+			a.updateConfigPreview()
+		}
 	case viewPlugins:
 		a.updatePluginPreview()
 	}
@@ -509,10 +513,12 @@ type App struct {
 	cfgSkillSavedFilter   int
 	cfgSkillSavedSelected map[string]bool
 	cfgSkillSavedPath     string
+	// cfgPluginsPage is true when the config view is on the PLUGINS page
+	// (integrated plugins view); cfgFilterCat is irrelevant then.
+	cfgPluginsPage bool
 	cfgTrash          []cfgTrashEntry   // undo stack for deleted items
 	cfgDeleteConfirm  bool              // waiting for second x press
 	cfgActionsMenu    bool              // config actions menu open
-	cfgPageMenu       bool              // config page jump popup
 
 	// Plugin explorer (viewPlugins)
 	plgTree        *session.PluginTree
@@ -1443,6 +1449,15 @@ func (a *App) activeDividerCol() int {
 			return a.conv.split.ListWidth(a.width, a.splitRatio)
 		}
 	case viewConfig:
+		if a.cfgPluginsPage {
+			if a.plgDetailActive && a.plgDetailSplit.Show {
+				return a.plgDetailSplit.ListWidth(a.width, a.splitRatio)
+			}
+			if a.plgSplit.Show {
+				return a.plgSplit.ListWidth(a.width, a.splitRatio)
+			}
+			return 0
+		}
 		if a.cfgSplit.Show {
 			return a.cfgSplit.ListWidth(a.width, a.splitRatio)
 		}
@@ -1527,7 +1542,13 @@ func (a *App) View() string {
 
 	case viewConfig:
 		title = a.renderBreadcrumb()
-		content = a.renderConfigSplit()
+		if a.cfgPluginsPage && !a.plgDetailActive {
+			content = a.renderPluginSplit()
+		} else if a.cfgPluginsPage && a.plgDetailActive {
+			content = a.renderPluginDetailSplit()
+		} else {
+			content = a.renderConfigSplit()
+		}
 		if a.cfgProjectPicker {
 			content = a.renderProjectPickerOverlay(content)
 		}
@@ -1623,14 +1644,14 @@ func (a *App) View() string {
 	}
 
 	// Plugin actions menu hint box
-	if a.plgActionsMenu && a.state == viewPlugins {
+	if a.plgActionsMenu && a.state == viewConfig && a.cfgPluginsPage {
 		hintBox := a.renderPlgActionsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
 	}
 
 	// Plugin detail actions menu hint box
-	if a.plgCompActionsMenu && a.state == viewPlugins && a.plgDetailActive {
+	if a.plgCompActionsMenu && a.state == viewConfig && a.cfgPluginsPage && a.plgDetailActive {
 		hintBox := a.renderPlgCompActionsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("x:actions — pick an action")
@@ -1655,13 +1676,6 @@ func (a *App) View() string {
 		hintBox := a.renderStatsPageHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		help = formatHelp("p:page — pick a page")
-	}
-
-	// Config page jump centered modal
-	if a.cfgPageMenu && a.state == viewConfig {
-		hintBox := a.renderCfgPageHintBox()
-		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("p:page — pick a section")
 	}
 
 	// Conversation inspector facet picker.
@@ -3471,8 +3485,8 @@ func (a *App) renderViewsHintBox() string {
 	}
 	parts = append(parts, viewLabel("↵", "projects", a.state == viewSessions))
 	parts = append(parts, viewLabel(km.Stats, "stats", a.state == viewGlobalStats))
-	parts = append(parts, viewLabel(km.Config, "config", a.state == viewConfig))
-	parts = append(parts, viewLabel(km.Plugins, "plugins", a.state == viewPlugins))
+	parts = append(parts, viewLabel(km.Config, "config", a.state == viewConfig && !a.cfgPluginsPage))
+	parts = append(parts, viewLabel(km.Plugins, "plugins", a.state == viewConfig && a.cfgPluginsPage))
 	line := strings.Join(parts, sp)
 	body := line + "\n" + d.Render("esc:cancel")
 	boxStyle := lipgloss.NewStyle().
@@ -7299,7 +7313,7 @@ func (a *App) syncAllFilterVisibility() {
 func (a *App) isInTextInput() bool {
 	return a.isFiltering() || a.moveMode || a.worktreeMode ||
 		a.sessConvSearching || a.liveInputActive || a.cfgSearching || a.cfgNaming ||
-		a.urlSearching || a.conv.blockFiltering || a.conv.memorySearching
+		a.urlSearching || a.conv.blockFiltering || a.conv.memorySearching || a.plgSearching
 }
 
 func (a *App) isFiltering() bool {
@@ -8112,15 +8126,14 @@ func (a *App) renderBreadcrumb() string {
 			crumbs = append(crumbs, crumb{label, viewConversation})
 		}
 	case viewConfig:
-		label := " Config"
-		if fl := a.cfgFilterLabel(); fl != "" {
-			label += " [" + fl + "]"
-		}
 		crumbs = []crumb{
-			{label, viewConfig},
+			{" Config", viewConfig},
 		}
 		if a.cfgTree != nil && a.cfgTree.ProjectName != "" {
 			crumbs = append(crumbs, crumb{a.cfgTree.ProjectName, viewConfig})
+		}
+		if a.cfgPluginsPage {
+			crumbs = append(crumbs, crumb{"Plugins", viewConfig})
 		}
 	case viewPlugins:
 		label := " Plugins"
@@ -8209,6 +8222,15 @@ func (a *App) renderBreadcrumb() string {
 			text += label
 			x += labelW
 		}
+	}
+
+	// Config view: append the page tabs on the same title line (before the
+	// right-aligned status) so the title stays one line and the mouse title-bar
+	// offset (msg.Y - 1) stays valid.
+	if a.state == viewConfig {
+		tabs := a.renderCfgPageTabs()
+		text += tabs
+		x += lipgloss.Width(tabs)
 	}
 
 	// Right-aligned status: item count + scroll % + loading
