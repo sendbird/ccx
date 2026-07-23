@@ -257,6 +257,18 @@ func hasProjectMemory(projectPath, home string) bool {
 	return false
 }
 
+// hasSessionScratchpad reports whether Claude Code allocated a per-session
+// scratchpad directory with at least one file for this session. ReadDir only —
+// bodies are not read, so the scan stays cheap.
+func hasSessionScratchpad(projectPath, sessionID string) bool {
+	if projectPath == "" || sessionID == "" {
+		return false
+	}
+	dir := filepath.Join(ScratchpadBase(), EncodeProjectPath(projectPath), sessionID, "scratchpad")
+	entries, err := os.ReadDir(dir)
+	return err == nil && len(entries) > 0
+}
+
 func refreshSessionDerivedState(sess *Session, home string) {
 	if sess == nil {
 		return
@@ -267,6 +279,7 @@ func refreshSessionDerivedState(sess *Session, home string) {
 	if sess.ProjectPath != "" {
 		sess.IsWorktree = isGitWorktree(sess.ProjectPath)
 		sess.HasMemory = hasProjectMemory(sess.ProjectPath, home)
+		sess.HasScratchpad = hasSessionScratchpad(sess.ProjectPath, sess.ID)
 	}
 	if sess.FilePath != "" {
 		sess.HasWorkflows = HasWorkflows(sess.FilePath)

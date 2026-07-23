@@ -171,6 +171,9 @@ func (a *App) conversationEnterHelpAction() interactionAction {
 			case metaTargetPlan:
 				action.Enabled = a.conv.inspector.MetaPlanDrill == "" && target.planKey != ""
 				action.Label = "open"
+			case metaTargetScratchpad:
+				action.Enabled = target.filePath != ""
+				action.Label = "open"
 			case metaTargetDecision:
 				action.Enabled = target.messageUUID != "" || target.entryIndex >= 0
 				action.Label = "jump"

@@ -78,6 +78,7 @@ type conversationInspector struct {
 type metaEntryTarget struct {
 	kind        metaTargetKind
 	fileName    string // memory note filename (memory-file drill target)
+	filePath    string // absolute backing file path for $EDITOR open (memory/plan/scratchpad)
 	transcript  string // transcript owning the origin (root or subagent)
 	messageUUID string // originating turn to jump to (empty = no jump)
 	entryIndex  int    // origin entry index, local to transcript
@@ -98,6 +99,7 @@ const (
 	metaTargetPlan                      // plan row → Enter opens data; J jumps to origin
 	metaTargetCron                      // cron row (informational; no origin to jump to)
 	metaTargetRef                       // PR/Jira ref row → Enter opens URL in browser
+	metaTargetScratchpad                // scratchpad file row → Enter opens in $EDITOR
 )
 
 // jumpable reports whether a target kind can jump to a conversation turn. None,
@@ -513,6 +515,8 @@ func (a *App) renderInspectorOverview(item convItem, node session.FlowNode) stri
 			content = a.buildMemoryContent(a.conv.sess)
 		case "refs":
 			content = a.buildRefsListText()
+		case "scratchpad":
+			content = a.buildScratchpadContent(a.conv.sess)
 		default:
 			content = a.buildTasksPlanContent(a.conv.sess)
 		}

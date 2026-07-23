@@ -3395,6 +3395,18 @@ func (a *App) openEditMenu(sess session.Session) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Offer the focused inspector artifact's backing file (memory/plan/scratchpad)
+	// when one is selected, so `e` is a single "open in editor" entry point.
+	if target, ok := a.currentMetaTarget(); ok && target.filePath != "" {
+		switch target.kind {
+		case metaTargetMemoryFile, metaTargetPlan, metaTargetScratchpad:
+			if _, err := os.Stat(target.filePath); err == nil {
+				label := "file:" + filepath.Base(target.filePath)
+				a.editChoices = append(a.editChoices, editChoice{"f", label, target.filePath})
+			}
+		}
+	}
+
 	a.editChoices = append(a.editChoices, editChoice{"t", "text", ""})
 	return a, nil
 }

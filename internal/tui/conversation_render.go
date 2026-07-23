@@ -723,6 +723,9 @@ func buildConvContextItems(sess session.Session, merged []mergedMsg, flow *sessi
 	if sess.HasMemory || len(sess.Todos) > 0 {
 		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "memory", label: "Session Memory & Todos"})
 	}
+	if sess.HasScratchpad {
+		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "scratchpad", label: "Session Scratchpad"})
+	}
 	if sess.HasPlan || len(sess.Tasks) > 0 || len(sess.Crons) > 0 || sess.HasTasks || sess.HasCrons || sess.HasAgents {
 		items = append(items, convItem{kind: convSessionMeta, sessionMeta: "tasksplan", label: "Session Tasks/Plans"})
 	}

@@ -64,6 +64,7 @@ type Session struct {
 	HasTasks     bool
 	HasCrons     bool
 	HasPlan      bool
+	HasScratchpad bool
 	PlanSlug     string   // first plan slug (kept for compat)
 	PlanSlugs    []string // all distinct plan slugs in order
 	Tasks        []TaskItem
