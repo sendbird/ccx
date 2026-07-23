@@ -834,7 +834,10 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
-	_, prefs, sc, rc, cc, oc := LoadCCXConfig(configPath())
+	_, prefs, sc, rc, cc, oc, jc := LoadCCXConfig(configPath())
+	// Inject Jira credentials from ccx config into the session resolver. Empty
+	// fields fall back to env vars (JIRA_API_TOKEN/JIRA_EMAIL/JIRA_BASE_URL).
+	session.SetJiraAuth(jc.Email, jc.Token, jc.BaseURL)
 	if a.config.Claude.CommandTemplate == "" {
 		a.config.Claude = cc
 	}
@@ -1271,6 +1274,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.sessRefsCacheKey = "" // force re-render with the newly-resolved ref
 				return a, a.updateSessionRefsPreview(sess)
 			}
+		}
+		// Re-render the conversation view so the Session Refs & URLs flow row
+		// picks up the newly-cached status (metaRefsEntries reads the cache).
+		if a.state == viewConversation && a.conv.sess.ID == msg.id {
+			a.conv.split.CacheKey = ""
+			a.updateConvPreview()
 		}
 		return a, nil
 

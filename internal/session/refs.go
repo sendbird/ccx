@@ -455,11 +455,33 @@ func ClearRefCache() {
 	refCacheMu.Unlock()
 }
 
+// jiraAuthCfg holds Jira credentials injected by the host application (e.g. the
+// ccx TUI from its own config). Empty fields fall back to environment variables
+// in initJiraAuth. Set via SetJiraAuth before the first resolve.
+var (
+	jiraAuthCfgEmail   string
+	jiraAuthCfgToken   string
+	jiraAuthCfgBaseURL string
+)
+
+// SetJiraAuth injects Jira credentials from the host application's config. Pass
+// empty strings for fields that should fall back to env vars. Safe to call
+// before the first ResolveRef; subsequent calls reset the one-shot initializer
+// so the new values take effect.
+func SetJiraAuth(email, token, baseURL string) {
+	jiraAuthCfgEmail = email
+	jiraAuthCfgToken = token
+	jiraAuthCfgBaseURL = strings.TrimRight(baseURL, "/")
+	// Force initJiraAuth to re-run with the injected values next time.
+	jiraAuthOnce = sync.Once{}
+	jiraAuthFailed = false
+}
+
 func initJiraAuth() {
 	jiraAuthOnce.Do(func() {
-		jiraToken = firstNonEmpty(os.Getenv("JIRA_API_TOKEN"), os.Getenv("JIRA_API_KEY"), os.Getenv("ATLASSIAN_TOKEN"))
-		jiraEmail = firstNonEmpty(os.Getenv("JIRA_EMAIL"), os.Getenv("JIRA_LOGIN"))
-		jiraBaseURL = strings.TrimRight(firstNonEmpty(os.Getenv("JIRA_BASE_URL"), "https://sendbird.atlassian.net"), "/")
+		jiraToken = firstNonEmpty(jiraAuthCfgToken, os.Getenv("JIRA_API_TOKEN"), os.Getenv("JIRA_API_KEY"), os.Getenv("ATLASSIAN_TOKEN"))
+		jiraEmail = firstNonEmpty(jiraAuthCfgEmail, os.Getenv("JIRA_EMAIL"), os.Getenv("JIRA_LOGIN"))
+		jiraBaseURL = strings.TrimRight(firstNonEmpty(jiraAuthCfgBaseURL, os.Getenv("JIRA_BASE_URL"), "https://sendbird.atlassian.net"), "/")
 		jiraAvailable = jiraToken != "" && jiraEmail != ""
 	})
 }
@@ -530,6 +552,14 @@ func getCachedRef(url string) (SessionRef, bool) {
 		return SessionRef{}, false
 	}
 	return e.ref, true
+}
+
+// CachedRefStatus returns the cached resolution for a ref URL, if one is in the
+// process-wide TTL cache. It does NOT do a network call — callers use it to
+// decorate refs with already-resolved status (e.g. the session-flow refs row)
+// without blocking. Returns ok=false when the URL has not been resolved yet.
+func CachedRefStatus(url string) (SessionRef, bool) {
+	return getCachedRef(url)
 }
 
 func setCachedRef(r SessionRef) {

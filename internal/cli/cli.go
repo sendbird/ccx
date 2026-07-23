@@ -162,7 +162,7 @@ func isTerminal() bool {
 // config yields the zero value, which opener treats as the OS default.
 func loadOpenerConfig() opener.Config {
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "ccx", "config.yaml")
-	_, _, _, _, _, oc := tui.LoadCCXConfig(configPath)
+	_, _, _, _, _, oc, _ := tui.LoadCCXConfig(configPath)
 	return oc
 }
 

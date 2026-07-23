@@ -16,7 +16,7 @@ func TestLoadCCXConfigLoadsClaudeCommandTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _, _, cc, _ := LoadCCXConfig(path)
+	_, _, _, _, cc, _, _ := LoadCCXConfig(path)
 	if cc.CommandTemplate != "ccproxy -- claude {{args}}" {
 		t.Fatalf("CommandTemplate = %q", cc.CommandTemplate)
 	}
@@ -29,7 +29,7 @@ func TestLoadCCXConfigLoadsOpenCommandTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _, _, _, oc := LoadCCXConfig(path)
+	_, _, _, _, _, oc, _ := LoadCCXConfig(path)
 	if oc.CommandTemplate != "tmux-chrome open {{url}}" {
 		t.Fatalf("CommandTemplate = %q", oc.CommandTemplate)
 	}
@@ -46,7 +46,7 @@ func TestLoadCCXConfigResolvesJumpTreeRegionCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	km, _, _, _, _, _ := LoadCCXConfig(path)
+	km, _, _, _, _, _, _ := LoadCCXConfig(path)
 	if km.Conversation.RegionDown != "J" {
 		t.Fatalf("RegionDown = %q, want J", km.Conversation.RegionDown)
 	}
@@ -81,7 +81,7 @@ func TestSavePreferencesPreservesOpenAndClaude(t *testing.T) {
 		opener.Config{CommandTemplate: "tmux-chrome open {{url}}"},
 		claudecmd.Config{})
 
-	_, _, _, _, cc, oc := LoadCCXConfig(path)
+	_, _, _, _, cc, oc, _ := LoadCCXConfig(path)
 	if oc.CommandTemplate != "tmux-chrome open {{url}}" {
 		t.Fatalf("open lost after save: CommandTemplate = %q", oc.CommandTemplate)
 	}
