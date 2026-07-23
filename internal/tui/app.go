@@ -502,6 +502,13 @@ type App struct {
 	cfgSkillBrowse bool
 	cfgSkillDir    string
 	cfgSkillName   string
+	// Saved main-list context to restore on browser exit: the selected skill's
+	// path plus the filter/search/selection that were active when the browser
+	// was entered, so Esc returns to the original position.
+	cfgSkillSavedSearch   string
+	cfgSkillSavedFilter   int
+	cfgSkillSavedSelected map[string]bool
+	cfgSkillSavedPath     string
 	cfgTrash          []cfgTrashEntry   // undo stack for deleted items
 	cfgDeleteConfirm  bool              // waiting for second x press
 	cfgActionsMenu    bool              // config actions menu open

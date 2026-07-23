@@ -42,6 +42,7 @@ func setupCfgApp(t *testing.T) *App {
 	app = model.(*App)
 	app.state = viewConfig
 	app.cfgTree = &session.ConfigTree{}
+	app.cfgFilterCat = cfgFilterAll
 	app.cfgSplit.Show = true
 	return app
 }
@@ -179,6 +180,74 @@ func TestExitCfgSkillBrowserRestores(t *testing.T) {
 	}
 	if app.cfgSkillDir != "" {
 		t.Fatalf("cfgSkillDir = %q, want empty", app.cfgSkillDir)
+	}
+}
+
+func TestExitCfgSkillBrowserRestoresCursorPosition(t *testing.T) {
+	app := setupCfgApp(t)
+	dir1 := writeTestSkillDir(t, "alpha-skill", map[string]string{"SKILL.md": "a\n"})
+	dir2 := writeTestSkillDir(t, "beta-skill", map[string]string{"SKILL.md": "b\n"})
+	dir3 := writeTestSkillDir(t, "gamma-skill", map[string]string{"SKILL.md": "c\n"})
+	// Populate cfgTree so rebuildCfgList (called on exit) can rebuild the list.
+	app.cfgTree = &session.ConfigTree{Items: []session.ConfigItem{
+		{Category: session.ConfigSkill, Name: "alpha-skill", Path: filepath.Join(dir1, "SKILL.md")},
+		{Category: session.ConfigSkill, Name: "beta-skill", Path: filepath.Join(dir2, "SKILL.md")},
+		{Category: session.ConfigSkill, Name: "gamma-skill", Path: filepath.Join(dir3, "SKILL.md")},
+	}}
+	app.rebuildCfgList()
+	// Select beta-skill.
+	betaPath := filepath.Join(dir2, "SKILL.md")
+	found := false
+	for i, it := range app.cfgList.Items() {
+		if ci, ok := it.(cfgItem); ok && ci.item.Path == betaPath {
+			app.cfgList.Select(i)
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("beta-skill not in cfgList")
+	}
+	app.handleCfgEnter()
+	if !app.cfgSkillBrowse || app.cfgSkillSavedPath != betaPath {
+		t.Fatalf("enter should save beta-skill path; browse=%v saved=%q", app.cfgSkillBrowse, app.cfgSkillSavedPath)
+	}
+	// Move around inside the browser so the cursor is elsewhere.
+	if app.cfgList.Items() != nil && len(app.cfgList.Items()) > 1 {
+		app.cfgList.Select(len(app.cfgList.Items()) - 1)
+	}
+	// Exit — cursor should return to beta-skill in the main list.
+	app.handleConfigKeys(tea.KeyMsg{Type: tea.KeyEscape})
+	if app.cfgSkillBrowse {
+		t.Fatal("Esc should exit the browser")
+	}
+	sel, ok := app.cfgList.SelectedItem().(cfgItem)
+	if !ok || sel.item.Path != betaPath {
+		t.Fatalf("Esc should restore cursor to beta-skill; got %+v", sel)
+	}
+}
+
+func TestExitCfgSkillBrowserRestoresFilterContext(t *testing.T) {
+	app := setupCfgApp(t)
+	dir := writeTestSkillDir(t, "my-skill", map[string]string{"SKILL.md": "x\n"})
+	// Simulate the user having a SKILLS filter active when entering the browser.
+	app.cfgFilterCat = int(session.ConfigSkill)
+	app.cfgSearchTerm = ""
+	skillPath := filepath.Join(dir, "SKILL.md")
+	items := []list.Item{
+		cfgItem{isHeader: true, label: "SKILLS"},
+		cfgItem{item: session.ConfigItem{Category: session.ConfigSkill, Name: "my-skill", Path: skillPath}},
+	}
+	app.cfgList = newConfigList(items, 80, 40)
+	app.applyCfgDelegate()
+	app.cfgList.Select(1)
+	app.handleCfgEnter()
+	if app.cfgFilterCat != cfgFilterAll {
+		t.Fatalf("browser should clear filter for its own scope, got %d", app.cfgFilterCat)
+	}
+	app.handleConfigKeys(tea.KeyMsg{Type: tea.KeyEscape})
+	if app.cfgFilterCat != int(session.ConfigSkill) {
+		t.Fatalf("Esc should restore the SKILLS filter, got %d", app.cfgFilterCat)
 	}
 }
 
