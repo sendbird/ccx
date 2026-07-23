@@ -4,10 +4,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -173,6 +175,92 @@ func TestGitWorktreeRoot(t *testing.T) {
 
 	if got := gitWorktreeRoot(tmp); got != "" {
 		t.Fatalf("expected no git root for non-repo dir, got %s", got)
+	}
+}
+
+// TestAutoSelectSession_ClearsAutoFilterWhenItHidesCWDMatch reproduces the
+// bug where the startup active-state filter (is:live,is:input,is:mon) hides
+// the CWD session from autoSelectByCWD's search (VisibleItems() only), so
+// auto-focus falls through to an unrelated "most recent" session instead of
+// the one the user is actually sitting in.
+func TestAutoSelectSession_ClearsAutoFilterWhenItHidesCWDMatch(t *testing.T) {
+	tmp := realTempDir(t)
+	proj := filepath.Join(tmp, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessions := []session.Session{
+		// Distractor: live, so it survives the default filter and the
+		// filtered view isn't empty (keeping the unrelated blank-guard out
+		// of this test).
+		{ID: "distractor", ShortID: "distractor", ProjectPath: "/tmp/other-proj", ProjectName: "other-proj", ModTime: time.Now(), IsLive: true},
+		// The CWD session: idle, so is:live,is:input,is:mon hides it.
+		{ID: "cwd-sess", ShortID: "cwd-sess", ProjectPath: proj, ProjectName: "proj", ModTime: time.Now().Add(-time.Hour)},
+	}
+
+	restore := chdir(t, proj)
+	defer restore()
+
+	app := NewApp(sessions, Config{TmuxEnabled: true, InitialFocus: initialFocusCWD})
+	// Force the exact scenario regardless of the developer's local
+	// ~/.config/ccx/config.yaml: the auto-applied default active-state
+	// filter is in effect.
+	app.config.SearchQuery = defaultActiveStateFilter
+	app.autoStateFilter = true
+
+	m, _ := app.Update(tea.WindowSizeMsg{Width: 160, Height: 50})
+	app = m.(*App)
+
+	if app.autoStateFilter {
+		t.Fatal("expected the auto-default filter to be cleared once the CWD match was found only outside it")
+	}
+	sel, ok := app.selectedSession()
+	if !ok || sel.ID != "cwd-sess" {
+		t.Fatalf("expected cwd-sess to be auto-selected, got %+v (ok=%v)", sel, ok)
+	}
+	if !strings.Contains(app.copiedMsg, "filter cleared") {
+		t.Fatalf("expected status message to mention the filter was cleared, got %q", app.copiedMsg)
+	}
+}
+
+// TestAutoSelectSession_RespectsExplicitUserFilter checks the flip side: when
+// the active filter was explicitly chosen by the user (not the auto-applied
+// default), autoSelectSession must NOT clear it even if that hides the CWD
+// match — the user's explicit choice wins.
+func TestAutoSelectSession_RespectsExplicitUserFilter(t *testing.T) {
+	tmp := realTempDir(t)
+	proj := filepath.Join(tmp, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessions := []session.Session{
+		{ID: "distractor", ShortID: "distractor", ProjectPath: "/tmp/other-proj", ProjectName: "other-proj", ModTime: time.Now(), IsLive: true},
+		{ID: "cwd-sess", ShortID: "cwd-sess", ProjectPath: proj, ProjectName: "proj", ModTime: time.Now().Add(-time.Hour)},
+	}
+
+	restore := chdir(t, proj)
+	defer restore()
+
+	app := NewApp(sessions, Config{TmuxEnabled: true, InitialFocus: initialFocusCWD})
+	// An explicit user filter, not the auto-default.
+	app.config.SearchQuery = "is:live"
+	app.autoStateFilter = false
+
+	m, _ := app.Update(tea.WindowSizeMsg{Width: 160, Height: 50})
+	app = m.(*App)
+
+	if app.autoStateFilter {
+		t.Fatal("autoStateFilter should remain false — it was never the auto default")
+	}
+	if app.config.SearchQuery != "is:live" {
+		t.Fatalf("expected explicit filter to survive untouched, got %q", app.config.SearchQuery)
+	}
+	sel, ok := app.selectedSession()
+	if !ok || sel.ID != "distractor" {
+		t.Fatalf("expected fallback to the visible distractor session, got %+v (ok=%v)", sel, ok)
+	}
+	if app.copiedMsg != "Focused: most recent session" {
+		t.Fatalf("expected fallback status message, got %q", app.copiedMsg)
 	}
 }
 
