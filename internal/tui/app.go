@@ -6203,10 +6203,11 @@ func (a *App) resolveRefsStatusCmd(id string, refs []session.SessionRef) tea.Cmd
 func orderRefs(refs []session.SessionRef) []session.SessionRef {
 	ordered := make([]session.SessionRef, len(refs))
 	copy(ordered, refs)
+	kindOrder := map[session.RefKind]int{session.RefPR: 0, session.RefJira: 1, session.RefArtifact: 2}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		ki, kj := ordered[i].Kind, ordered[j].Kind
 		if ki != kj {
-			return ki == session.RefPR
+			return kindOrder[ki] < kindOrder[kj]
 		}
 		return ordered[i].FirstSeen.After(ordered[j].FirstSeen)
 	})
@@ -6259,8 +6260,11 @@ func (a *App) renderSessionRefs(ordered []session.SessionRef, width int, hasRefs
 	for i, r := range ordered {
 		if r.Kind != lastKind {
 			title := "Pull Requests"
-			if r.Kind == session.RefJira {
+			switch r.Kind {
+			case session.RefJira:
 				title = "Jira Issues"
+			case session.RefArtifact:
+				title = "Artifacts"
 			}
 			sb.WriteString("\n" + dimStyle.Bold(true).Render(title) + "\n")
 			lastKind = r.Kind
@@ -6306,6 +6310,8 @@ func refLine(r session.SessionRef, width int, selected, checked bool) string {
 		} else if !r.Resolved {
 			detail = "…"
 		}
+	case session.RefArtifact:
+		// No lifecycle detail; the published URL is the reference.
 	}
 	if detail != "" {
 		line += "  " + dimStyle.Render(detail)
@@ -6339,6 +6345,12 @@ func refStateBadge(r session.SessionRef) (dot, label string) {
 			return doneBadgeStyle.Render(iconStatusDot), dimStyle.Render(r.Label)
 		}
 		return waitDotIfOpen(r), memoryBadge.Render(r.Label)
+	case session.RefArtifact:
+		name := r.Title
+		if name == "" {
+			name = r.Label
+		}
+		return dimStyle.Render("◆"), labelStyle.Render(name)
 	}
 	return dimStyle.Render("○"), r.Label
 }

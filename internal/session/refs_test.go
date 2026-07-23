@@ -167,6 +167,7 @@ func TestClassifyRef(t *testing.T) {
 		{"https://github.com/sendbird/ccx/pull/52", RefPR, "sendbird/ccx#52", true},
 		{"https://github.com/sendbird/ccx/pull/52#discussion_r1", RefPR, "sendbird/ccx#52", true},
 		{"https://sendbird.atlassian.net/browse/CPLAT-9497", RefJira, "CPLAT-9497", true},
+		{"https://claude.ai/code/artifact/d248181d-78cb-471d-9d94-56bea9242b23", RefArtifact, "artifact:d248181d", true},
 		{"https://github.com/sendbird/ccx/issues/9", "", "", false},
 		// "/pull/new/<branch>" is the compare/create page, not a real PR.
 		{"https://github.com/sendbird/ccx/pull/new/CPLAT-10756-refs", "", "", false},
@@ -217,6 +218,7 @@ func TestRefStatusText(t *testing.T) {
 		{"jira unresolved", SessionRef{Kind: RefJira}, "…"},
 		{"jira in progress", SessionRef{Kind: RefJira, JiraStatus: "In Progress", Resolved: true}, "In Progress"},
 		{"jira resolved no-status", SessionRef{Kind: RefJira, Resolved: true}, ""},
+		{"artifact", SessionRef{Kind: RefArtifact}, "published"},
 	}
 	for _, c := range cases {
 		if got := RefStatusText(c.ref); got != c.want {
@@ -237,6 +239,7 @@ func TestSessionRefIsOpen(t *testing.T) {
 		{SessionRef{Kind: RefJira, Resolved: true, JiraStatusDone: true}, false},
 		{SessionRef{Kind: RefJira, Resolved: true, JiraStatusDone: false}, true},
 		{SessionRef{Kind: RefJira, Resolved: false}, true}, // unresolved → surfaced
+		{SessionRef{Kind: RefArtifact}, true},              // artifacts always surface
 	}
 	for i, c := range cases {
 		if got := c.ref.IsOpen(); got != c.want {

@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -143,6 +144,9 @@ var fileTools = map[string]string{
 func (b *flowBuilder) emitTranscriptArtifacts(path string, entries []Entry, agentID, workflowRun string, phaseIndex int) {
 	// tool_use_id → tool name for error attribution within this transcript.
 	toolNames := make(map[string]string)
+	// tool_use_id → Artifact tool input, so the tool_result's published URL can
+	// be paired with the author's label/description/file_path for display.
+	artifactInputs := make(map[string]artifactToolInput)
 
 	for i := range entries {
 		e := &entries[i]
@@ -182,6 +186,11 @@ func (b *flowBuilder) emitTranscriptArtifacts(path string, entries []Entry, agen
 				if blk.ID != "" && blk.ToolName != "" {
 					toolNames[blk.ID] = blk.ToolName
 				}
+				if blk.ToolName == "Artifact" {
+					if in, ok := parseArtifactInput(blk.ToolInput); ok {
+						artifactInputs[blk.ID] = in
+					}
+				}
 				b.emitURLs(blk.ToolInput, owner, origin)
 				b.emitToolUseArtifacts(blk, owner, origin)
 
@@ -195,6 +204,12 @@ func (b *flowBuilder) emitTranscriptArtifacts(path string, entries []Entry, agen
 						Origin: origin,
 						Data:   toolNames[blk.ID],
 					})
+				}
+				// An Artifact tool_result carries "Published <path> at
+				// https://claude.ai/code/artifact/<uuid>". Pair that URL with the
+				// tool_use input (label/description/file_path) for a useful Title.
+				if in, ok := artifactInputs[blk.ID]; ok {
+					b.emitArtifactRef(blk.Text, owner, origin, in)
 				}
 			}
 
@@ -308,6 +323,67 @@ func (b *flowBuilder) emitURLs(text, owner string, origin ArtifactOrigin) {
 			Origin: origin,
 		})
 	}
+}
+
+// artifactToolInput captures the display-relevant fields of an Artifact tool_use
+// so the later tool_result can pair its published URL with a human-readable title.
+type artifactToolInput struct {
+	label       string
+	description string
+	filePath    string
+}
+
+// parseArtifactInput decodes the input of an Artifact tool_use.
+func parseArtifactInput(toolInput string) (artifactToolInput, bool) {
+	var in struct {
+		Label       string `json:"label"`
+		Description string `json:"description"`
+		FilePath    string `json:"file_path"`
+	}
+	if err := json.Unmarshal([]byte(toolInput), &in); err != nil {
+		return artifactToolInput{}, false
+	}
+	return artifactToolInput{label: in.Label, description: in.Description, filePath: in.FilePath}, true
+}
+
+// emitArtifactRef scans an Artifact tool_result for the published claude.ai URL
+// and emits one ArtifactRef (Data: SessionRef{Kind: RefArtifact}) with a Title
+// derived from the tool_use input. No-op if the result lacks an artifact URL.
+func (b *flowBuilder) emitArtifactRef(resultText, owner string, origin ArtifactOrigin, in artifactToolInput) {
+	for _, raw := range refURLRegex.FindAllString(resultText, -1) {
+		u := cleanRefURL(raw)
+		if u == "" {
+			continue
+		}
+		ref, ok := classifyRef(u)
+		if !ok || ref.Kind != RefArtifact {
+			continue
+		}
+		ref.FirstSeen = origin.Timestamp
+		ref.Title = artifactTitle(in)
+		b.append(Artifact{
+			Kind:   ArtifactRef,
+			NodeID: owner,
+			Key:    ref.URL,
+			Origin: origin,
+			Data:   ref,
+		})
+	}
+}
+
+// artifactTitle picks the most useful display title for an artifact from its
+// tool_use input: explicit label, then description, then file basename.
+func artifactTitle(in artifactToolInput) string {
+	if in.label != "" {
+		return in.label
+	}
+	if in.description != "" {
+		return in.description
+	}
+	if in.filePath != "" {
+		return filepath.Base(in.filePath)
+	}
+	return ""
 }
 
 // emitToolUseArtifacts handles per-tool artifact kinds: changes, files, tasks,

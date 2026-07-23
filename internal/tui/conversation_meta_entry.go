@@ -947,8 +947,8 @@ func (a *App) buildRefsListText() string {
 	return b.String()
 }
 
-// refRow renders one PR/Jira reference as a single-line row: a kind tag, the
-// label, and (when known) the resolved state.
+// refRow renders one PR/Jira/artifact reference as a single-line row: a kind
+// tag, the label (or artifact title), and (when known) the resolved state.
 func refRow(ref session.SessionRef) string {
 	tag := "URL"
 	style := dimStyle
@@ -959,10 +959,19 @@ func refRow(ref session.SessionRef) string {
 	case session.RefJira:
 		tag = "Jira"
 		style = lipgloss.NewStyle().Foreground(colorUser).Bold(true)
+	case session.RefArtifact:
+		tag = "Artifact"
+		style = lipgloss.NewStyle().Foreground(colorAssistant).Bold(true)
 	}
-	row := style.Render("["+tag+"]") + " " + ref.Label
+	name := ref.Label
+	if ref.Title != "" {
+		name = ref.Title
+	}
+	row := style.Render("["+tag+"]") + " " + name
 	if ref.State != "" {
 		row += " " + dimStyle.Render("("+string(ref.State)+")")
+	} else if ref.Kind == session.RefArtifact {
+		row += " " + dimStyle.Render("(published)")
 	}
 	return row
 }

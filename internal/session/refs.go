@@ -23,6 +23,9 @@ type RefKind string
 const (
 	RefPR   RefKind = "pr"
 	RefJira RefKind = "jira"
+	// RefArtifact is a Claude Artifact published to claude.ai/code/artifact/<uuid>.
+	// It has no lifecycle state to resolve — the URL is the canonical reference.
+	RefArtifact RefKind = "artifact"
 )
 
 // RefState is the resolved lifecycle state of a reference. Empty string means
@@ -47,6 +50,7 @@ type SessionRef struct {
 	Kind  RefKind
 	URL   string
 	Label string // e.g. "sendbird/ccx#52" or "CPLAT-1234"
+	Title string // human-readable title (artifact description/label; empty for PR/Jira)
 
 	FirstSeen time.Time // timestamp of the entry where this ref first appeared
 
@@ -75,6 +79,9 @@ func (r SessionRef) IsOpen() bool {
 		// Unknown Jira state is treated as open-ish so the link still surfaces;
 		// a resolved "done" is the only thing we hide from the open count.
 		return !(r.Resolved && r.JiraStatusDone)
+	case RefArtifact:
+		// Artifacts are published pages — always surface them.
+		return true
 	}
 	return false
 }
@@ -203,7 +210,7 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 // sortRefs orders PRs before Jira, then most-recent-first within each kind by
 // first appearance so the newest work surfaces at the top of the preview.
 func sortRefs(refs []SessionRef) {
-	order := map[RefKind]int{RefPR: 0, RefJira: 1}
+	order := map[RefKind]int{RefPR: 0, RefJira: 1, RefArtifact: 2}
 	sort.SliceStable(refs, func(i, j int) bool {
 		if order[refs[i].Kind] != order[refs[j].Kind] {
 			return order[refs[i].Kind] < order[refs[j].Kind]
@@ -247,8 +254,31 @@ func classifyRef(u string) (SessionRef, bool) {
 		return SessionRef{Kind: RefPR, URL: u, Label: prLabel(u, num)}, true
 	case strings.Contains(low, "atlassian.net") && strings.Contains(low, "/browse/"):
 		return SessionRef{Kind: RefJira, URL: u, Label: jiraKey(u)}, true
+	case strings.Contains(low, "claude.ai/code/artifact/"):
+		id := artifactURLID(u)
+		if id == "" {
+			return SessionRef{}, false
+		}
+		return SessionRef{Kind: RefArtifact, URL: u, Label: "artifact:" + id}, true
 	}
 	return SessionRef{}, false
+}
+
+// artifactURLRegex captures the UUID at the end of a claude.ai artifact URL.
+var artifactURLRegex = regexp.MustCompile(`claude\.ai/code/artifact/([0-9a-fA-F-]{8,})`)
+
+// artifactURLID returns the trailing UUID (first 8 chars) of a claude.ai artifact
+// URL, or "" if the URL is malformed.
+func artifactURLID(u string) string {
+	m := artifactURLRegex.FindStringSubmatch(u)
+	if len(m) < 2 {
+		return ""
+	}
+	id := m[1]
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return id
 }
 
 // ClassifyURLRef turns a raw URL into a SessionRef if it is a GitHub PR or a
@@ -291,6 +321,8 @@ func RefStatusText(r SessionRef) string {
 			return ""
 		}
 		return "…"
+	case RefArtifact:
+		return "published"
 	}
 	return ""
 }
@@ -441,6 +473,12 @@ func ResolveRefs(ctx context.Context, refs []SessionRef) []SessionRef {
 // with many refs (plus the background enrich sweep) cannot fan out dozens of gh
 // subprocesses at once — that spiked CPU and starved the UI event loop.
 func ResolveRef(ctx context.Context, r SessionRef) SessionRef {
+	// Artifacts have no lifecycle state to fetch — mark resolved without network.
+	if r.Kind == RefArtifact {
+		r.Resolved = true
+		r.FetchedAt = time.Now()
+		return r
+	}
 	if cached, ok := getCachedRef(r.URL); ok {
 		// The cache is keyed by URL and stores only resolved status; keep this
 		// occurrence's FirstSeen/Label rather than the cached entry's.
