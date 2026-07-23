@@ -174,6 +174,21 @@ func (a *App) configHelpLine() string {
 	if a.cfgSearching {
 		return "  " + a.cfgSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
 	}
+	if a.cfgSkillBrowse {
+		h := "↵:edit e:edit /:search esc:back"
+		if a.cfgSearchTerm != "" {
+			badge := fmt.Sprintf("[%d/%d]", a.cfgSearchIdx+1, len(a.cfgSearchMatch))
+			if len(a.cfgSearchMatch) == 0 {
+				badge = "[0/0]"
+			}
+			return "  " + filterBadge.Render(badge) + formatHelp(" n/N:next/prev esc:clear-search")
+		}
+		if a.cfgSplit.Show && a.cfgSplit.Focus {
+			h = "↑↓:scroll esc:unfocus"
+		}
+		h += " " + a.helpSuffix()
+		return formatHelp(h)
+	}
 	if a.cfgSearchTerm != "" {
 		badge := fmt.Sprintf("[%d/%d]", a.cfgSearchIdx+1, len(a.cfgSearchMatch))
 		if len(a.cfgSearchMatch) == 0 {

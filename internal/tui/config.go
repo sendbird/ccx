@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -300,6 +302,15 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return a.quit()
 	case "esc":
+		if a.cfgSkillBrowse {
+			// Browser Esc: clear search first, then exit back to the main list.
+			if a.cfgSearchTerm != "" {
+				a.clearCfgSearch()
+				return a, nil
+			}
+			a.exitCfgSkillBrowser()
+			return a, nil
+		}
 		if a.cfgHasSelection() {
 			a.clearCfgSelection()
 			return a, nil
@@ -319,9 +330,15 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.viewsMenu = true
 		return a, nil
 	case "x":
+		if a.cfgSkillBrowse {
+			return a, nil
+		}
 		a.cfgActionsMenu = true
 		return a, nil
 	case "p":
+		if a.cfgSkillBrowse {
+			return a, nil
+		}
 		a.cfgPageMenu = true
 		return a, nil
 	case " ":
@@ -348,9 +365,23 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.cycleCfgFilter(-1)
 		return a, nil
 	case "P":
+		if a.cfgSkillBrowse {
+			return a, nil
+		}
 		return a.openCfgProjectPicker()
 	case "a":
+		if a.cfgSkillBrowse {
+			return a, nil
+		}
 		return a.startCfgNaming()
+	case "enter":
+		return a.handleCfgEnter()
+	case "e":
+		// In the skill browser, `e` opens the focused file in $EDITOR.
+		if a.cfgSkillBrowse {
+			return a.cfgSkillBrowserOpenEditor()
+		}
+		return a.editCfgItems()
 	case "/":
 		return a, a.startCfgSearch()
 	case "n":
@@ -1108,6 +1139,10 @@ func (a *App) cfgFilterLabel() string {
 }
 
 func (a *App) rebuildCfgList() {
+	if a.cfgSkillBrowse {
+		a.rebuildSkillBrowserList()
+		return
+	}
 	items := buildConfigItemsFiltered(a.cfgTree, a.cfgFilterCat, a.cfgSearchTerm)
 	contentH := ContentHeight(a.height)
 	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
@@ -1127,6 +1162,148 @@ func (a *App) rebuildCfgList() {
 
 	a.cfgSplit.CacheKey = ""
 	a.updateConfigPreview()
+}
+
+// --- Skill directory browser ---
+
+// enterCfgSkillBrowser swaps the config list to a recursive file listing of
+// the selected skill's directory and opens the preview. Esc (exitCfgSkillBrowser)
+// restores the main config list via rebuildCfgList.
+func (a *App) enterCfgSkillBrowser(ci cfgItem) (tea.Model, tea.Cmd) {
+	dir := filepath.Dir(ci.item.Path)
+	a.cfgSkillBrowse = true
+	a.cfgSkillDir = dir
+	a.cfgSkillName = ci.item.Name
+	// The browser has its own search scope; clear the main-list search/filter.
+	a.cfgSearchTerm = ""
+	a.cfgSearchMatch = nil
+	a.cfgSearchIdx = 0
+	a.cfgFilterCat = cfgFilterAll
+	a.cfgSelectedSet = nil
+
+	items := buildSkillFileItems(dir, ci.item.Name, "")
+	contentH := ContentHeight(a.height)
+	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
+	a.cfgList = newConfigList(items, listW, contentH)
+	a.applyCfgDelegate()
+	a.cfgSplit.Show = true
+	a.cfgSplit.Focus = false
+	a.cfgSplit.CacheKey = ""
+	a.updateConfigPreview()
+	return a, nil
+}
+
+// rebuildSkillBrowserList rebuilds the skill file list from cfgSkillDir, filtered
+// by the current search term. Called via rebuildCfgList while in browser mode so
+// `/`/n/N/clearCfgSearch work without swapping back to the main config tree.
+func (a *App) rebuildSkillBrowserList() {
+	items := buildSkillFileItems(a.cfgSkillDir, a.cfgSkillName, a.cfgSearchTerm)
+	contentH := ContentHeight(a.height)
+	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
+	a.cfgList = newConfigList(items, listW, contentH)
+	a.applyCfgDelegate()
+	a.cfgSearchMatch = nil
+	a.cfgSearchIdx = 0
+	if a.cfgSearchTerm != "" {
+		for i, item := range items {
+			if ci, ok := item.(cfgItem); ok && !ci.isHeader {
+				a.cfgSearchMatch = append(a.cfgSearchMatch, i)
+			}
+		}
+	}
+	a.cfgSplit.CacheKey = ""
+	a.updateConfigPreview()
+}
+
+// exitCfgSkillBrowser returns from the skill directory browser to the main
+// config list.
+func (a *App) exitCfgSkillBrowser() {
+	a.cfgSkillBrowse = false
+	a.cfgSkillDir = ""
+	a.cfgSkillName = ""
+	a.cfgSearchTerm = ""
+	a.cfgSearchMatch = nil
+	a.cfgSearchIdx = 0
+	a.rebuildCfgList()
+}
+
+// buildSkillFileItems walks dir recursively and returns one cfgItem per file
+// (relative path as the label, absolute path on item.Path) behind a header row.
+// SKILL.md is included alongside any supporting files (references/, scripts,
+// assets, …). Hidden entries are skipped. When searchTerm is non-empty, only
+// files whose relative path contains the term (case-insensitive) are listed.
+func buildSkillFileItems(dir, skillName, searchTerm string) []list.Item {
+	q := strings.ToLower(strings.TrimSpace(searchTerm))
+	header := cfgItem{isHeader: true, label: "SKILL: " + skillName}
+	items := []list.Item{header}
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path != dir && strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(name, ".") {
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil {
+			return nil
+		}
+		if q != "" && !strings.Contains(strings.ToLower(rel), q) {
+			return nil
+		}
+		info, ierr := d.Info()
+		var size int64
+		var mtime time.Time
+		if ierr == nil {
+			size = info.Size()
+			mtime = info.ModTime()
+		}
+		items = append(items, cfgItem{
+			item: session.ConfigItem{
+				Category: session.ConfigSkill,
+				Name:     rel,
+				Path:     path,
+				ModTime:  mtime,
+				Size:     size,
+			},
+			label:     rel,
+			treeDepth: 1,
+		})
+		return nil
+	})
+	return items
+}
+
+// cfgSkillBrowserOpenEditor opens the focused skill file in $EDITOR.
+func (a *App) cfgSkillBrowserOpenEditor() (tea.Model, tea.Cmd) {
+	ci, ok := a.cfgList.SelectedItem().(cfgItem)
+	if !ok || ci.isHeader {
+		return a, nil
+	}
+	return a.openInEditor(ci.item.Path)
+}
+
+// handleCfgEnter handles Enter in the config view: inside the skill browser it
+// opens the focused file; on a skill item it drills into the skill directory
+// browser; on any other file it opens it in $EDITOR.
+func (a *App) handleCfgEnter() (tea.Model, tea.Cmd) {
+	ci, ok := a.cfgList.SelectedItem().(cfgItem)
+	if !ok || ci.isHeader {
+		return a, nil
+	}
+	if a.cfgSkillBrowse {
+		return a.cfgSkillBrowserOpenEditor()
+	}
+	if ci.item.Category == session.ConfigSkill {
+		return a.enterCfgSkillBrowser(ci)
+	}
+	return a.openInEditor(ci.item.Path)
 }
 
 // cfgSearchTags maps config categories to searchable "is:" tags.
