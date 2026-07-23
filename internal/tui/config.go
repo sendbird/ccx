@@ -1254,11 +1254,30 @@ func (a *App) exitCfgSkillBrowser() {
 	a.updateConfigPreview()
 }
 
+// skillSkipDirs are generated/cache directories pruned from the skill browser
+// so compiled artifacts don't clutter the listing.
+var skillSkipDirs = map[string]bool{
+	"__pycache__": true, ".mypy_cache": true, ".pytest_cache": true, ".ruff_cache": true,
+	".tox": true, ".nox": true, "node_modules": true, "dist": true, "build": true, "target": true,
+	".git": true, ".svn": true, ".hg": true,
+}
+
+// skillSkipExts are file extensions (lowercased) excluded from the skill
+// browser — compiled objects, editor swap files, and other generated artifacts.
+var skillSkipExts = map[string]bool{
+	".pyc": true, ".pyo": true, ".pyd": true,
+	".o": true, ".obj": true, ".so": true, ".dylib": true, ".dll": true, ".class": true,
+	".swp": true, ".swo": true, ".tmp": true, ".bak": true, ".log": true,
+	".ds_store": true, ".pycpl": true,
+}
+
 // buildSkillFileItems walks dir recursively and returns one cfgItem per file
 // (relative path as the label, absolute path on item.Path) behind a header row.
 // SKILL.md is included alongside any supporting files (references/, scripts,
-// assets, …). Hidden entries are skipped. When searchTerm is non-empty, only
-// files whose relative path contains the term (case-insensitive) are listed.
+// assets, …). Hidden entries and generated/cache artifacts (__pycache__, .pyc,
+// editor swap files, build/cache dirs, …) are skipped so the browser shows only
+// source files. When searchTerm is non-empty, only files whose relative path
+// contains the term (case-insensitive) are listed.
 func buildSkillFileItems(dir, skillName, searchTerm string) []list.Item {
 	q := strings.ToLower(strings.TrimSpace(searchTerm))
 	header := cfgItem{isHeader: true, label: "SKILL: " + skillName}
@@ -1269,12 +1288,18 @@ func buildSkillFileItems(dir, skillName, searchTerm string) []list.Item {
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != dir && strings.HasPrefix(name, ".") {
+			if path == dir {
+				return nil
+			}
+			if strings.HasPrefix(name, ".") || skillSkipDirs[strings.ToLower(name)] {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if strings.HasPrefix(name, ".") {
+			return nil
+		}
+		if skillSkipExts[strings.ToLower(filepath.Ext(name))] {
 			return nil
 		}
 		rel, rerr := filepath.Rel(dir, path)

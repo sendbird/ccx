@@ -87,6 +87,38 @@ func TestBuildSkillFileItemsRecursive(t *testing.T) {
 	}
 }
 
+func TestBuildSkillFileItemsExcludesCompiledArtifacts(t *testing.T) {
+	dir := writeTestSkillDir(t, "py-skill", map[string]string{
+		"SKILL.md":                  "body\n",
+		"scripts/run.py":            "print(1)\n",
+		"scripts/run.pyc":           "\x00\x00\x00",
+		"scripts/__pycache__/x.pyc": "\x00\x00\x00",
+		"references/palette.md":     "palette\n",
+		"build/out.o":               "\x00",
+		".run.swp":                  "swap\n",
+		"run.log":                   "log\n",
+	})
+	items := buildSkillFileItems(dir, "py-skill", "")
+	rels := []string{}
+	for _, it := range items[1:] {
+		ci, ok := it.(cfgItem)
+		if !ok {
+			continue
+		}
+		rels = append(rels, ci.item.Name)
+	}
+	sort.Strings(rels)
+	want := []string{"SKILL.md", "references/palette.md", "scripts/run.py"}
+	if len(rels) != len(want) {
+		t.Fatalf("rels = %v, want %v (compiled/cache artifacts should be excluded)", rels, want)
+	}
+	for i, w := range want {
+		if rels[i] != w {
+			t.Fatalf("rels[%d] = %q, want %q (all=%v)", i, rels[i], w, rels)
+		}
+	}
+}
+
 func TestBuildSkillFileItemsSearchFilter(t *testing.T) {
 	dir := writeTestSkillDir(t, "s", map[string]string{
 		"SKILL.md":              "x\n",
