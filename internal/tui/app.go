@@ -7397,6 +7397,14 @@ const initialFocusCWD = "cwd"
 // directory walk from the working directory (see autoSelectByCWD) before
 // finally falling back to the most recent session overall.
 //
+// The tmux/CWD match is first tried against the currently visible (possibly
+// filtered) list. If it isn't there but a matching session exists in
+// a.sessions, and the active filter is only the auto-applied default (not
+// something the user explicitly typed), the filter is cleared and the match
+// retried — landing on "the session you're actually in" should win over the
+// generic active-sessions-only default. An explicit user filter is left
+// alone.
+//
 // The chosen strategy is surfaced via copiedMsg so it's visible in the status
 // line on startup.
 func (a *App) autoSelectSession() tea.Cmd {
@@ -7419,10 +7427,71 @@ func (a *App) autoSelectSession() tea.Cmd {
 		}
 	}
 
+	if a.autoStateFilter {
+		if cmd, ok := a.retryAutoSelectWithFilterCleared(); ok {
+			return cmd
+		}
+	}
+
 	// Fallback: ensure cursor isn't parked on a header.
 	a.copiedMsg = "Focused: most recent session"
 	a.bumpPastHeader(0, +1)
 	return nil
+}
+
+// retryAutoSelectWithFilterCleared re-derives the tmux/CWD target path
+// against the full (unfiltered) session set. If a match exists there — i.e.
+// the only reason autoSelectSession's first pass failed is that the
+// auto-applied default filter hid it — the filter is cleared and the match
+// is selected against the now-unfiltered list. Returns ok=false (no side
+// effects) if no such match exists, so the caller can fall through to the
+// normal "most recent session" fallback.
+func (a *App) retryAutoSelectWithFilterCleared() (tea.Cmd, bool) {
+	target, label := "", ""
+	for _, projPath := range tmux.CurrentWindowClaudes() {
+		absProj, _ := filepath.Abs(projPath)
+		if absProj == "" {
+			absProj = projPath
+		}
+		if sessionExistsAtPath(a.sessions, absProj) {
+			target, label = absProj, "tmux window match"
+			break
+		}
+	}
+	if target == "" && a.config.InitialFocus == initialFocusCWD {
+		if d, ok := walkCWDAncestors(func(dir string) bool { return sessionExistsAtPath(a.sessions, dir) }); ok {
+			target, label = d, "CWD search"
+		}
+	}
+	if target == "" {
+		return nil, false
+	}
+
+	a.sessionList.ResetFilter()
+	a.config.SearchQuery = ""
+	a.autoStateFilter = false
+	visible := a.sessionList.VisibleItems()
+	if i, ok := firstSessionAtPath(visible, target); ok {
+		a.copiedMsg = "Focused: " + label + " (filter cleared)"
+		return a.selectAutoSessionAt(visible, i), true
+	}
+	return nil, false
+}
+
+// sessionExistsAtPath reports whether any session (regardless of the
+// session list's current filter) has an absolute project path equal to
+// absPath.
+func sessionExistsAtPath(sessions []session.Session, absPath string) bool {
+	for i := range sessions {
+		absSP, _ := filepath.Abs(sessions[i].ProjectPath)
+		if absSP == "" {
+			absSP = sessions[i].ProjectPath
+		}
+		if absSP == absPath {
+			return true
+		}
+	}
+	return false
 }
 
 // selectAutoSessionAt selects visible[i] and, if it's a live session with
@@ -7460,27 +7529,44 @@ func firstSessionAtPath(visible []list.Item, absPath string) (int, bool) {
 // session whose project path matches exactly, stopping (with no match) once
 // it reaches $HOME or the root of the current git worktree.
 func autoSelectByCWD(visible []list.Item) (int, bool) {
+	idx := 0
+	_, ok := walkCWDAncestors(func(d string) bool {
+		i, found := firstSessionAtPath(visible, d)
+		if found {
+			idx = i
+		}
+		return found
+	})
+	return idx, ok
+}
+
+// walkCWDAncestors walks up from the process working directory, calling
+// match at each candidate directory (nearest first), stopping at $HOME or
+// the root of the current git worktree. Returns the first directory for
+// which match returns true, or ("", false) if none does before the
+// boundary is reached.
+func walkCWDAncestors(match func(dir string) bool) (string, bool) {
 	d, err := os.Getwd()
 	if err != nil {
-		return 0, false
+		return "", false
 	}
 	d, err = filepath.Abs(d)
 	if err != nil {
-		return 0, false
+		return "", false
 	}
 	home, _ := os.UserHomeDir()
 	gitRoot := gitWorktreeRoot(d)
 
 	for {
-		if i, ok := firstSessionAtPath(visible, d); ok {
-			return i, true
+		if match(d) {
+			return d, true
 		}
 		if (home != "" && d == home) || (gitRoot != "" && d == gitRoot) {
-			return 0, false
+			return "", false
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return 0, false
+			return "", false
 		}
 		d = parent
 	}
