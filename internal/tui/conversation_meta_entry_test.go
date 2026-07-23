@@ -490,3 +490,83 @@ func TestCommitMemorySearchShowsMatchesAndClearReturns(t *testing.T) {
 	}
 }
 
+
+func TestMemorySearchEnterDrillsIntoMatchFile(t *testing.T) {
+	root := t.TempDir()
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.currentSess.HasMemory = true
+	app.currentSess.ProjectPath = root
+	app.conv.sess = app.currentSess
+	app.conv.contextItems = buildConvContextItems(app.conv.sess, app.conv.merged, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
+	app.rebuildConversationList(0)
+	for i, item := range app.conv.contextItems {
+		if item.sessionMeta == "memory" {
+			app.selectConvContext(i)
+			break
+		}
+	}
+	writeTestMemoryNotes(t, root, map[string]string{
+		"delta.md": "---\nname: delta\nmetadata:\n  type: project\n---\nthe needle is here\nmore text\n",
+	})
+
+	app.startMemorySearch()
+	app.conv.memorySearchTI.SetValue("needle")
+	app.commitMemorySearch()
+	if app.conv.inspector.MemorySearch != "needle" {
+		t.Fatalf("MemorySearch = %q, want needle", app.conv.inspector.MemorySearch)
+	}
+
+	// Find the match row target and press Enter on it.
+	targets := app.conv.inspector.MetaTargets
+	matchIdx := -1
+	for i, tg := range targets {
+		if tg.kind == metaTargetMemoryFile && tg.fileName == "delta.md" {
+			matchIdx = i
+		}
+	}
+	if matchIdx < 0 {
+		t.Fatal("no delta.md match target found after search")
+	}
+	if app.conv.split.Folds == nil {
+		t.Fatal("Folds not set after commit")
+	}
+	app.conv.split.Folds.BlockCursor = matchIdx
+	handled, _, _ := app.handleMetaEntryEnter()
+	if !handled {
+		t.Fatal("handleMetaEntryEnter should handle the match row")
+	}
+	if app.conv.inspector.MetaDrill != "delta.md" {
+		t.Fatalf("MetaDrill = %q, want delta.md (Enter should drill into the match file)", app.conv.inspector.MetaDrill)
+	}
+	// MemorySearch must remain set so Esc returns to the search results.
+	if app.conv.inspector.MemorySearch != "needle" {
+		t.Fatalf("MemorySearch = %q, want needle preserved while drilled", app.conv.inspector.MemorySearch)
+	}
+	// The rendered entries must now be the drill (note body), not the search list.
+	entries := app.metaMemoryEntries()
+	var body strings.Builder
+	for _, e := range entries {
+		body.WriteString(stripANSI(e.block.Text))
+		body.WriteByte('\n')
+	}
+	if !strings.Contains(body.String(), "the needle is here") {
+		t.Fatalf("drill view should render the note body; got:\n%s", body.String())
+	}
+	if strings.Contains(body.String(), "Memory search") {
+		t.Fatalf("drill should take precedence over search; got search header:\n%s", body.String())
+	}
+
+	// Esc unwinds drill → search results (MemorySearch still set).
+	if !app.exitMemoryDrill() {
+		t.Fatal("exitMemoryDrill should report handled while drilled")
+	}
+	if app.conv.inspector.MemorySearch != "needle" {
+		t.Fatalf("Esc from drill should preserve search, got MemorySearch=%q", app.conv.inspector.MemorySearch)
+	}
+	entries = app.metaMemoryEntries()
+	header := stripANSI(entries[0].block.Text)
+	if !strings.Contains(header, "Memory search") {
+		t.Fatalf("after Esc, search results should render; got:\n%s", header)
+	}
+}

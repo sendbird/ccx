@@ -461,6 +461,14 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return a.quit()
 	case "esc":
+		// Unwind one layer at a time: drill → search → block filter → …
+		// Drill is checked first so Esc from a drill reached via search returns
+		// to the search results, not straight to the file list.
+		if len(a.conv.inspector.History) == 0 {
+			if a.exitMemoryDrill() || a.exitPlanDrill() {
+				return a, nil
+			}
+		}
 		if a.conv.inspector.MemorySearch != "" {
 			a.clearMemorySearch()
 			return a, nil
@@ -468,11 +476,6 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sp.Folds != nil && sp.Folds.BlockFilter != "" {
 			a.clearBlockFilter()
 			return a, nil
-		}
-		if len(a.conv.inspector.History) == 0 {
-			if a.exitMemoryDrill() || a.exitPlanDrill() {
-				return a, nil
-			}
 		}
 		if a.popInspectorHistory() {
 			return a, nil
