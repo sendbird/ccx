@@ -306,6 +306,12 @@ func (b *flowBuilder) emitURLs(text, owner string, origin ArtifactOrigin) {
 			continue
 		}
 		if ref, ok := classifyRef(u); ok {
+			// Artifacts are emitted only from Artifact tool_results
+			// (emitArtifactRef), so a URL merely quoted in text — often a link
+			// to another session's artifact — does not become a ref.
+			if ref.Kind == RefArtifact {
+				continue
+			}
 			ref.FirstSeen = origin.Timestamp
 			b.append(Artifact{
 				Kind:   ArtifactRef,

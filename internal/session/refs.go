@@ -137,6 +137,13 @@ func ExtractSessionRefsFromFile(filePath string) []SessionRef {
 			if !ok || seen[ref.Label] {
 				continue
 			}
+			// Artifacts: only count ones this session published — the Artifact
+			// tool_result says "Published <path> at <url>". A URL merely quoted
+			// in text (often a link to another session's artifact) is not a ref
+			// this session produced, so skip it.
+			if ref.Kind == RefArtifact && !bytes.Contains(line, []byte("Published")) {
+				continue
+			}
 			if !tsParsed {
 				ts = lineTimestamp(line)
 				tsParsed = true
@@ -194,6 +201,11 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 					}
 					ref, ok := classifyRef(u)
 					if !ok || seen[ref.Label] {
+						continue
+					}
+					// Artifacts: only from publish-marker text (Artifact
+					// tool_result "Published … at <url>"), not text mentions.
+					if ref.Kind == RefArtifact && !strings.Contains(text, "Published") {
 						continue
 					}
 					seen[ref.Label] = true
