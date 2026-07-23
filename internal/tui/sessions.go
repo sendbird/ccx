@@ -1741,15 +1741,13 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{displayKey(km.Session.Open), "Open / expand"},
 			{displayKey(km.Session.Right) + " / tab", "Preview / cycle mode"},
 			{displayKey(km.Session.Actions), "Actions (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.CopyPath) + "/…)"},
-			{displayKey(km.Session.Edit), "Edit session files"},
 			{displayKey(km.Session.Search), "Search / filter"},
 			{displayKey(km.Session.Views), "Views (stats/config/plugins)"},
 			{displayKey(km.Session.Refresh), "Refresh"},
-			{displayKey(km.Session.Live) + " / " + displayKey(km.Session.Switch), "Live preview / switch to tmux"},
+			{"p → l", "Live preview (page menu → live)"},
 			{displayKey(km.Session.Select), "Multi-select"},
 			{"o / f / F", "Fold group / all / expand all"},
-			{"D", "Completed-only filter"},
-			{"S", "Toggle session states shown (live/done/…)"},
+			{"s", "Toggle session states shown (live/done/…)"},
 		}
 	}
 }
