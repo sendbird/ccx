@@ -70,7 +70,10 @@ func TestReconstructFileChangesMultiEditBails(t *testing.T) {
 }
 
 func TestRenderCumulativeFileDiff(t *testing.T) {
-	got := renderCumulativeFileDiff("/repo/svc.go", "a\nb\nc\n", "a\nB\nc\n", 80)
+	got, err := renderCumulativeFileDiff("/repo/svc.go", "a\nb\nc\n", "a\nB\nc\n", 80)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	bare := stripANSI(got)
 	if bare == "" {
 		t.Fatal("expected a non-empty diff for changed content")
@@ -80,8 +83,15 @@ func TestRenderCumulativeFileDiff(t *testing.T) {
 			t.Fatalf("cumulative diff missing %q:\n%s", want, bare)
 		}
 	}
-	if renderCumulativeFileDiff("/repo/svc.go", "same\n", "same\n", 80) != "" {
-		t.Fatal("identical content should produce an empty diff")
+	if diff, err := renderCumulativeFileDiff("/repo/svc.go", "same\n", "same\n", 80); err != nil || diff != "" {
+		t.Fatalf("identical content should produce an empty diff, got %q err=%v", diff, err)
+	}
+}
+
+func TestRenderCumulativeFileDiffTooLarge(t *testing.T) {
+	big := strings.Repeat("x", maxCumulativeDiffBytes/2+10)
+	if _, err := renderCumulativeFileDiff("/repo/big.go", big, big+"y", 80); err == nil {
+		t.Fatal("oversized input should bail with an error, not crash")
 	}
 }
 

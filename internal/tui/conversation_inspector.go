@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -655,12 +656,14 @@ func (a *App) renderInspectorChangesByFile(arts []session.Artifact) string {
 		occ := byFile[fp]
 		fmt.Fprintf(&b, "\n## %s%s\n", session.ShortenPath(fp, homeDir()), dimStyle.Render(fmt.Sprintf(" · %d occurrence(s)", len(occ))))
 		if initial, final, ok := reconstructFileChanges(occ); ok {
-			if diff := renderCumulativeFileDiff(fp, initial, final, diffWidth); diff != "" {
-				b.WriteString("\n" + diff + "\n")
-			} else {
-				b.WriteString(dimStyle.Render("  (no net change across occurrences)\n"))
+			if diff, err := renderCumulativeFileDiff(fp, initial, final, diffWidth); err == nil {
+				if diff != "" {
+					b.WriteString("\n" + diff + "\n")
+				} else {
+					b.WriteString(dimStyle.Render("  (no net change across occurrences)\n"))
+				}
+				continue
 			}
-			continue
 		}
 		b.WriteString(dimStyle.Render("  (cumulative diff unavailable — showing per-occurrence)\n"))
 		for i, art := range occ {
@@ -689,8 +692,7 @@ func (a *App) renderInspectorChangesByFile(arts []session.Artifact) string {
 // occurrence must be a Write (establishing a baseline) and every subsequent
 // Edit must apply cleanly. Unknown tools (MultiEdit/NotebookEdit) or a missing
 // old_string make reconstruction bail so the caller can fall back.
-func reconstructFileChanges(occ []session.Artifact) (initial, final string, ok bool) {
-	if len(occ) == 0 {
+func reconstructFileChanges(occ []session.Artifact) (initial, final string, ok bool) {	if len(occ) == 0 {
 		return "", "", false
 	}
 	sort.SliceStable(occ, func(i, j int) bool {
@@ -728,17 +730,44 @@ func reconstructFileChanges(occ []session.Artifact) (initial, final string, ok b
 	return initial, content, true
 }
 
+// Caps for the cumulative diff view: bound the udiff input size (LCS cost is
+// quadratic in the worst case) and the rendered output length so a huge Write
+// plus a small Edit cannot stall the TUI or blow up the preview.
+const (
+	maxCumulativeDiffBytes = 200_000
+	maxCumulativeDiffLines = 300
+)
+
+var errCumulativeDiffTooLarge = errors.New("cumulative diff too large")
+
 // renderCumulativeFileDiff produces a colorized unified diff between initial
-// and final file contents. Returns empty string when the two are identical.
-func renderCumulativeFileDiff(filePath, initial, final string, width int) string {
+// and final file contents. Returns ("", nil) when the two are identical, or
+// (..., err) when the diff cannot be computed safely (content too large or
+// udiff reports an inconsistency) so the caller can fall back to per-occurrence
+// diffs. Output is line-capped to keep the preview bounded.
+func renderCumulativeFileDiff(filePath, initial, final string, width int) (string, error) {
+	if len(initial)+len(final) > maxCumulativeDiffBytes {
+		return "", errCumulativeDiffTooLarge
+	}
 	short := session.ShortenPath(filePath, homeDir())
-	raw := udiff.Unified(short, short, initial, final)
+	edits := udiff.Strings(initial, final)
+	raw, err := udiff.ToUnified(short, short, initial, edits, udiff.DefaultContextLines)
+	if err != nil {
+		return "", err
+	}
 	raw = strings.TrimRight(raw, "\n")
 	if raw == "" {
-		return ""
+		return "", nil
 	}
+	lines := strings.Split(raw, "\n")
 	var b strings.Builder
-	for _, line := range strings.Split(raw, "\n") {
+	shown := 0
+	for _, line := range lines {
+		if shown >= maxCumulativeDiffLines {
+			remaining := len(lines) - shown
+			b.WriteString(diffHeaderStyle.Render(fmt.Sprintf("  ... (%d more diff lines, truncated)", remaining)) + "\n")
+			break
+		}
 		switch {
 		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
 			b.WriteString(diffHeaderStyle.Render("  "+line) + "\n")
@@ -751,8 +780,9 @@ func renderCumulativeFileDiff(filePath, initial, final string, width int) string
 		default:
 			b.WriteString(diffCtxStyle.Render("  "+line) + "\n")
 		}
+		shown++
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(b.String(), "\n"), nil
 }
 
 func (a *App) renderInspectorFiles(nodeID string) string {
