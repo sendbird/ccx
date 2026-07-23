@@ -68,8 +68,24 @@ func (a *App) memoryNotePath(fileName string) string {
 // first→last write history. In drill mode it renders the single note's body.
 // When MemorySearch is set, the list is replaced by cross-file match rows
 // (one snippet per matching line) that Enter drills into.
+//
+// Drill takes precedence over search: Enter on a search match sets MetaDrill
+// while MemorySearch stays set, so the note body renders until Esc returns to
+// the search results.
 func (a *App) metaMemoryEntries() []metaEntry {
 	sess := a.conv.sess
+
+	// Drill mode: render just the selected note's body with a back hint.
+	if a.conv.inspector.MetaDrill != "" && sess.ProjectPath != "" {
+		notes := session.LoadMemoryNotes(sess.ProjectPath, homeDir())
+		for _, note := range notes {
+			if note.FileName == a.conv.inspector.MetaDrill {
+				return a.metaMemoryDrillEntries(note)
+			}
+		}
+		// Drilled file vanished (deleted between renders) — fall back to search/list.
+		a.conv.inspector.MetaDrill = ""
+	}
 
 	if a.conv.inspector.MemorySearch != "" {
 		return a.metaMemorySearchEntries(a.conv.inspector.MemorySearch)
@@ -87,17 +103,6 @@ func (a *App) metaMemoryEntries() []metaEntry {
 		return out
 	}
 	notes := session.LoadMemoryNotes(sess.ProjectPath, homeDir())
-
-	// Drill mode: render just the selected note's body with a back hint.
-	if a.conv.inspector.MetaDrill != "" {
-		for _, note := range notes {
-			if note.FileName == a.conv.inspector.MetaDrill {
-				return a.metaMemoryDrillEntries(note)
-			}
-		}
-		// Drilled file vanished (deleted between renders) — fall back to list.
-		a.conv.inspector.MetaDrill = ""
-	}
 
 	hist := a.conv.flow.MemoryTouchHistory()
 
