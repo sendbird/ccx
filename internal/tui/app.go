@@ -496,6 +496,12 @@ type App struct {
 	cfgProjectEntries []cfgProjectEntry // all projects
 	cfgProjectInput   textinput.Model   // fuzzy search input
 	cfgProjectCursor  int               // selected index in filtered list
+	// Skill directory browser: when cfgSkillBrowse is true, cfgList holds the
+	// files of cfgSkillDir (walked recursively) and Esc returns to the main
+	// config list via rebuildCfgList.
+	cfgSkillBrowse bool
+	cfgSkillDir    string
+	cfgSkillName   string
 	cfgTrash          []cfgTrashEntry   // undo stack for deleted items
 	cfgDeleteConfirm  bool              // waiting for second x press
 	cfgActionsMenu    bool              // config actions menu open
