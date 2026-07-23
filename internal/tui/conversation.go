@@ -345,6 +345,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleBlockFilterInput(msg)
 	}
 
+	// Memory search input owns all keystrokes until it is applied or cancelled.
+	if a.conv.memorySearching {
+		return a.handleMemorySearchInput(msg)
+	}
+
 	if a.executionContextMenu {
 		return a.handleExecutionContextMenuKey(key)
 	}
@@ -447,6 +452,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return a.quit()
 	case "esc":
+		if a.conv.inspector.MemorySearch != "" {
+			a.clearMemorySearch()
+			return a, nil
+		}
 		if sp.Folds != nil && sp.Folds.BlockFilter != "" {
 			a.clearBlockFilter()
 			return a, nil
@@ -601,6 +610,13 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		result = sp.HandleFocusedKeys(key)
 		switch result {
 		case splitKeySearchFromPreview:
+			// Memory pane routes `/` to a full-text search across all memory
+			// notes (with match snippets) rather than the per-block filter.
+			if a.memoryPaneActive() {
+				a.startMemorySearch()
+				sp.Focus = true
+				return a, nil
+			}
 			// Always run the in-pane block filter when the preview pane is
 			// focused — it filters the blocks of the current message, which
 			// is the user's actual mental model of "search inside the
@@ -761,6 +777,10 @@ func (a *App) updateConvPreview() {
 	if a.conv.inspector.MetaDrill != "" && !(item.kind == convSessionMeta && item.sessionMeta == "memory") {
 		a.conv.inspector.MetaDrill = ""
 	}
+	if a.conv.inspector.MemorySearch != "" && !(item.kind == convSessionMeta && item.sessionMeta == "memory") {
+		a.conv.inspector.MemorySearch = ""
+		a.conv.memorySearching = false
+	}
 	if a.conv.inspector.MetaPlanDrill != "" && !(item.kind == convSessionMeta && item.sessionMeta == "tasksplan") {
 		a.conv.inspector.MetaPlanDrill = ""
 	}
@@ -770,6 +790,9 @@ func (a *App) updateConvPreview() {
 	// identity so list↔detail transitions reset fold state and scroll.
 	if item.kind == convSessionMeta && a.conv.inspector.MetaDrill != "" {
 		baseKey += ":memory-drill:" + a.conv.inspector.MetaDrill
+	}
+	if item.kind == convSessionMeta && a.conv.inspector.MemorySearch != "" {
+		baseKey += ":memory-search:" + a.conv.inspector.MemorySearch
 	}
 	if item.kind == convSessionMeta && a.conv.inspector.MetaPlanDrill != "" {
 		baseKey += ":plan-drill:" + a.conv.inspector.MetaPlanDrill
@@ -3143,6 +3166,85 @@ func (a *App) clearBlockFilter() {
 	sp.Folds.BlockVisible = nil
 	sp.CacheKey = "" // force re-render
 	sp.RefreshFoldPreview(a.width, a.splitRatio)
+}
+
+// --- Memory-pane full-text search ---
+
+// memoryPaneActive reports whether the focused inspector row is the memory
+// session-meta row, so `/` routes to memory search instead of the block filter.
+func (a *App) memoryPaneActive() bool {
+	item, ok := a.selectedConversationItem()
+	if !ok {
+		return false
+	}
+	return item.kind == convSessionMeta && item.sessionMeta == "memory"
+}
+
+// startMemorySearch activates the memory search input. It clears the block
+// filter and any memory drill so the three preview modes stay mutually
+// exclusive. Pre-fills with the committed query when re-entering.
+func (a *App) startMemorySearch() {
+	a.clearBlockFilter()
+	a.conv.inspector.MetaDrill = ""
+	ti := textinput.New()
+	ti.Prompt = "Search memory: "
+	ti.Placeholder = "text in any memory note…"
+	ti.CharLimit = 200
+	ti.Width = a.conv.split.PreviewWidth(a.width, a.splitRatio) - 16
+	if a.conv.inspector.MemorySearch != "" {
+		ti.SetValue(a.conv.inspector.MemorySearch)
+	}
+	ti.Focus()
+	a.conv.memorySearchTI = ti
+	a.conv.memorySearching = true
+}
+
+// handleMemorySearchInput handles key events while the memory search input is
+// active. Enter commits the query; Esc cancels the input but keeps any prior
+// committed query visible.
+func (a *App) handleMemorySearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "enter":
+		a.commitMemorySearch()
+		return a, nil
+	case "esc":
+		a.conv.memorySearching = false
+		return a, nil
+	}
+	var cmd tea.Cmd
+	a.conv.memorySearchTI, cmd = a.conv.memorySearchTI.Update(msg)
+	return a, cmd
+}
+
+// commitMemorySearch applies the typed query and re-renders the memory pane as
+// a match list.
+func (a *App) commitMemorySearch() {
+	a.conv.memorySearching = false
+	a.conv.inspector.MemorySearch = strings.TrimSpace(a.conv.memorySearchTI.Value())
+	a.conv.split.CacheKey = ""
+	if a.conv.split.Folds != nil {
+		a.conv.split.Folds.BlockCursor = 0
+	}
+	a.updateConvPreview()
+	a.focusFirstActionableMetaTarget()
+}
+
+// clearMemorySearch drops the committed query and returns the memory pane to
+// the file list. Reports handled when there was anything to clear.
+func (a *App) clearMemorySearch() bool {
+	if a.conv.inspector.MemorySearch == "" && !a.conv.memorySearching {
+		return false
+	}
+	a.conv.memorySearching = false
+	a.conv.inspector.MemorySearch = ""
+	a.conv.split.CacheKey = ""
+	if a.conv.split.Folds != nil {
+		a.conv.split.Folds.BlockCursor = 0
+	}
+	a.updateConvPreview()
+	a.focusFirstActionableMetaTarget()
+	return true
 }
 
 // renderBlockFilterHintBox renders a floating hint box for block filter syntax.

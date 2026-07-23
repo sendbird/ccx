@@ -55,6 +55,11 @@ type conversationInspector struct {
 	// MetaDrill is the memory note filename currently drilled into (file detail
 	// mode); empty means the file-list mode. Only meaningful for the memory row.
 	MetaDrill string
+	// MemorySearch is the committed full-text query for the memory row; non-empty
+	// switches the memory pane from the file list to a cross-file match list.
+	// Starting a search clears MetaDrill — search is its own mode. Cleared on Esc
+	// or when the memory row is left.
+	MemorySearch string
 	// MetaPlanDrill is the artifact key of the plan currently shown in detail.
 	// Empty means the combined tasks/plans list is shown.
 	MetaPlanDrill string

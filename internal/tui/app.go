@@ -466,6 +466,10 @@ type App struct {
 		// Block filter for preview pane
 		blockFiltering bool            // true when filter input is active
 		blockFilterTI  textinput.Model // filter text input
+
+		// Memory-pane full-text search (mutually exclusive with block filter).
+		memorySearching bool            // true when search input is active
+		memorySearchTI  textinput.Model // search text input
 	}
 	convList list.Model
 
@@ -7270,7 +7274,7 @@ func (a *App) syncAllFilterVisibility() {
 func (a *App) isInTextInput() bool {
 	return a.isFiltering() || a.moveMode || a.worktreeMode ||
 		a.sessConvSearching || a.liveInputActive || a.cfgSearching || a.cfgNaming ||
-		a.urlSearching || a.conv.blockFiltering
+		a.urlSearching || a.conv.blockFiltering || a.conv.memorySearching
 }
 
 func (a *App) isFiltering() bool {

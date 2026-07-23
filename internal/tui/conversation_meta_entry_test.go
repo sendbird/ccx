@@ -7,8 +7,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sendbird/ccx/internal/session"
 )
+
+// writeTestMemoryNotes writes memory notes (name → body) into the encoded
+// memory directory for projectPath under the real home, returning the memory
+// dir path. All created dirs/files are cleaned up via t.Cleanup.
+func writeTestMemoryNotes(t *testing.T, projectPath string, notes map[string]string) string {
+	t.Helper()
+	enc := session.EncodeProjectPath(projectPath)
+	memDir := filepath.Join(homeDir(), ".claude", "projects", enc, "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatalf("mkdir memory dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(homeDir(), ".claude", "projects", enc)) })
+	for name, body := range notes {
+		if err := os.WriteFile(filepath.Join(memDir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return memDir
+}
 
 func TestOriginVisibilityCachesTranscriptUntilRailRefresh(t *testing.T) {
 	app, sess, _ := setupConversationStateFixture(t)
@@ -294,3 +314,179 @@ func TestCurrentMetaTargetRespectsCursor(t *testing.T) {
 		t.Fatal("out-of-range cursor should yield no target")
 	}
 }
+
+func TestMemorySearchMatchesByLine(t *testing.T) {
+	note := session.MemoryNote{FileName: "x.md", Body: "alpha beta\nGAMMA the query here\nunrelated\nquery again"}
+	matches := memorySearchMatches(note, "query")
+	if len(matches) != 2 {
+		t.Fatalf("matches = %d, want 2: %+v", len(matches), matches)
+	}
+	if matches[0].lineNo != 2 || matches[1].lineNo != 4 {
+		t.Fatalf("line numbers = %d, %d, want 2, 4", matches[0].lineNo, matches[1].lineNo)
+	}
+	if memorySearchMatches(note, "QUERY") == nil {
+		t.Fatal("search should be case-insensitive")
+	}
+	if memorySearchMatches(note, "") != nil {
+		t.Fatal("empty query should yield no matches")
+	}
+}
+
+func TestHighlightMemorySnippetHighlightsAndWindows(t *testing.T) {
+	// Short line fits within budget: full content shown, no ellipsis.
+	got := highlightMemorySnippet("the quick brown fox jumps", "BROWN", 40)
+	bare := stripANSI(got)
+	if !strings.Contains(bare, "brown") {
+		t.Fatalf("snippet missing match: %q", bare)
+	}
+	if strings.Contains(bare, "…") {
+		t.Fatalf("unexpected ellipsis for short line: %q", bare)
+	}
+
+	// Long line with match in the middle: context windowed with ellipses on
+	// both sides, match preserved.
+	long := "prefix " + strings.Repeat("x", 60) + " NEEDLE " + strings.Repeat("y", 60) + " suffix"
+	got = highlightMemorySnippet(long, "needle", 30)
+	bare = stripANSI(got)
+	if !strings.Contains(strings.ToLower(bare), "needle") {
+		t.Fatalf("windowed snippet missing match: %q", bare)
+	}
+	if !strings.Contains(bare, "…") {
+		t.Fatalf("expected ellipsis for windowed context, got %q", bare)
+	}
+
+	// Match near the start should not prepend an ellipsis.
+	got = highlightMemorySnippet("query at start and a long tail of text", "query", 20)
+	bare = stripANSI(got)
+	if strings.HasPrefix(bare, "…") {
+		t.Fatalf("leading ellipsis unexpected for start match: %q", bare)
+	}
+
+	// No match falls back to a plain truncated render.
+	got = highlightMemorySnippet("nothing here", "zzz", 40)
+	if strings.TrimSpace(stripANSI(got)) != "nothing here" {
+		t.Fatalf("no-match fallback = %q", stripANSI(got))
+	}
+}
+
+func TestHighlightMemorySnippetBoundsBudget(t *testing.T) {
+	long := strings.Repeat("abcdefghij", 20) // 200 chars, no match
+	got := highlightMemorySnippet(long, "zzz", 30)
+	bare := stripANSI(got)
+	if w := lipgloss.Width(bare); w > 30 {
+		t.Fatalf("truncated snippet width = %d, want <= 30: %q", w, bare)
+	}
+}
+
+func TestHighlightMemorySnippetWideRuneBoundsBudget(t *testing.T) {
+	// CJK runes are 2 display cells each; windowing must measure display width,
+	// not rune count, so the styled snippet never exceeds the budget (which
+	// would word-wrap mid-ANSI and break the highlight).
+	wide := strings.Repeat("키", 40) // 40 runes = 80 cells, match in the middle
+	got := highlightMemorySnippet(wide, "키", 20)
+	bare := stripANSI(got)
+	if w := lipgloss.Width(bare); w > 20 {
+		t.Fatalf("wide-rune snippet width = %d, want <= 20: %q", w, bare)
+	}
+	if !strings.Contains(bare, "…") {
+		t.Fatalf("expected ellipsis for windowed wide rune: %q", bare)
+	}
+}
+
+func TestMemorySearchGroupHeaderCount(t *testing.T) {
+	note := session.MemoryNote{Name: "k7s", FileName: "k7s.md", Type: "feedback"}
+	if h := stripANSI(memorySearchGroupHeader(note, 3, 3)); !strings.Contains(h, "3 match(es)") {
+		t.Fatalf("uncapped header = %q", h)
+	}
+	if h := stripANSI(memorySearchGroupHeader(note, 10, 25)); !strings.Contains(h, "10 of 25+ matches") {
+		t.Fatalf("capped header = %q", h)
+	}
+}
+
+func TestMetaMemorySearchEntriesBuildsRowsAndTargets(t *testing.T) {
+	root := t.TempDir()
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.conv.sess.ProjectPath = root
+	writeTestMemoryNotes(t, root, map[string]string{
+		"alpha.md": "---\nname: alpha\ndescription: alpha note\nmetadata:\n  type: project\n---\nalpha first occurrence\nanother line\nalpha again here\n",
+		"beta.md":  "---\nname: beta\nmetadata:\n  type: feedback\n---\nno match in this one\n",
+	})
+
+	app.conv.inspector.MemorySearch = "alpha"
+	entries := app.metaMemoryEntries()
+	if len(entries) < 2 {
+		t.Fatalf("entries = %d, want at least header + rows", len(entries))
+	}
+	// Leading summary header.
+	if h := stripANSI(entries[0].block.Text); !strings.Contains(h, "Memory search") || !strings.Contains(h, "alpha") {
+		t.Fatalf("header = %q", h)
+	}
+	// Group header for alpha.md + at least two match rows.
+	if h := stripANSI(entries[1].block.Text); !strings.Contains(h, "alpha") {
+		t.Fatalf("group header = %q", h)
+	}
+	matchTargets := 0
+	for _, e := range entries[2:] {
+		if e.target.kind == metaTargetMemoryFile && e.target.fileName == "alpha.md" {
+			matchTargets++
+		}
+	}
+	if matchTargets < 2 {
+		t.Fatalf("match targets = %d, want >= 2", matchTargets)
+	}
+}
+
+func TestCommitMemorySearchShowsMatchesAndClearReturns(t *testing.T) {
+	root := t.TempDir()
+	app := setupConvApp(t, testEntries(), 160, 50)
+	app.currentSess.HasMemory = true
+	app.currentSess.ProjectPath = root
+	app.conv.sess = app.currentSess
+	app.conv.contextItems = buildConvContextItems(app.conv.sess, app.conv.merged, nil)
+	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
+	app.rebuildConversationList(0)
+	for i, item := range app.conv.contextItems {
+		if item.sessionMeta == "memory" {
+			app.selectConvContext(i)
+			break
+		}
+	}
+	writeTestMemoryNotes(t, root, map[string]string{
+		"gamma.md": "---\nname: gamma\nmetadata:\n  type: project\n---\nthe needle is here\n",
+	})
+
+	if !app.memoryPaneActive() {
+		t.Fatal("memory pane should be the active inspector row")
+	}
+	app.startMemorySearch()
+	if !app.conv.memorySearching || app.conv.inspector.MetaDrill != "" {
+		t.Fatalf("startMemorySearch did not activate input / clear drill: searching=%v drill=%q", app.conv.memorySearching, app.conv.inspector.MetaDrill)
+	}
+	app.conv.memorySearchTI.SetValue("needle")
+	app.commitMemorySearch()
+	if app.conv.memorySearching {
+		t.Fatal("commit should clear the typing flag")
+	}
+	if app.conv.inspector.MemorySearch != "needle" {
+		t.Fatalf("MemorySearch = %q, want needle", app.conv.inspector.MemorySearch)
+	}
+	if !strings.Contains(stripANSI(app.conv.inspector.Rendered), "needle") {
+		// Rendered may be empty if the fold preview wasn't refreshed in the test
+		// harness; fall back to checking the built entries directly.
+		entries := app.metaMemoryEntries()
+		if !strings.Contains(stripANSI(entries[0].block.Text), "Memory search") {
+			t.Fatalf("commit did not produce a search render; entries[0]=%q", entries[0].block.Text)
+		}
+	}
+
+	if !app.clearMemorySearch() {
+		t.Fatal("clearMemorySearch should report handled when a query is set")
+	}
+	if app.conv.inspector.MemorySearch != "" {
+		t.Fatalf("MemorySearch = %q after clear, want empty", app.conv.inspector.MemorySearch)
+	}
+	if app.clearMemorySearch() {
+		t.Fatal("clearMemorySearch should be a no-op when already clear")
+	}
+}
+

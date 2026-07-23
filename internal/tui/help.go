@@ -106,6 +106,9 @@ func (a *App) convHelpLine(badges string) string {
 	if a.conv.execution.Focused {
 		return formatHelp("↑↓:context ↵:open x:menu A/esc:back q:quit")
 	}
+	if a.conv.memorySearching {
+		return "  " + a.conv.memorySearchTI.View() + helpStyle.Render("  enter:apply esc:cancel")
+	}
 	if a.conv.blockFiltering {
 		return "  " + a.conv.blockFilterTI.View() + helpStyle.Render("  enter:apply esc:cancel")
 	}
@@ -125,6 +128,8 @@ func (a *App) convHelpLine(badges string) string {
 			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions("inspector")...))
 		}
 		switch {
+		case a.conv.inspector.MemorySearch != "":
+			escLabel = "clear search"
 		case sp.Folds != nil && sp.Folds.BlockFilter != "":
 			escLabel = "clear filter"
 		case len(a.conv.inspector.History) > 0 || a.conv.inspector.Zoom || a.conv.inspector.MetaDrill != "" || a.conv.inspector.MetaPlanDrill != "":
