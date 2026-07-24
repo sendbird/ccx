@@ -1194,10 +1194,19 @@ func (a *App) installRemoteSession(sess *remote.Session, steps <-chan remote.Set
 	}
 
 	virtualID := "remote-" + sess.PodName
+	// Use a unique project path for remote sessions so they appear as their own
+	// project row in the project-centric view, not buried under the local
+	// project they were started from.
+	remoteProjectPath := sess.Config.LocalDir
+	if sess.Config.IsSSH() {
+		remoteProjectPath = "ssh:" + sess.Config.Host
+	} else {
+		remoteProjectPath = "remote:" + sess.PodName
+	}
 	virtualSess := session.Session{
 		ID:              virtualID,
 		ShortID:         sess.PodName,
-		ProjectPath:     sess.Config.LocalDir,
+		ProjectPath:     remoteProjectPath,
 		ProjectName:     projectName,
 		ModTime:         time.Now(),
 		IsRemote:        true,
