@@ -28,14 +28,7 @@ func DefaultShortcuts() Shortcuts {
 			},
 		},
 		"config": {
-			Left: ShortcutMap{
-				"1": "page:overview",
-				"2": "page:memory",
-				"3": "page:project",
-				"4": "page:skills",
-				"5": "page:hooks",
-				"6": "page:mcp",
-			},
+			Left: flowOrderConfigLeft(),
 		},
 		"stats": {
 			Left: ShortcutMap{
@@ -54,6 +47,7 @@ func mergeShortcuts(dst Shortcuts, src Shortcuts) {
 	// clobbers it — the default (dst) always has a "0" key, so the decision must
 	// be based on what the user actually persisted.
 	staleSessions := isPreZeroSessionsLayout(src)
+	staleConfig := isStaleConfigLayout(src)
 
 	for viewName, srcVS := range src {
 		dstVS, ok := dst[viewName]
@@ -81,6 +75,9 @@ func mergeShortcuts(dst Shortcuts, src Shortcuts) {
 	}
 	if staleSessions {
 		dst["sessions"] = ViewShortcuts{Left: flowOrderSessionsLeft(), Right: dst["sessions"].Right}
+	}
+	if staleConfig {
+		dst["config"] = ViewShortcuts{Left: flowOrderConfigLeft(), Right: dst["config"].Right}
 	}
 }
 
@@ -114,6 +111,38 @@ func flowOrderSessionsLeft() ShortcutMap {
 		"8": "preview:wf",
 		"9": "preview:shells",
 	}
+}
+
+// flowOrderConfigLeft is the canonical config.left layout: number keys 1-9 map
+// to the config header tabs in order (ALL, MEMORY, SKILLS, AGENTS, COMMANDS,
+// HOOKS, MCP, ENTERPRISE, PLUGINS).
+func flowOrderConfigLeft() ShortcutMap {
+	return ShortcutMap{
+		"1": "page:all",
+		"2": "page:memory",
+		"3": "page:skills",
+		"4": "page:agents",
+		"5": "page:commands",
+		"6": "page:hooks",
+		"7": "page:mcp",
+		"8": "page:enterprise",
+		"9": "page:plugins",
+	}
+}
+
+// isStaleConfigLayout reports whether the user config's config.left is the
+// pre-tab layout (1=overview, 2=memory, 3=project, 4=skills, 5=hooks, 6=mcp)
+// that should be migrated to the flow-ordered tab layout. A customized layout
+// (has a "9", or "3" != page:project) is left alone.
+func isStaleConfigLayout(src Shortcuts) bool {
+	c, ok := src["config"]
+	if !ok || c.Left == nil {
+		return false
+	}
+	if _, hasNine := c.Left["9"]; hasNine {
+		return false
+	}
+	return c.Left["3"] == "page:project"
 }
 
 // migrateShortcuts rewrites a stale pre-0 sessions layout in place to the

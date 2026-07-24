@@ -199,69 +199,55 @@ func buildCmdRegistry() []cmdEntry {
 			},
 		},
 
-		// Page filters — config pages
+		// Page filters — config pages. These go through enterCfgPage so the
+		// header tab highlight stays in sync with the number-key shortcut.
 		{
-			name: "page:memory", aliases: []string{"p:memory", "page:mem"},
-			desc: "filter to memory/global", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) {
-				if a.state == viewConfig {
-					a.cfgFilterCat = cfgFilterMemory
-					a.rebuildCfgList()
-				}
-				return a, nil
-			},
+			name: "page:all", aliases: []string{"p:all"}, desc: "all config (ALL tab)", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(0); return a, nil },
 		},
-		// Config page filters
+		{
+			name: "page:memory", aliases: []string{"p:memory", "page:mem"}, desc: "filter to memory/global", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(1); return a, nil },
+		},
+		{name: "page:skills", aliases: []string{"p:skills"}, desc: "filter to skills", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(2); return a, nil }},
+		{name: "page:agents", aliases: []string{"p:agents"}, desc: "filter to agents", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(3); return a, nil }},
+		{name: "page:commands", aliases: []string{"p:commands", "page:cmds"}, desc: "filter to commands", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(4); return a, nil }},
+		{name: "page:hooks", aliases: []string{"p:hooks"}, desc: "filter to hooks", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(5); return a, nil }},
+		{name: "page:mcp", aliases: []string{"p:mcp"}, desc: "filter to MCP", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(6); return a, nil }},
+		{name: "page:enterprise", aliases: []string{"p:enterprise", "p:ent"}, desc: "filter to enterprise", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(7); return a, nil }},
+		{name: "page:plugins", aliases: []string{"p:plugins", "p:plg"}, desc: "plugins page", views: cmdConfig,
+			action: func(a *App) (tea.Model, tea.Cmd) { a.enterCfgPage(8); return a, nil }},
+		// Non-tab config filters (no header tab; reached via :page:<name>).
 		{name: "page:project", aliases: []string{"p:project", "page:proj"}, desc: "filter to project", views: cmdConfig,
 			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgPluginsPage = false
 				a.cfgFilterCat = int(session.ConfigProject)
 				a.rebuildCfgList()
 				return a, nil
 			}},
 		{name: "page:local", aliases: []string{"p:local"}, desc: "filter to local", views: cmdConfig,
 			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgPluginsPage = false
 				a.cfgFilterCat = int(session.ConfigLocal)
-				a.rebuildCfgList()
-				return a, nil
-			}},
-		{name: "page:skills", aliases: []string{"p:skills"}, desc: "filter to skills", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.cfgFilterCat = int(session.ConfigSkill)
-				a.rebuildCfgList()
-				return a, nil
-			}},
-		{name: "page:agents", aliases: []string{"p:agents"}, desc: "filter to agents", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.cfgFilterCat = int(session.ConfigAgent)
-				a.rebuildCfgList()
-				return a, nil
-			}},
-		{name: "page:commands", aliases: []string{"p:commands", "page:cmds"}, desc: "filter to commands", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.cfgFilterCat = int(session.ConfigCommand)
-				a.rebuildCfgList()
-				return a, nil
-			}},
-		{name: "page:mcp", aliases: []string{"p:mcp"}, desc: "filter to MCP", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.cfgFilterCat = int(session.ConfigMCP)
-				a.rebuildCfgList()
-				return a, nil
-			}},
-		{name: "page:hooks", aliases: []string{"p:hooks"}, desc: "filter to hooks", views: cmdConfig,
-			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.cfgFilterCat = int(session.ConfigHook)
 				a.rebuildCfgList()
 				return a, nil
 			}},
 		{name: "page:keymaps", aliases: []string{"p:keymaps", "p:km"}, desc: "filter to keymaps", views: cmdConfig,
 			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgPluginsPage = false
 				a.cfgFilterCat = int(session.ConfigKeymap)
 				a.rebuildCfgList()
 				return a, nil
 			}},
 		{name: "page:shortcuts", aliases: []string{"p:shortcuts", "p:sc"}, desc: "filter to shortcuts", views: cmdConfig,
 			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.cfgPluginsPage = false
 				a.cfgFilterCat = int(session.ConfigShortcut)
 				a.rebuildCfgList()
 				return a, nil
@@ -279,8 +265,7 @@ func buildCmdRegistry() []cmdEntry {
 				if a.state == viewGlobalStats {
 					a.statsDetail = statsDetailNone
 				} else if a.state == viewConfig {
-					a.cfgFilterCat = cfgFilterAll
-					a.rebuildCfgList()
+					a.enterCfgPage(0)
 				}
 				return a, nil
 			}},
@@ -563,7 +548,7 @@ func (a *App) updateCmdSuggestions() {
 				cmdEntry{name: "refresh", desc: "reload sessions"})
 		case viewConfig:
 			a.cmdSuggestions = append(a.cmdSuggestions,
-				cmdEntry{name: "page:", desc: "memory project hooks mcp ..."})
+				cmdEntry{name: "page:", desc: "all memory skills agents commands hooks mcp enterprise plugins ..."})
 		case viewGlobalStats:
 			a.cmdSuggestions = append(a.cmdSuggestions,
 				cmdEntry{name: "page:", desc: "tools errors overview"})
