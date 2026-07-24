@@ -433,16 +433,16 @@ func (a *App) handleExecutionRailKey(key string) bool {
 	case a.keymap.Conversation.Actions:
 		a.executionContextMenu = true
 	case "home":
-		rail.CursorKey = contexts[0].Key
+		a.moveExecutionCursor(contexts[0].Key)
 	case "end":
-		rail.CursorKey = contexts[len(contexts)-1].Key
+		a.moveExecutionCursor(contexts[len(contexts)-1].Key)
 	case "up", "k":
 		if idx > 0 {
-			rail.CursorKey = contexts[idx-1].Key
+			a.moveExecutionCursor(contexts[idx-1].Key)
 		}
 	case "down", "j":
 		if idx+1 < len(contexts) {
-			rail.CursorKey = contexts[idx+1].Key
+			a.moveExecutionCursor(contexts[idx+1].Key)
 		}
 	case "enter", "right":
 		rail.Focused = false
@@ -451,6 +451,17 @@ func (a *App) handleExecutionRailKey(key string) bool {
 		return false
 	}
 	return true
+}
+
+// moveExecutionCursor switches the active execution context to key and keeps
+// the rail focused so further up/down navigation continues to update the
+// conversation in place. activateExecutionContext clears rail.Focused, so it is
+// restored after the switch.
+func (a *App) moveExecutionCursor(key string) {
+	rail := &a.conv.execution
+	rail.CursorKey = key
+	a.activateExecutionContext(key, true)
+	rail.Focused = true
 }
 
 func executionStatusGlyph(status string) string {
