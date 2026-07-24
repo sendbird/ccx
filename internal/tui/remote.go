@@ -398,8 +398,11 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 			a.remoteContent = a.buildRemoteProgressView(a.remoteSession, "")
 		}
 		a.updateRemotePreview(msg.podName)
-		a.copiedMsg = "Remote ready — Enter:attach  L:fetch preview"
-		return a, nil
+		a.copiedMsg = "Remote ready — fetching session..."
+		// Auto-fetch the remote session JSONL so the preview shows the
+		// conversation content (like a normal session) instead of just the
+		// static progress card.
+		return a, a.autoFetchRemoteSession(msg.podName)
 	}
 
 	// Accumulate progress
@@ -517,6 +520,24 @@ func (a *App) fetchRemotePreview(sess session.Session) (tea.Model, tea.Cmd) {
 	a.copiedMsg = "Fetching session from pod..."
 	return a, func() tea.Msg {
 		t := cfg.BuildTransportForPod(podName)
+		data, err := remote.FetchSessionJSONL(cfg, t)
+		return remoteFetchMsg{podName: podName, data: data, err: err}
+	}
+}
+
+// autoFetchRemoteSession returns a tea.Cmd that fetches the remote session
+// JSONL so the preview can render the conversation content. Called
+// automatically when the remote setup completes ("Ready").
+func (a *App) autoFetchRemoteSession(podName string) tea.Cmd {
+	return func() tea.Msg {
+		if a.remoteSession == nil {
+			return remoteFetchMsg{podName: podName, err: fmt.Errorf("no active remote session")}
+		}
+		cfg := a.remoteSession.Config
+		t := cfg.BuildTransportForPod(podName)
+		if cfg.IsSSH() {
+			t = a.remoteSession.Transport
+		}
 		data, err := remote.FetchSessionJSONL(cfg, t)
 		return remoteFetchMsg{podName: podName, data: data, err: err}
 	}
