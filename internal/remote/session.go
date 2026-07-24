@@ -38,7 +38,11 @@ func Start(cfg Config, claudeDir, projectPath string) (*Session, <-chan SetupSte
 	ctx, cancel := context.WithCancel(context.Background())
 	podName := cfg.PodName
 	if podName == "" {
-		podName = GeneratePodName()
+		if cfg.IsSSH() {
+			podName = "ssh-" + hostSlug(cfg.Host)
+		} else {
+			podName = GeneratePodName()
+		}
 	}
 	sess := &Session{
 		Config:    cfg,
