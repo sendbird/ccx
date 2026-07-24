@@ -37,13 +37,19 @@ func TestDefaultShortcuts(t *testing.T) {
 		t.Errorf("conversation right 3 = %q, want detail:verbose", conv.Right["3"])
 	}
 
-	// Config view
+	// Config view — number keys 1-9 map to the header tabs in order.
 	cfg, ok := sc["config"]
 	if !ok {
 		t.Fatal("expected config view shortcuts")
 	}
-	if cfg.Left["1"] != "page:overview" {
-		t.Errorf("config left 1 = %q, want page:overview", cfg.Left["1"])
+	wantCfg := flowOrderConfigLeft()
+	for k, v := range wantCfg {
+		if cfg.Left[k] != v {
+			t.Errorf("config left %s = %q, want %q", k, cfg.Left[k], v)
+		}
+	}
+	if len(cfg.Left) != 9 {
+		t.Errorf("config left shortcuts = %d, want 9", len(cfg.Left))
 	}
 
 	// Stats view
@@ -161,11 +167,46 @@ func TestMergeShortcutsMigratesStaleUserConfig(t *testing.T) {
 	}
 }
 
+func TestMergeShortcutsMigratesStaleConfigLayout(t *testing.T) {
+	dst := DefaultShortcuts()
+	// Stale pre-tab config layout from an older ccx: 1=overview, 2=memory,
+	// 3=project, 4=skills, 5=hooks, 6=mcp (no 9 key).
+	user := Shortcuts{"config": ViewShortcuts{Left: ShortcutMap{
+		"1": "page:overview", "2": "page:memory", "3": "page:project",
+		"4": "page:skills", "5": "page:hooks", "6": "page:mcp",
+	}}}
+	mergeShortcuts(dst, user)
+	cl := dst["config"].Left
+	want := flowOrderConfigLeft()
+	for k, v := range want {
+		if cl[k] != v {
+			t.Errorf("config left %s = %q, want %q (not migrated)", k, cl[k], v)
+		}
+	}
+	if cl["3"] == "page:project" {
+		t.Error("stale page:project on key 3 should have been migrated to page:skills")
+	}
+}
+
+func TestMergeShortcutsPreservesCustomConfigLayout(t *testing.T) {
+	dst := DefaultShortcuts()
+	// A customized config layout (has a 9 key) is left alone, not migrated.
+	user := Shortcuts{"config": ViewShortcuts{Left: ShortcutMap{
+		"1": "page:all", "2": "page:memory", "3": "page:skills",
+		"4": "page:agents", "5": "page:commands", "6": "page:hooks",
+		"7": "page:mcp", "8": "page:enterprise", "9": "page:plugins",
+	}}}
+	mergeShortcuts(dst, user)
+	cl := dst["config"].Left
+	if cl["9"] != "page:plugins" {
+		t.Errorf("custom config left 9 = %q, want page:plugins", cl["9"])
+	}
+}
+
 func TestShortcutHint(t *testing.T) {
 	app := newTestApp(fakeSessions())
 	app.shortcuts = DefaultShortcuts()
 	app.state = viewSessions
-
 	hint := app.shortcutHint()
 	if hint == "" {
 		t.Fatal("expected non-empty hint for sessions view")
