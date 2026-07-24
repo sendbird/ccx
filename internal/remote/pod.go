@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/sendbird/ccx/internal/tmux"
 )
 
 // podSpec generates a Kubernetes pod JSON spec.
@@ -188,4 +190,53 @@ func DeletePod(ctx context.Context, cfg Config, podName string) error {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// kubectlTransport runs Claude in a Kubernetes pod via kubectl exec.
+type kubectlTransport struct {
+	cfg     Config
+	podName string
+}
+
+func (t *kubectlTransport) Exec(ctx context.Context, cmd ...string) ([]byte, error) {
+	return ExecInPod(ctx, t.cfg, t.podName, cmd...)
+}
+
+func (t *kubectlTransport) ExecInteractive(cmd ...string) *exec.Cmd {
+	return ExecInteractive(t.cfg, t.podName, cmd...)
+}
+
+func (t *kubectlTransport) Upload(ctx context.Context, destDir string, tarball []byte) error {
+	return UploadTarball(ctx, t.cfg, t.podName, t.cfg.Container, destDir, tarball)
+}
+
+// Prepare creates or reuses the pod and waits for it to be ready.
+func (t *kubectlTransport) Prepare(ctx context.Context) error {
+	if phase, err := PodPhase(ctx, t.cfg, t.podName); err == nil && (phase == "Running" || phase == "Pending") {
+		return nil
+	}
+	token, err := tmux.ExtractClaudeOAuthToken()
+	if err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	if err := CreatePod(ctx, t.cfg, t.podName, token); err != nil {
+		return fmt.Errorf("create pod: %w", err)
+	}
+	if err := WaitForPod(ctx, t.cfg, t.podName, 3*time.Minute); err != nil {
+		DeletePod(context.Background(), t.cfg, t.podName)
+		return fmt.Errorf("pod not ready: %w", err)
+	}
+	return nil
+}
+
+func (t *kubectlTransport) Release(ctx context.Context) error {
+	return DeletePod(ctx, t.cfg, t.podName)
+}
+
+func (t *kubectlTransport) Status(ctx context.Context) (string, error) {
+	return PodPhase(ctx, t.cfg, t.podName)
+}
+
+func (t *kubectlTransport) Target() string {
+	return fmt.Sprintf("%s/%s/%s", t.cfg.Context, t.cfg.Namespace, t.podName)
 }

@@ -19,10 +19,13 @@ func CurrentContext() (string, error) {
 
 // Config holds settings for a remote Claude execution.
 type Config struct {
-	Context           string            `yaml:"context"`             // kubectl --context (required)
-	Namespace         string            `yaml:"namespace"`           // target namespace
-	PodName           string            `yaml:"pod_name"`            // fixed pod name to reuse (optional)
-	Container         string            `yaml:"container"`           // target container name (optional)
+	Transport         string            `yaml:"transport"`           // "k8s" (default) or "ssh"
+	Host              string            `yaml:"host"`                // SSH target: alias / user@host[:port] / ssh://…
+	SSHExtraArgs      []string          `yaml:"ssh_extra_args"`      // extra args appended to ssh
+	Context           string            `yaml:"context"`             // kubectl --context (k8s, required)
+	Namespace         string            `yaml:"namespace"`           // target namespace (k8s)
+	PodName           string            `yaml:"pod_name"`            // fixed pod name to reuse (optional, k8s)
+	Container         string            `yaml:"container"`           // target container name (optional, k8s)
 	RemoteUser        string            `yaml:"remote_user"`         // user to run Claude as
 	RemoteHome        string            `yaml:"remote_home"`         // remote user's home directory
 	Image             string            `yaml:"image"`               // container image
@@ -51,6 +54,25 @@ type Config struct {
 
 // Defaults returns a Config with sensible defaults filled in.
 func (c Config) Defaults() Config {
+	if c.Transport == "" {
+		c.Transport = transportK8s
+	}
+	if c.Transport == transportSSH {
+		// SSH mode: keep user/home/workdir defaults; skip k8s-only fields.
+		if c.RemoteUser == "" {
+			c.RemoteUser = "claude"
+		}
+		if c.RemoteHome == "" {
+			c.RemoteHome = "/home/" + c.RemoteUser
+		}
+		if c.GitBranch == "" {
+			c.GitBranch = "main"
+		}
+		if c.WorkDir == "" {
+			c.WorkDir = "/workspace"
+		}
+		return c
+	}
 	if c.Context == "" {
 		c.Context, _ = CurrentContext()
 	}
@@ -86,10 +108,35 @@ func (c Config) Defaults() Config {
 
 // Validate checks required fields.
 func (c Config) Validate() error {
+	if c.Transport == transportSSH {
+		if c.Host == "" {
+			return fmt.Errorf("host is required for ssh transport")
+		}
+		return nil
+	}
 	if c.Context == "" {
 		return fmt.Errorf("context is required")
 	}
 	return nil
+}
+
+// IsSSH reports whether this config uses the SSH transport.
+func (c Config) IsSSH() bool { return c.Transport == transportSSH }
+
+// BuildTransport returns the Transport implementation for this config. It does
+// not Prepare the transport; callers do that during setup.
+func (c Config) BuildTransport() Transport {
+	if c.IsSSH() {
+		return &sshTransport{cfg: c}
+	}
+	return &kubectlTransport{cfg: c}
+}
+
+// BuildTransportForPod returns a kubectlTransport bound to podName. Convenience
+// for callers that operate on saved k8s pods without a full Start() flow.
+func (c Config) BuildTransportForPod(podName string) Transport {
+	t := &kubectlTransport{cfg: c, podName: podName}
+	return t
 }
 
 // GeneratePodName creates a unique pod name.
