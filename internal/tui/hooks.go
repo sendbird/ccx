@@ -275,9 +275,9 @@ func renderHookEvent(sb *strings.Builder, event string, matchers []hookMatcher, 
 				indent = "    "
 			}
 
-			maxW := width - len(indent) - 5 - len(typeTag)
-			if maxW > 0 && len(cmd) > maxW {
-				cmd = cmd[:maxW-3] + "..."
+			maxW := width - lipgloss.Width(indent) - 5 - lipgloss.Width(typeTag)
+			if maxW > 0 && lipgloss.Width(cmd) > maxW {
+				cmd = truncateContextText(cmd, maxW)
 			}
 			sb.WriteString(fmt.Sprintf("  %s %s %s%s\n", indent, connStyle.Render(childConn), typeTag, cmd))
 		}

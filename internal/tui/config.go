@@ -537,15 +537,33 @@ func wordWrap(text string, width int) string {
 		if i > 0 {
 			sb.WriteByte('\n')
 		}
-		if len(line) <= width {
+		if lipgloss.Width(line) <= width {
 			sb.WriteString(line)
 			continue
 		}
-		// Simple character-level wrap for long lines
-		for len(line) > width {
-			sb.WriteString(line[:width])
+		// Cell-width-aware hard wrap: cut at rune boundaries so CJK/emoji
+		// never split mid-codepoint and each row fits `width` display cells.
+		for lipgloss.Width(line) > width {
+			cut := 0
+			w := 0
+			for _, r := range line {
+				rw := lipgloss.Width(string(r))
+				if w+rw > width {
+					break
+				}
+				w += rw
+				cut += len(string(r))
+			}
+			if cut == 0 { // a single rune wider than `width`; force-emit it
+				r := []rune(line)
+				sb.WriteString(string(r[0]))
+				line = string(r[1:])
+				sb.WriteByte('\n')
+				continue
+			}
+			sb.WriteString(line[:cut])
 			sb.WriteByte('\n')
-			line = line[width:]
+			line = line[cut:]
 		}
 		sb.WriteString(line)
 	}
