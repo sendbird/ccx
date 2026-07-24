@@ -630,8 +630,17 @@ func (a *App) setSessionListFilter(query string) {
 // built list. When the filter is the auto-applied active-state default and it
 // leaves the browser empty (e.g. no live/input/monitor sessions right now),
 // clear it so the user sees their sessions instead of a blank screen.
+//
+// When there are active remote sessions, the startup filter is skipped entirely
+// so the remote session's project header and row are visible without being
+// hidden by a state filter like is:done.
 func (a *App) applyStartupFilter() {
 	if a.config.SearchQuery == "" {
+		return
+	}
+	if a.hasRemoteSessions() {
+		a.sessionList.ResetFilter()
+		a.autoStateFilter = false
 		return
 	}
 	applyListFilter(&a.sessionList, a.config.SearchQuery)
@@ -641,6 +650,17 @@ func (a *App) applyStartupFilter() {
 		a.config.SearchQuery = ""
 		a.autoStateFilter = false
 	}
+}
+
+// hasRemoteSessions reports whether a.sessions contains any remote (SSH/k8s)
+// virtual session.
+func (a *App) hasRemoteSessions() bool {
+	for _, s := range a.sessions {
+		if s.IsRemote {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) visibleProjectBrowserItems() int {
@@ -7930,14 +7950,21 @@ func (a *App) rebuildSessionList() {
 	// blank-guard (applyStartupFilter) so a background rebuild that finds nothing
 	// live/input/mon right now clears the filter instead of stranding the user on
 	// a "No items" screen. An explicit user filter is reapplied verbatim.
-	if filterTerm != "" && a.autoStateFilter && filterTerm == defaultActiveStateFilter {
+	//
+	// When there are active remote sessions, skip ALL filter re-application so
+	// the remote session's project header and row are visible without being
+	// hidden by a state filter like is:done.
+	if a.hasRemoteSessions() {
+		a.sessionList.ResetFilter()
+		a.autoStateFilter = false
+	} else if filterTerm != "" && a.autoStateFilter && filterTerm == defaultActiveStateFilter {
 		a.applyStartupFilter()
 	} else if filterTerm != "" {
 		applyListFilter(&a.sessionList, filterTerm)
 	}
 
 	// Also re-apply startup search query if no interactive filter was active
-	if filterTerm == "" {
+	if filterTerm == "" && !a.hasRemoteSessions() {
 		a.applyStartupFilter()
 	}
 
