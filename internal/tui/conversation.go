@@ -2495,8 +2495,8 @@ func (a *App) renderAgentsSummary(width int) string {
 		sb.WriteString(fmt.Sprintf("  %s %s%s%s\n", style.Render(icon), typeBadge, style.Render(ag.ShortID), dur))
 		if ag.FirstPrompt != "" {
 			prompt := ag.FirstPrompt
-			if len(prompt) > width-6 {
-				prompt = prompt[:width-9] + "..."
+			if lipgloss.Width(prompt) > width-6 {
+				prompt = truncateContextText(prompt, width-6)
 			}
 			sb.WriteString(dimStyle.Render("    "+prompt) + "\n")
 		}
@@ -2536,8 +2536,8 @@ func (a *App) renderBgJobsSummary(width int) string {
 			icon = iconStopped
 		}
 		label := desc
-		if len(label) > width-10 {
-			label = label[:width-13] + "..."
+		if lipgloss.Width(label) > width-10 {
+			label = truncateContextText(label, width-10)
 		}
 		sb.WriteString(fmt.Sprintf("  %s %s %s\n", style.Render(icon), dimStyle.Render(id), style.Render(label)))
 	}

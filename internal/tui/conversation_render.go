@@ -118,14 +118,12 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 			}
 		}
 
-		maxW := width - len(indent) - 6
+		maxW := width - lipgloss.Width(indent) - 6
 		label := ci.label
 		if filterTerm != "" && maxW > 0 {
 			label = highlightSnippet(label, filterTerm, maxW, style)
 		} else {
-			if maxW > 3 && len(label) > maxW {
-				label = label[:maxW-3] + "..."
-			}
+							label = truncateContextText(label, maxW)
 			label = style.Render(label)
 		}
 		line := fmt.Sprintf("%s%s %s %s", indent, cursor, status, label)
@@ -166,11 +164,9 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 				if selected {
 					style = selectedStyle
 				}
-				maxW := width - len(indent) - 12
+				maxW := width - lipgloss.Width(indent) - 12
 				if opDesc != "" {
-					if maxW > 3 && len(opDesc) > maxW {
-						opDesc = opDesc[:maxW-3] + "..."
-					}
+											opDesc = truncateContextText(opDesc, maxW)
 					label = "· " + style.Render(opDesc)
 				} else {
 					if selected {
@@ -198,7 +194,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		}
 		subj := ci.task.Subject
 		idW := lipgloss.Width(idLabel)
-		maxW := width - len(indent) - 6 - idW
+		maxW := width - lipgloss.Width(indent) - 6 - idW
 		style := dimStyle
 		if selected {
 			style = selectedStyle
@@ -206,9 +202,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		if filterTerm != "" && maxW > 0 {
 			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, highlightSnippet(subj, filterTerm, maxW, style))
 		} else {
-			if maxW > 3 && len(subj) > maxW {
-				subj = subj[:maxW-3] + "..."
-			}
+							subj = truncateContextText(subj, maxW)
 			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, style.Render(subj))
 		}
 	case convAgent:
@@ -247,7 +241,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		}
 		msgs := dimStyle.Render(fmt.Sprintf("(%dm)", a.MsgCount))
 		prompt := a.FirstPrompt
-		maxW := width - len(indent) - 20
+		maxW := width - lipgloss.Width(indent) - 20
 		style := dimStyle
 		if selected {
 			style = selectedStyle
@@ -255,9 +249,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		if filterTerm != "" && maxW > 0 {
 			line = fmt.Sprintf("%s%s %s%s %s %s", indent, cursor, badge, typeStr, msgs, highlightSnippet(prompt, filterTerm, maxW, style))
 		} else {
-			if maxW > 3 && len(prompt) > maxW {
-				prompt = prompt[:maxW-3] + "..."
-			}
+							prompt = truncateContextText(prompt, maxW)
 			line = fmt.Sprintf("%s%s %s%s %s %s", indent, cursor, badge, typeStr, msgs, style.Render(prompt))
 		}
 	}
@@ -472,9 +464,7 @@ func convMsgPreview(e session.Entry, maxW int) string {
 			for strings.Contains(text, "  ") {
 				text = strings.ReplaceAll(text, "  ", " ")
 			}
-			if len(text) > maxW {
-				text = text[:maxW-3] + "..."
-			}
+							text = truncateContextText(text, maxW)
 			return text
 		}
 	}
@@ -489,9 +479,7 @@ func convMsgPreview(e session.Entry, maxW int) string {
 				return errorStyle.Render("[error]")
 			}
 			text = "[error] " + text
-			if len(text) > maxW {
-				text = text[:maxW-3] + "..."
-			}
+							text = truncateContextText(text, maxW)
 			return errorStyle.Render(text)
 		}
 	}
@@ -504,17 +492,13 @@ func convMsgPreview(e session.Entry, maxW int) string {
 	}
 	if images > 0 {
 		s := fmt.Sprintf("[%d image(s)]", images)
-		if len(s) > maxW {
-			s = s[:maxW-3] + "..."
-		}
+					s = truncateContextText(s, maxW)
 		return dimStyle.Render(s)
 	}
 	// Summarize tools
 	summary := mergedToolSummary(e)
 	if summary != "" {
-		if len(summary) > maxW {
-			summary = summary[:maxW-3] + "..."
-		}
+					summary = truncateContextText(summary, maxW)
 		return toolStyle.Render(summary)
 	}
 	return ""
@@ -1187,10 +1171,7 @@ func truncate(s string, maxW int) string {
 
 func compactTreeLabel(kind, text string, maxW int) string {
 	label := kind + ": " + strings.TrimSpace(text)
-	if len(label) <= maxW || maxW <= 3 {
-		return label
-	}
-	return label[:maxW-3] + "..."
+	return truncateContextText(label, maxW)
 }
 
 func agentTreeName(a session.Subagent) string {
@@ -1316,9 +1297,7 @@ func resolveTaskLabel(icon, verb, taskID string, agentsByID map[string]session.S
 	}
 	if cmd, ok := bgTasks[taskID]; ok {
 		short := cmd
-		if len(short) > maxW {
-			short = short[:maxW-3] + "..."
-		}
+					short = truncateContextText(short, maxW)
 		return icon + " " + short, icon + " " + verb + ": " + cmd
 	}
 	shortID := taskID

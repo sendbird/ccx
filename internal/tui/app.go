@@ -6540,7 +6540,7 @@ func renderContextNode(sb *strings.Builder, node session.ContextNode, prefix str
 	}
 	line := contextNodeLine(node)
 	if width > 0 {
-		line = truncateContextText(line, width-len(prefix)-3)
+		line = truncateContextText(line, width-lipgloss.Width(prefix)-3)
 	}
 	style := dimStyle
 	if node.Used {
@@ -6578,10 +6578,22 @@ func contextNodeLine(node session.ContextNode) string {
 }
 
 func truncateContextText(s string, maxLen int) string {
-	if maxLen <= 3 || len(s) <= maxLen {
+	if maxLen <= 3 || lipgloss.Width(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	// Cell-width aware, rune-boundary safe: byte-slicing s[:maxLen-3] split
+	// multi-byte runes (invalid UTF-8) and mis-sized CJK/emoji.
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > maxLen-3 {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "..."
 }
 
 func oneLine(s string) string {
