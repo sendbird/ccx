@@ -64,7 +64,7 @@ func renderConvMsg(w io.Writer, ci convItem, selected bool, width int, clamp lip
 	imgBadge := ""
 	for _, block := range e.Content {
 		if block.Type == "image" {
-			imgBadge = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#87CEEB")).Render(iconImage)
+			imgBadge = " " + lipgloss.NewStyle().Foreground(colorSkyBlue).Render(iconImage)
 			break
 		}
 	}
@@ -105,7 +105,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 			case "stopped":
 				status = dimStyle.Render(iconStopped)
 			case "running":
-				status = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render(iconActive)
+				status = lipgloss.NewStyle().Foreground(colorSuccess).Render(iconActive)
 			}
 		case convTask:
 			switch ci.task.Status {
@@ -234,14 +234,14 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		case "stopped":
 			badge = dimStyle.Render(iconStopped)
 		case "running":
-			badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render(iconActive)
+			badge = lipgloss.NewStyle().Foreground(colorSuccess).Render(iconActive)
 		}
 		typeStr := ""
 		if a.AgentType == "aside_question" {
 			if ci.agentStatus == "" {
-				badge = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render("?")
+				badge = lipgloss.NewStyle().Foreground(colorPurple).Render("?")
 			}
-			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render(":btw")
+			typeStr = lipgloss.NewStyle().Foreground(colorPurple).Render(":btw")
 		} else if a.AgentType != "" {
 			typeStr = dimStyle.Render(":" + a.AgentType)
 		}

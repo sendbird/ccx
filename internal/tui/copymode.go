@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	selectBg = lipgloss.NewStyle().Background(lipgloss.Color("#3B4D7A")).Foreground(lipgloss.Color("#E2E8F0"))
-	cursorBg = lipgloss.NewStyle().Background(lipgloss.Color("#2A3A5C")).Foreground(lipgloss.Color("#E2E8F0"))
+	selectBg = lipgloss.NewStyle().Background(colorNavy).Foreground(colorLight)
+	cursorBg = lipgloss.NewStyle().Background(colorNavyDark).Foreground(colorLight)
 )
 
 func (a *App) renderedInspectorText() string {

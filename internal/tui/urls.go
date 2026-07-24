@@ -422,9 +422,9 @@ func (a *App) renderURLMenu() string {
 	}
 
 	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+	sel := lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true)
 	d := dimStyle
-	catStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366F1")).Bold(true)
+	catStyle := lipgloss.NewStyle().Foreground(colorIndigo).Bold(true)
 
 	isFiles := a.isFileScope()
 	catBadge := func(cat string) string {
