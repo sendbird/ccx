@@ -149,6 +149,11 @@ func TestCompletedProjectsToggleFallsBackWhenNoDoneMatches(t *testing.T) {
 }
 
 func TestNewAppDefaultsToProjectsBrowserModeOnStartup(t *testing.T) {
+	// Isolate from the developer's ~/.config/ccx/config.yaml: NewApp restores
+	// persisted preferences (including group_mode), which would otherwise
+	// override the project-centric default on machines with a non-default
+	// local config.
+	t.Setenv("HOME", t.TempDir())
 	app := NewApp(fakeSessions(), Config{TmuxEnabled: true})
 	if app.sessGroupMode != groupProjectCentric {
 		t.Fatalf("expected default startup group mode to be project-centric, got %d", app.sessGroupMode)
@@ -160,6 +165,7 @@ func TestNewAppDefaultsToProjectsBrowserModeOnStartup(t *testing.T) {
 }
 
 func TestNewAppHonorsExplicitGroupModeOnStartup(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	app := NewApp(fakeSessions(), Config{TmuxEnabled: true, GroupMode: "repo"})
 	if app.sessGroupMode != groupBaseProject {
 		t.Fatalf("expected explicit --group repo to be honored at startup, got %d", app.sessGroupMode)
