@@ -41,8 +41,21 @@ func (t *sshTransport) sshArgs() []string {
 	return args
 }
 
+// quoteForSSH ensures that a `sh -c "command"` invocation survives SSH's
+// space-joining of argv. When cmd is ["sh", "-c", "rest..."], the rest is
+// shell-quoted as one string so the remote `-c` receives it intact. Without
+// this, `ssh host sh -c "echo hello > f"` becomes `sh -c echo` on the remote
+// (the `-c` only gets `echo`, losing the rest).
+func quoteForSSH(cmd ...string) []string {
+	if len(cmd) >= 3 && cmd[0] == "sh" && cmd[1] == "-c" {
+		rest := strings.Join(cmd[2:], " ")
+		return []string{cmd[0], cmd[1], shellQuote(rest)}
+	}
+	return cmd
+}
+
 func (t *sshTransport) Exec(ctx context.Context, cmd ...string) ([]byte, error) {
-	args := append(t.sshArgs(), cmd...)
+	args := append(t.sshArgs(), quoteForSSH(cmd...)...)
 	c := sshCommandContext(ctx, "ssh", args...)
 	return c.CombinedOutput()
 }
