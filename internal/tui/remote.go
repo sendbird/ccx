@@ -95,7 +95,7 @@ func (a *App) buildRemoteProgressView(sess *remote.Session, currentStep string) 
 	valStyle := lipgloss.NewStyle().Foreground(colorAccent)
 
 	var sb strings.Builder
-	expStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Italic(true)
+	expStyle := lipgloss.NewStyle().Foreground(colorAssistant).Italic(true)
 	sb.WriteString(titleStyle.Render("Remote Session") + " " + expStyle.Render("(experimental)") + "\n\n")
 	sb.WriteString(labelStyle.Render("  Context:   ") + valStyle.Render(sess.Config.Context) + "\n")
 	sb.WriteString(labelStyle.Render("  Namespace: ") + valStyle.Render(sess.Config.Namespace) + "\n")
@@ -119,7 +119,7 @@ func (a *App) buildRemoteProgressView(sess *remote.Session, currentStep string) 
 		sb.WriteString("  " + lipgloss.NewStyle().Foreground(colorAccent).Render(iconDone) + " " + step + "\n")
 	}
 	if currentStep != "" {
-		sb.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Render(iconActive) + " " + currentStep + "\n")
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(colorAssistant).Render(iconActive) + " " + currentStep + "\n")
 	}
 	return sb.String()
 }
@@ -165,6 +165,15 @@ type remotePullMsg struct {
 // mergeRemoteConfig applies defaults from config.yaml onto a runtime config.
 // Runtime values take precedence over defaults.
 func mergeRemoteConfig(defaults, cfg remote.Config) remote.Config {
+	if cfg.Transport == "" {
+		cfg.Transport = defaults.Transport
+	}
+	if cfg.Host == "" {
+		cfg.Host = defaults.Host
+	}
+	if len(cfg.SSHExtraArgs) == 0 {
+		cfg.SSHExtraArgs = defaults.SSHExtraArgs
+	}
 	if cfg.Context == "" {
 		cfg.Context = defaults.Context
 	}
@@ -317,7 +326,12 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 	}
 
 	cfgCopy := cfg
-	prompt := fmt.Sprintf("Start remote on %s/%s?", cfg.Context, cfg.Namespace)
+	var prompt string
+	if cfg.IsSSH() {
+		prompt = fmt.Sprintf("Start remote on ssh:%s?", cfg.Host)
+	} else {
+		prompt = fmt.Sprintf("Start remote on %s/%s?", cfg.Context, cfg.Namespace)
+	}
 	if cfg.PodName != "" {
 		prompt = fmt.Sprintf("Sync session to remote pod %s/%s/%s?", cfg.Context, cfg.Namespace, cfg.PodName)
 	}
