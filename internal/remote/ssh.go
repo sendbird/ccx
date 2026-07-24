@@ -4,9 +4,21 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
+
+// sshKeepAliveOpts are SSH options that keep idle connections alive and detect
+// dead peers quickly (orca-style resilience).
+var sshKeepAliveOpts = []string{
+	"-o", "ServerAliveInterval=15",
+	"-o", "ServerAliveCountMax=3",
+}
+
+// sshReconnectMax is the maximum number of auto-reconnect attempts for the
+// interactive attach.
+const sshReconnectMax = 3
 
 // sshCommand is the command used to invoke ssh. It's a var so tests can stub it
 // to assert argument construction without a real SSH server.
@@ -20,9 +32,10 @@ type sshTransport struct {
 }
 
 // sshArgs builds the ssh argument list for the transport (without the remote
-// command), applying config options and extra args.
+// command), applying keep-alive options and extra args.
 func (t *sshTransport) sshArgs() []string {
 	args := []string{"-o", "BatchMode=no"}
+	args = append(args, sshKeepAliveOpts...)
 	args = append(args, t.cfg.SSHExtraArgs...)
 	args = append(args, t.cfg.Host)
 	return args
@@ -35,12 +48,61 @@ func (t *sshTransport) Exec(ctx context.Context, cmd ...string) ([]byte, error) 
 }
 
 func (t *sshTransport) ExecInteractive(cmd ...string) *exec.Cmd {
-	// -t forces a TTY for the interactive Claude attach.
+	// -t forces a TTY; keep-alive prevents idle disconnects.
 	args := []string{"-t"}
+	args = append(args, sshKeepAliveOpts...)
 	args = append(args, t.cfg.SSHExtraArgs...)
 	args = append(args, t.cfg.Host)
 	args = append(args, cmd...)
 	return sshCommand("ssh", args...)
+}
+
+// AttachCmd returns an exec.Cmd that runs the Claude attach inside a remote
+// tmux session with auto-reconnect. tmux new-session -A creates the session if
+// it doesn't exist or attaches if it does, so a dropped SSH connection can be
+// re-attached without losing Claude. The local wrapper retries on SSH exit 255
+// (connection error) up to sshReconnectMax times.
+func (t *sshTransport) AttachCmd(shellCmd string) *exec.Cmd {
+	tmuxCmd := fmt.Sprintf("tmux new-session -A -s ccx-claude %s", shellQuote(shellCmd))
+	sshArgs := []string{"-t"}
+	sshArgs = append(sshArgs, sshKeepAliveOpts...)
+	sshArgs = append(sshArgs, t.cfg.SSHExtraArgs...)
+	sshArgs = append(sshArgs, t.cfg.Host)
+	sshArgs = append(sshArgs, "sh", "-c", tmuxCmd)
+
+	// Build a local retry wrapper script: retry on SSH exit 255 (connection
+	// dropped) up to sshReconnectMax times with a 2-second backoff.
+	script := fmt.Sprintf(`#!/bin/sh
+max=%d
+for i in $(seq 1 $max); do
+	ssh %s
+	rc=$?
+	if [ $rc -eq 255 ] && [ $i -lt $max ]; then
+		echo "SSH disconnected (exit $rc), reconnecting ($i/$max)..." >&2
+		sleep 2
+		continue
+	fi
+	exit $rc
+done
+`, sshReconnectMax, strings.Join(sshArgs, " "))
+
+	return exec.Command("sh", "-c", script)
+}
+
+// StreamFile opens a live `tail -f -c +0` stream of a remote file via SSH.
+// The caller must close the returned ReadCloser to terminate the stream and
+// kill the backing ssh process.
+func (t *sshTransport) StreamFile(ctx context.Context, remotePath string) (io.ReadCloser, error) {
+	args := append(t.sshArgs(), "tail", "-f", "-c", "+0", remotePath)
+	c := sshCommandContext(ctx, "ssh", args...)
+	stdout, err := c.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Start(); err != nil {
+		return nil, err
+	}
+	return &streamCloser{cmd: c, reader: stdout}, nil
 }
 
 func (t *sshTransport) Upload(ctx context.Context, destDir string, tarball []byte) error {

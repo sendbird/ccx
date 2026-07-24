@@ -2,6 +2,7 @@ package remote
 
 import (
 	"context"
+	"io"
 	"os/exec"
 )
 
@@ -14,8 +15,15 @@ type Transport interface {
 	// ExecInteractive returns an exec.Cmd attached to the TTY for interactive
 	// use (e.g. attaching to Claude).
 	ExecInteractive(cmd ...string) *exec.Cmd
+	// AttachCmd returns an exec.Cmd for the interactive Claude attach, with
+	// transport-specific resilience (k8s: su to the non-root user; ssh: tmux
+	// persistence + keep-alive + auto-reconnect).
+	AttachCmd(shellCmd string) *exec.Cmd
 	// Upload extracts a tar.gz archive into destDir on the remote.
 	Upload(ctx context.Context, destDir string, tarball []byte) error
+	// StreamFile opens a live stream of a remote file (tail -f from byte 0).
+	// The caller must close the returned ReadCloser to terminate the stream.
+	StreamFile(ctx context.Context, remotePath string) (io.ReadCloser, error)
 	// Prepare makes the remote usable: for k8s it creates/reuses a pod and
 	// waits for it; for ssh it verifies reachability and ensures dirs exist.
 	Prepare(ctx context.Context) error
@@ -34,3 +42,19 @@ const (
 	transportK8s = "k8s"
 	transportSSH = "ssh"
 )
+
+// streamCloser wraps an io.ReadCloser that also kills the backing process on
+// Close, so terminating a live tail -f stream doesn't leave a zombie process.
+type streamCloser struct {
+	cmd    *exec.Cmd
+	reader io.ReadCloser
+}
+
+func (s *streamCloser) Read(p []byte) (int, error) { return s.reader.Read(p) }
+func (s *streamCloser) Close() error {
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Kill()
+		_ = s.cmd.Wait()
+	}
+	return s.reader.Close()
+}

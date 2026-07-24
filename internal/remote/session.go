@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -134,11 +135,15 @@ func (s *Session) setup(cfg Config, claudeDir, projectPath string, steps chan<- 
 		s.Transport.Exec(ctx, "sh", "-c", setupUserCmd)
 	}
 
-	// Install prerequisites + Claude Code CLI.
+	// Install prerequisites + Claude Code CLI (+ tmux for SSH persistence).
 	steps <- SetupStep{Message: "Checking Claude Code CLI..."}
 	if _, err := s.Transport.Exec(ctx, "sh", "-c", "command -v claude >/dev/null 2>&1"); err != nil {
 		steps <- SetupStep{Message: "Installing Node.js and Claude Code CLI..."}
-		installCmd := "apt-get update -qq && apt-get install -y -qq curl git > /dev/null 2>&1 && " +
+		pkgs := "apt-get update -qq && apt-get install -y -qq curl git > /dev/null 2>&1"
+		if cfg.IsSSH() {
+			pkgs += " && apt-get install -y -qq tmux > /dev/null 2>&1 || true"
+		}
+		installCmd := pkgs + " && " +
 			"curl -fsSL https://deb.nodesource.com/setup_22.x | bash - > /dev/null 2>&1 && " +
 			"apt-get install -y -qq nodejs > /dev/null 2>&1 && " +
 			"npm install -g @anthropic-ai/claude-code 2>&1 | tail -3"
@@ -189,21 +194,19 @@ func (s *Session) AttachCmd() *exec.Cmd {
 	return BuildAttachCmd(s.Config, s.Transport)
 }
 
-// BuildAttachCmd creates an interactive command for Claude on the remote.
-// For k8s it runs as the non-root 'claude' user (to allow --dangerously-skip-
-// permissions) via su; for ssh it runs directly as the login user.
+// BuildAttachCmd creates an interactive command for Claude on the remote via
+// the transport. The transport handles resilience (k8s: su to non-root user;
+// ssh: tmux persistence + keep-alive + auto-reconnect).
 func BuildAttachCmd(cfg Config, t Transport) *exec.Cmd {
 	claudeCmd := BuildClaudeCmd(cfg, false)
 	if cfg.IsSSH() {
-		// SSH: run directly as the login user; source the auth env and cd.
 		shellCmd := fmt.Sprintf("cd %s 2>/dev/null; . ~/.claude_env; %s", cfg.WorkDir, claudeCmd)
-		return t.ExecInteractive("sh", "-c", shellCmd)
+		return t.AttachCmd(shellCmd)
 	}
-	// k8s: su to the non-root user so --dangerously-skip-permissions works.
 	shellCmd := fmt.Sprintf(
-		"su - %s -c 'export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH; . ~/.claude_env; cd %s 2>/dev/null; %s'",
-		cfg.RemoteUser, cfg.WorkDir, claudeCmd)
-	return t.ExecInteractive("sh", "-c", shellCmd)
+		"export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH; . ~/.claude_env; cd %s 2>/dev/null; %s",
+		cfg.WorkDir, claudeCmd)
+	return t.AttachCmd(shellCmd)
 }
 
 // BuildClaudeCmd constructs the claude command string with all configured args.
@@ -243,6 +246,32 @@ func FetchSessionJSONL(cfg Config, t Transport) ([]byte, error) {
 		return nil, fmt.Errorf("fetch session: %w", err)
 	}
 	return data, nil
+}
+
+// StreamSessionJSONL opens a live stream of the latest session JSONL on the
+// remote (tail -f from byte 0). The caller must close the returned ReadCloser
+// to terminate the stream. Returns the resolved remote path alongside the
+// stream so the caller can display it.
+func StreamSessionJSONL(cfg Config, t Transport) (string, io.ReadCloser, error) {
+	projectPath := cfg.RemoteProjectPath
+	if projectPath == "" {
+		projectPath = cfg.WorkDir
+	}
+	encoded := encodeProjectPath(projectPath)
+	findCmd := fmt.Sprintf("ls -t %s/.claude/projects/%s/*.jsonl 2>/dev/null | head -1", cfg.RemoteHome, encoded)
+	out, err := t.Exec(context.Background(), "sh", "-c", findCmd)
+	if err != nil || len(out) == 0 {
+		return "", nil, fmt.Errorf("no session file found on remote")
+	}
+	jsonlPath := strings.TrimSpace(string(out))
+	if jsonlPath == "" {
+		return "", nil, fmt.Errorf("no session file found on remote")
+	}
+	rc, err := t.StreamFile(context.Background(), jsonlPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("stream session: %w", err)
+	}
+	return jsonlPath, rc, nil
 }
 
 // Stop cancels and releases the remote (k8s: deletes the pod; ssh: no-op).
