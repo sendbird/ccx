@@ -768,6 +768,14 @@ func wrapPinCurrentWindow(items []list.Item, base list.FilterFunc) list.FilterFu
 					pinned[lastProject] = true
 				}
 			}
+			// Remote sessions are always visible — the user explicitly created
+			// them and they should survive any state filter (e.g. is:done).
+			if v.sess.IsRemote {
+				pinned[i] = true
+				if v.treeDepth > 0 && lastProject >= 0 {
+					pinned[lastProject] = true
+				}
+			}
 		}
 	}
 	return func(term string, targets []string) []list.Rank {
