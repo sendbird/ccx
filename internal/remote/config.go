@@ -152,6 +152,33 @@ func HostArch() string {
 	return runtime.GOARCH
 }
 
+// hostSlug converts an SSH host string (alias, user@host, user@host:port) to a
+// safe identifier suitable for pod-name-style keys and display labels. Non-
+// alphanumeric characters are replaced with hyphens.
+func hostSlug(host string) string {
+	// Strip user@ prefix if present.
+	if idx := strings.Index(host, "@"); idx >= 0 {
+		host = host[idx+1:]
+	}
+	// Strip port suffix if present.
+	if idx := strings.LastIndex(host, ":"); idx >= 0 {
+		host = host[:idx]
+	}
+	var b strings.Builder
+	for _, r := range host {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
 // ArchMismatch reports whether cfg.Arch is set and differs from the host arch.
 // Comparison is case-insensitive; "" never mismatches.
 func (c Config) ArchMismatch() bool {

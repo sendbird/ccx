@@ -97,10 +97,15 @@ func (a *App) buildRemoteProgressView(sess *remote.Session, currentStep string) 
 	var sb strings.Builder
 	expStyle := lipgloss.NewStyle().Foreground(colorAssistant).Italic(true)
 	sb.WriteString(titleStyle.Render("Remote Session") + " " + expStyle.Render("(experimental)") + "\n\n")
-	sb.WriteString(labelStyle.Render("  Context:   ") + valStyle.Render(sess.Config.Context) + "\n")
-	sb.WriteString(labelStyle.Render("  Namespace: ") + valStyle.Render(sess.Config.Namespace) + "\n")
-	sb.WriteString(labelStyle.Render("  Pod:       ") + valStyle.Render(sess.PodName) + "\n")
-	sb.WriteString(labelStyle.Render("  Image:     ") + valStyle.Render(sess.Config.Image) + "\n")
+	if sess.Config.IsSSH() {
+		sb.WriteString(labelStyle.Render("  Host:     ") + valStyle.Render(sess.Config.Host) + "\n")
+		sb.WriteString(labelStyle.Render("  Target:   ") + valStyle.Render(sess.Transport.Target()) + "\n")
+	} else {
+		sb.WriteString(labelStyle.Render("  Context:   ") + valStyle.Render(sess.Config.Context) + "\n")
+		sb.WriteString(labelStyle.Render("  Namespace: ") + valStyle.Render(sess.Config.Namespace) + "\n")
+		sb.WriteString(labelStyle.Render("  Pod:       ") + valStyle.Render(sess.PodName) + "\n")
+		sb.WriteString(labelStyle.Render("  Image:     ") + valStyle.Render(sess.Config.Image) + "\n")
+	}
 	if sess.Config.LocalDir != "" {
 		sb.WriteString(labelStyle.Render("  Local dir: ") + valStyle.Render(sess.Config.LocalDir) + "\n")
 	}
@@ -1165,8 +1170,10 @@ func (a *App) installRemoteSession(sess *remote.Session, steps <-chan remote.Set
 	a.remoteSession = sess
 	a.remoteSetupSteps = steps
 
-	remote.AddSavedSession(remote.SavedSession{
+	saved := remote.SavedSession{
 		PodName:   sess.PodName,
+		Transport: sess.Config.Transport,
+		Host:      sess.Config.Host,
 		Context:   sess.Config.Context,
 		Namespace: sess.Config.Namespace,
 		Image:     sess.Config.Image,
@@ -1174,21 +1181,31 @@ func (a *App) installRemoteSession(sess *remote.Session, steps <-chan remote.Set
 		SessionID: sess.Config.SessionID,
 		WorkDir:   sess.Config.WorkDir,
 		Status:    "starting",
-	})
+	}
+	remote.AddSavedSession(saved)
+
+	var projectName, firstPrompt string
+	if sess.Config.IsSSH() {
+		projectName = "ssh:" + sess.Config.Host
+		firstPrompt = fmt.Sprintf("%s [starting...]", sess.Config.Host)
+	} else {
+		projectName = "remote:" + sess.PodName
+		firstPrompt = fmt.Sprintf("%s/%s/%s", sess.Config.Context, sess.Config.Namespace, sess.PodName)
+	}
 
 	virtualID := "remote-" + sess.PodName
 	virtualSess := session.Session{
 		ID:              virtualID,
 		ShortID:         sess.PodName,
 		ProjectPath:     sess.Config.LocalDir,
-		ProjectName:     "remote:" + sess.PodName,
+		ProjectName:     projectName,
 		ModTime:         time.Now(),
 		IsRemote:        true,
 		RemotePodName:   sess.PodName,
 		RemoteContext:   sess.Config.Context,
 		RemoteNamespace: sess.Config.Namespace,
 		RemoteStatus:    "starting...",
-		FirstPrompt:     fmt.Sprintf("%s/%s/%s", sess.Config.Context, sess.Config.Namespace, sess.PodName),
+		FirstPrompt:     firstPrompt,
 	}
 	inserted := false
 	for i := range a.sessions {
