@@ -832,7 +832,7 @@ func (a *App) renderCmdHintBox() string {
 
 	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	d := dimStyle
-	sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+	sel := lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true)
 
 	var lines []string
 	for i, entry := range a.cmdSuggestions {

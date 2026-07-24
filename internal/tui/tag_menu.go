@@ -68,7 +68,7 @@ func (a *App) renderTagMenu() string {
 		titleText = fmt.Sprintf("Manage Tags (%d sessions)", len(a.tagSessIDs))
 	}
 	title := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#7C3AED")).
+		Foreground(colorPrimary).
 		Bold(true).
 		Render(titleText)
 
@@ -117,7 +117,7 @@ func (a *App) renderTagMenu() string {
 	height := len(lines) + 2
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#7C3AED")).
+		BorderForeground(colorPrimary).
 		Padding(1).
 		Width(width).
 		Height(height)

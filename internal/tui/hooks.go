@@ -245,7 +245,7 @@ func renderHookEvent(sb *strings.Builder, event string, matchers []hookMatcher, 
 		if mi == len(matchers)-1 {
 			connector = "└─"
 		}
-		connStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4B5563"))
+		connStyle := lipgloss.NewStyle().Foreground(colorBorder)
 		sb.WriteString(fmt.Sprintf("  %s %s %s\n",
 			connStyle.Render(connector),
 			labelStyle.Render("match:"),
@@ -262,7 +262,7 @@ func renderHookEvent(sb *strings.Builder, event string, matchers []hookMatcher, 
 			// Show hook type if not default
 			typeTag := ""
 			if h.Type != "" && h.Type != "command" {
-				typeTag = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render("[" + h.Type + "] ")
+				typeTag = lipgloss.NewStyle().Foreground(colorPurple).Render("[" + h.Type + "] ")
 			}
 
 			// Child connector

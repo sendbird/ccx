@@ -57,7 +57,7 @@ func (d plgDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 	isMarked := !pi.isHeader && d.selectedSet[pi.plugin.ID]
 	cursor := "  "
 	if isMarked {
-		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true).Render(iconSelect + " ")
+		cursor = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render(iconSelect + " ")
 	} else if selected {
 		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(iconFoldClosed + " ")
 	}
@@ -77,9 +77,9 @@ func (d plgDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 	avail := width - cursorW
 
 	// Name
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	nameStyle := lipgloss.NewStyle().Foreground(colorWhite)
 	if p.Blocked {
-		nameStyle = nameStyle.Strikethrough(true).Foreground(lipgloss.Color("#EF4444"))
+		nameStyle = nameStyle.Strikethrough(true).Foreground(colorError)
 	}
 	if selected {
 		nameStyle = nameStyle.Bold(true)
@@ -111,13 +111,13 @@ func (d plgDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 	statusStr := ""
 	statusW := 0
 	if p.Blocked {
-		statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Render(" BLOCKED")
+		statusStr = lipgloss.NewStyle().Foreground(colorError).Render(" BLOCKED")
 		statusW = lipgloss.Width(statusStr)
 	} else if !p.Installed {
 		statusStr = dimStyle.Render(" (available)")
 		statusW = lipgloss.Width(statusStr)
 	} else if !p.Enabled {
-		statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Render(" DISABLED")
+		statusStr = lipgloss.NewStyle().Foreground(colorAssistant).Render(" DISABLED")
 		statusW = lipgloss.Width(statusStr)
 	}
 
@@ -592,7 +592,7 @@ func (a *App) updatePluginPreview() {
 
 func renderPluginDetail(p session.Plugin, width int) string {
 	var b strings.Builder
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorWhite)
 	labelStyle := lipgloss.NewStyle().Foreground(colorPrimary)
 	valStyle := lipgloss.NewStyle()
 
@@ -667,7 +667,7 @@ func renderPluginDetail(p session.Plugin, width int) string {
 	// Status
 	if p.Blocked {
 		b.WriteString("\n")
-		blocked := lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Bold(true)
+		blocked := lipgloss.NewStyle().Foreground(colorError).Bold(true)
 		b.WriteString(blocked.Render("BLOCKED"))
 		if p.BlockReason != "" {
 			b.WriteString(dimStyle.Render(" — " + p.BlockReason))
@@ -745,7 +745,7 @@ func renderPluginDetail(p session.Plugin, width int) string {
 		for _, sp := range p.SubPlugins {
 			spBadge := componentBadge(sp.Components)
 			b.WriteString("  ")
-			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Render(sp.Name))
+			b.WriteString(lipgloss.NewStyle().Foreground(colorWhite).Render(sp.Name))
 			if spBadge != "" {
 				b.WriteString(dimStyle.Render(" " + spBadge))
 			}
@@ -850,7 +850,7 @@ func (d plgCompDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	isMarked := !ci.isHeader && ci.comp.Path != "" && d.selectedSet[ci.comp.Path]
 	cursor := "  "
 	if isMarked {
-		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Bold(true).Render(iconSelect + " ")
+		cursor = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render(iconSelect + " ")
 	} else if selected {
 		cursor = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(iconFoldClosed + " ")
 	}
@@ -868,7 +868,7 @@ func (d plgCompDelegate) Render(w io.Writer, m list.Model, index int, item list.
 
 	// Sub-plugin entry
 	if sp := ci.subPlugin; sp != nil {
-		nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+		nameStyle := lipgloss.NewStyle().Foreground(colorWhite)
 		if selected {
 			nameStyle = nameStyle.Bold(true)
 		}
@@ -891,7 +891,7 @@ func (d plgCompDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	c := ci.comp
 	icon := componentIcon(c.Type)
 
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	nameStyle := lipgloss.NewStyle().Foreground(colorWhite)
 	if selected {
 		nameStyle = nameStyle.Bold(true)
 	}
@@ -1262,7 +1262,7 @@ func (a *App) updatePluginDetailPreview() {
 	// Sub-plugin entry: show description + its components
 	if sp := ci.subPlugin; sp != nil {
 		var b strings.Builder
-		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
+		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorWhite)
 		labelStyle := lipgloss.NewStyle().Foreground(colorPrimary)
 
 		b.WriteString(titleStyle.Render(sp.Name))

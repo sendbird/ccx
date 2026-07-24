@@ -3479,7 +3479,7 @@ func (a *App) renderViewsHintBox() string {
 	var parts []string
 	viewLabel := func(k, label string, active bool) string {
 		if active {
-			return lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render("[" + label + "]")
+			return lipgloss.NewStyle().Foreground(colorWhite).Bold(true).Render("[" + label + "]")
 		}
 		return h.Render(displayKey(k)) + d.Render(":"+label)
 	}
@@ -6356,11 +6356,11 @@ func refLine(r session.SessionRef, width int, selected, checked bool) string {
 	dot, label := refStateBadge(r)
 	cursor := "  "
 	if selected {
-		cursor = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true).Render("> ")
+		cursor = lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true).Render("> ")
 	}
 	mark := "  "
 	if checked {
-		mark = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true).Render("* ")
+		mark = lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true).Render("* ")
 	}
 	line := cursor + mark + dot + " " + label
 
@@ -6549,7 +6549,7 @@ func renderContextNode(sb *strings.Builder, node session.ContextNode, prefix str
 		style = lipgloss.NewStyle().Foreground(colorDim)
 	}
 	if isCursor {
-		cur := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+		cur := lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true)
 		sb.WriteString(dimStyle.Render(prefix) + cur.Render("> ") + cur.Render(line) + "\n")
 	} else {
 		sb.WriteString(dimStyle.Render(prefix+connector) + style.Render(line) + "\n")
@@ -6635,8 +6635,8 @@ func (a *App) buildShellsPreviewContent(sess session.Session) string {
 	header += "] ──"
 	sb.WriteString(dimStyle.Render(header) + "\n\n")
 
-	bashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true)
-	monStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
+	bashStyle := lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+	monStyle := lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
 
 	for _, j := range jobs {
 		icon, statusColor := iconActive, colorAssistant
@@ -6860,7 +6860,7 @@ func (a *App) buildAgentsPreviewContent(sess session.Session) string {
 		label = fmt.Sprintf("── Agents [%d, %d active] ↵:jump ──", len(agents), running)
 	}
 	sb.WriteString(dimStyle.Render(label) + "\n\n")
-	sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+	sel := lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true)
 	for i, ag := range agents {
 		icon := iconAgent
 		style := dimStyle
@@ -7259,7 +7259,7 @@ func (a *App) renderActionsHintBox() string {
 
 // renderSearchHintBox renders a compact bordered hint box for search filters.
 func (a *App) renderSearchHintBox() string {
-	h := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
+	h := lipgloss.NewStyle().Foreground(colorBorderFocused)
 	d := dimStyle
 
 	var lines []string
@@ -8152,9 +8152,9 @@ func (a *App) renderBreadcrumb() string {
 	// Build the styled breadcrumb and track click regions
 	a.breadcrumbSegs = a.breadcrumbSegs[:0]
 	sepText := " > "
-	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Background(colorTitleBg)
-	parentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF")).Background(colorTitleBg)
-	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#E2E8F0")).Background(colorTitleBg)
+	sepStyle := lipgloss.NewStyle().Foreground(colorDim).Background(colorTitleBg)
+	parentStyle := lipgloss.NewStyle().Foreground(colorHelp).Background(colorTitleBg)
+	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(colorLight).Background(colorTitleBg)
 
 	var text string
 	x := 0
@@ -8202,13 +8202,13 @@ func (a *App) renderBreadcrumb() string {
 	}
 
 	if len(actions) > 0 {
-		actionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF")).Background(colorTitleBg)
-		sepAction := lipgloss.NewStyle().Foreground(lipgloss.Color("#4B5563")).Background(colorTitleBg).Render("  ")
+		actionStyle := lipgloss.NewStyle().Foreground(colorHelp).Background(colorTitleBg)
+		sepAction := lipgloss.NewStyle().Foreground(colorBorder).Background(colorTitleBg).Render("  ")
 		text += sepAction
 		x += lipgloss.Width(sepAction)
 		for i, act := range actions {
 			if i > 0 {
-				divider := lipgloss.NewStyle().Foreground(lipgloss.Color("#4B5563")).Background(colorTitleBg).Render(" ")
+				divider := lipgloss.NewStyle().Foreground(colorBorder).Background(colorTitleBg).Render(" ")
 				text += divider
 				x += lipgloss.Width(divider)
 			}
@@ -8236,7 +8236,7 @@ func (a *App) renderBreadcrumb() string {
 	// Right-aligned status: item count + scroll % + loading
 	rightParts := a.breadcrumbRightStatus()
 	if rightParts != "" {
-		countStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Background(colorTitleBg)
+		countStyle := lipgloss.NewStyle().Foreground(colorGray).Background(colorTitleBg)
 		rightStr := countStyle.Render(rightParts + " ")
 		rightW := lipgloss.Width(rightStr)
 		maxLeftW := max(a.width-rightW-1, 1)
@@ -8292,10 +8292,10 @@ func (a *App) breadcrumbRightStatus() string {
 	// Main browser badge: always present it as PROJECTS in the UI even if
 	// alternate legacy grouping modes still exist internally.
 	if a.state == viewSessions {
-		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
+		modeStyle := lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
 		parts = append(parts, modeStyle.Render("PROJECTS"))
 		if badge := a.stateFilterBadge(); badge != "" {
-			filterMode := lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true)
+			filterMode := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 			parts = append(parts, filterMode.Render(badge))
 		}
 		if a.hasMultiSelection() {
@@ -8305,7 +8305,7 @@ func (a *App) breadcrumbRightStatus() string {
 
 	// Preview mode badge for conversation/message views
 	if a.state == viewConversation {
-		modeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+		modeStyle := lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true)
 		parts = append(parts, modeStyle.Render("FLOW"))
 		parts = append(parts, modeStyle.Render(strings.ToUpper(a.conv.inspector.Tab.String())))
 		parts = append(parts, modeStyle.Render(strings.ToUpper(inspectorScopeName(a.conv.inspector.Scope))))

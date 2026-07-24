@@ -319,10 +319,10 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 	countStyle := lipgloss.NewStyle().Foreground(colorAccent)
 	timeStyle := dimStyle
 	if selected {
-		nameStyle = nameStyle.Foreground(lipgloss.Color("#A78BFA"))
-		branchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+		nameStyle = nameStyle.Foreground(colorPurple)
+		branchStyle = lipgloss.NewStyle().Foreground(colorHelp)
 		countStyle = countStyle.Bold(true)
-		timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+		timeStyle = lipgloss.NewStyle().Foreground(colorHelp)
 	}
 
 	// Badges roll up project-wide lifecycle counts. Live/busy are shown as a
@@ -505,11 +505,11 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	branchStyle := dimStyle
 	promptStyle := dimStyle
 	if selected {
-		idStyle = idStyle.Foreground(lipgloss.Color("#A78BFA"))
-		timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+		idStyle = idStyle.Foreground(colorPurple)
+		timeStyle = lipgloss.NewStyle().Foreground(colorHelp)
 		msgStyle = msgStyle.Bold(true)
-		projStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E2E8F0")).Bold(true)
-		branchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+		projStyle = lipgloss.NewStyle().Foreground(colorLight).Bold(true)
+		branchStyle = lipgloss.NewStyle().Foreground(colorHelp)
 		promptStyle = selectedStyle
 	}
 
@@ -606,7 +606,7 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		badgesW += len(badgeText) + 1
 	}
 	if s.IsRemote {
-		remoteBadge := lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true)
+		remoteBadge := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
 		badges = appendBadge(badges, &badgesW, remoteBadge, badgeLabel(iconBadgeRemote, "REMOTE"))
 	}
 
@@ -1845,7 +1845,7 @@ func (a *App) renderHelpModal(bg string, screenW, screenH int) string {
 			{waitBadgeStyle, badgeLabel(iconBadgeWait, "WAIT"), "Idle, waiting for user"},
 			{doneBadgeStyle, badgeLabel(iconBadgeDone, "DONE"), "All work completed"},
 			{stuckBadgeStyle, badgeLabel(iconBadgeStuck, "STUCK"), "Live but stale with unfinished work"},
-			{lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true), badgeLabel(iconBadgeRemote, "REMOTE"), "Remote (experimental)"},
+			{lipgloss.NewStyle().Foreground(colorPrimary).Bold(true), badgeLabel(iconBadgeRemote, "REMOTE"), "Remote (experimental)"},
 		}
 		for i := 0; i < len(allBadges); i += 2 {
 			b := allBadges[i]

@@ -45,9 +45,9 @@ var (
 	toolNameStyle   = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	resultOKStyle   = dimStyle
 	resultErrStyle  = lipgloss.NewStyle().Foreground(colorError)
-	webURLStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#7DD3FC"))
-	agentTypeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#06B6D4")).Bold(true)
-	wfHeadlineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
+	webURLStyle     = lipgloss.NewStyle().Foreground(colorSky)
+	agentTypeStyle  = lipgloss.NewStyle().Foreground(colorTeal).Bold(true)
+	wfHeadlineStyle = lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
 )
 
 // toolRenderer renders one tool_use block semantically. input is the raw

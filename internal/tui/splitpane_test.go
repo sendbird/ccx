@@ -96,7 +96,7 @@ func TestRenderFixedSplit_DividerAligned_AmbiguousWidth(t *testing.T) {
 func TestRenderFixedSplit_DividerAligned_StyledContent(t *testing.T) {
 	bold := lipgloss.NewStyle().Bold(true)
 	dim := lipgloss.NewStyle().Faint(true)
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
+	accent := lipgloss.NewStyle().Foreground(colorRed)
 
 	left := bold.Render("USER 10:27 #1206 테마 적용해줘") + "\n" +
 		dim.Render("ASST 10:28 #1207 Cannot read properties") + "\n" +
