@@ -498,12 +498,14 @@ func TestHiddenRawOriginDoesNotFallBackToVisibleIndex(t *testing.T) {
 	}
 }
 
-func TestExecutionRailMouseDoesNotChangeConversationSelection(t *testing.T) {
+func TestExecutionRailFocusSwitchesConversation(t *testing.T) {
 	app, _, _ := setupConversationStateFixture(t)
 	app.selectConvBody(1)
 	before := app.selectedConversationItemID()
 	railY := app.executionRailTop() + 1
 
+	// Click the first context row (the active root). It's already active, so the
+	// conversation selection stays put; the rail gains focus.
 	model, _ := app.handleMouseClick(tea.MouseMsg{
 		X:      2,
 		Y:      railY,
@@ -515,12 +517,13 @@ func TestExecutionRailMouseDoesNotChangeConversationSelection(t *testing.T) {
 		t.Fatal("rail click did not focus execution contexts")
 	}
 	if got := app.selectedConversationItemID(); got != before {
-		t.Fatalf("rail click changed conversation selection to %q, want %q", got, before)
+		t.Fatalf("clicking the active context changed selection to %q, want %q", got, before)
 	}
 	if got := app.conv.execution.CursorKey; got != app.conv.execution.Contexts[0].Key {
 		t.Fatalf("first vertical row selected %q", got)
 	}
 
+	// Click the second context row — the conversation switches immediately.
 	model, _ = app.handleMouseClick(tea.MouseMsg{
 		X:      2,
 		Y:      railY + 1,
@@ -531,11 +534,22 @@ func TestExecutionRailMouseDoesNotChangeConversationSelection(t *testing.T) {
 	if got := app.conv.execution.CursorKey; got != app.conv.execution.Contexts[1].Key {
 		t.Fatalf("second vertical row selected %q, want %q", got, app.conv.execution.Contexts[1].Key)
 	}
+	if app.conv.execution.ActiveKey != app.conv.execution.Contexts[1].Key {
+		t.Fatalf("clicking a context did not activate it; ActiveKey=%q want %q", app.conv.execution.ActiveKey, app.conv.execution.Contexts[1].Key)
+	}
+	if !app.conv.execution.Focused {
+		t.Fatal("rail should stay focused after clicking a context")
+	}
 
+	// Mouse wheel down moves to the next context and switches the conversation.
+	prevActive := app.conv.execution.ActiveKey
 	model, _ = app.handleMouseScroll(tea.MouseMsg{X: 2, Y: railY, Button: tea.MouseButtonWheelDown})
 	app = model.(*App)
-	if got := app.selectedConversationItemID(); got != before {
-		t.Fatalf("rail wheel changed conversation selection to %q, want %q", got, before)
+	if app.conv.execution.ActiveKey == prevActive {
+		t.Fatalf("wheel did not switch the conversation; ActiveKey still %q", prevActive)
+	}
+	if !app.conv.execution.Focused {
+		t.Fatal("rail should stay focused after wheel scroll")
 	}
 }
 

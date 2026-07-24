@@ -219,10 +219,10 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	if a.state == viewConversation && a.mouseInExecutionRail(msg.Y) {
 		a.conv.execution.Focused = true
-		// The first rail line is the section header; clicking a context row moves
-		// the rail cursor without changing the conversation selection.
+		// Clicking a context row activates it (switches the conversation) and
+		// keeps the rail focused so further clicks/scrolling continue to browse.
 		if key, ok := a.executionContextAtY(msg.Y); ok {
-			a.conv.execution.CursorKey = key
+			a.moveExecutionCursor(key)
 		}
 		return a, nil
 	}
