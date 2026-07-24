@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -204,6 +205,37 @@ func (t *kubectlTransport) Exec(ctx context.Context, cmd ...string) ([]byte, err
 
 func (t *kubectlTransport) ExecInteractive(cmd ...string) *exec.Cmd {
 	return ExecInteractive(t.cfg, t.podName, cmd...)
+}
+
+// AttachCmd wraps the shell command with su to the non-root user so
+// --dangerously-skip-permissions works.
+func (t *kubectlTransport) AttachCmd(shellCmd string) *exec.Cmd {
+	wrapped := fmt.Sprintf(
+		"su - %s -c 'export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH; %s'",
+		t.cfg.RemoteUser, shellCmd)
+	return t.ExecInteractive("sh", "-c", wrapped)
+}
+
+// StreamFile opens a live tail -f stream of a remote file via kubectl exec.
+func (t *kubectlTransport) StreamFile(ctx context.Context, remotePath string) (io.ReadCloser, error) {
+	args := []string{
+		"--context", t.cfg.Context,
+		"-n", t.cfg.Namespace,
+		"exec", t.podName,
+	}
+	if t.cfg.Container != "" {
+		args = append(args, "-c", t.cfg.Container)
+	}
+	args = append(args, "--", "tail", "-f", "-c", "+0", remotePath)
+	c := exec.CommandContext(ctx, "kubectl", args...)
+	stdout, err := c.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Start(); err != nil {
+		return nil, err
+	}
+	return &streamCloser{cmd: c, reader: stdout}, nil
 }
 
 func (t *kubectlTransport) Upload(ctx context.Context, destDir string, tarball []byte) error {
