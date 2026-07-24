@@ -10,6 +10,8 @@ import (
 // SavedSession is the persistable state of a remote session.
 type SavedSession struct {
 	PodName   string `yaml:"pod_name"`
+	Transport string `yaml:"transport,omitempty"` // "k8s" (default) or "ssh"
+	Host      string `yaml:"host,omitempty"`      // SSH target (ssh transport)
 	Context   string `yaml:"context"`
 	Namespace string `yaml:"namespace"`
 	Image     string `yaml:"image"`

@@ -38,18 +38,19 @@ func (a *App) injectRemoteSessions(sessions []session.Session) []session.Session
 	return append(result, sessions...)
 }
 
-// cleanupStaleRemoteSessions removes saved sessions whose pods no longer exist.
+// cleanupStaleRemoteSessions removes saved sessions whose remote no longer exists.
 func cleanupStaleRemoteSessions() {
 	saved := remote.LoadSavedSessions()
 	var kept []remote.SavedSession
 	for _, s := range saved {
-		cfg := remote.Config{Context: s.Context, Namespace: s.Namespace}
-		phase, err := remote.PodPhase(context.Background(), cfg, s.PodName)
+		cfg := remote.Config{Transport: s.Transport, Host: s.Host, Context: s.Context, Namespace: s.Namespace}
+		t := cfg.BuildTransportForPod(s.PodName)
+		status, err := t.Status(context.Background())
 		if err != nil {
 			kept = append(kept, s)
 			continue
 		}
-		if phase == "Running" || phase == "Pending" {
+		if status == "Running" || status == "Pending" || status == "running" {
 			kept = append(kept, s)
 		}
 	}
@@ -62,18 +63,26 @@ func loadSavedRemoteSessions() []session.Session {
 	saved := remote.LoadSavedSessions()
 	var sessions []session.Session
 	for _, s := range saved {
+		var label, projectName string
+		if s.Transport == "ssh" {
+			label = fmt.Sprintf("%s [%s]", s.Host, s.Status)
+			projectName = "ssh:" + s.Host
+		} else {
+			label = fmt.Sprintf("%s/%s/%s [%s]", s.Context, s.Namespace, s.PodName, s.Status)
+			projectName = "remote:" + s.PodName
+		}
 		sessions = append(sessions, session.Session{
 			ID:              "remote-" + s.PodName,
 			ShortID:         s.PodName,
 			ProjectPath:     s.LocalDir,
-			ProjectName:     "remote:" + s.PodName,
+			ProjectName:     projectName,
 			ModTime:         time.Now(),
 			IsRemote:        true,
 			RemotePodName:   s.PodName,
 			RemoteContext:   s.Context,
 			RemoteNamespace: s.Namespace,
 			RemoteStatus:    s.Status,
-			FirstPrompt:     fmt.Sprintf("%s/%s/%s [%s]", s.Context, s.Namespace, s.PodName, s.Status),
+			FirstPrompt:     label,
 		})
 	}
 	return sessions
@@ -488,7 +497,8 @@ func (a *App) fetchRemotePreview(sess session.Session) (tea.Model, tea.Cmd) {
 	podName := sess.RemotePodName
 	a.copiedMsg = "Fetching session from pod..."
 	return a, func() tea.Msg {
-		data, err := remote.FetchSessionJSONL(cfg, podName)
+		t := cfg.BuildTransportForPod(podName)
+		data, err := remote.FetchSessionJSONL(cfg, t)
 		return remoteFetchMsg{podName: podName, data: data, err: err}
 	}
 }
@@ -692,7 +702,7 @@ func (a *App) attachToRemoteSession(sess session.Session) (tea.Model, tea.Cmd) {
 				SessionID: saved.SessionID,
 				WorkDir:   saved.WorkDir,
 			}
-			cmd := remote.BuildAttachCmd(cfg, saved.PodName)
+			cmd := remote.BuildAttachCmd(cfg, cfg.BuildTransportForPod(saved.PodName))
 			podName := saved.PodName
 			return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
 				return remoteExecDoneMsg{podName: podName, err: err}

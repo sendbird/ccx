@@ -260,7 +260,11 @@ func SaveSnapshot(ctx context.Context, cfg Config, podName, name string, src Sav
 	}
 
 	// Session JSONL — best effort, missing pod state shouldn't fail the snapshot.
-	if data, err := FetchSessionJSONL(cfg, podName); err == nil && len(data) > 0 {
+	t := cfg.BuildTransport()
+	if kt, ok := t.(*kubectlTransport); ok {
+		kt.podName = podName
+	}
+	if data, err := FetchSessionJSONL(cfg, t); err == nil && len(data) > 0 {
 		if err := os.WriteFile(filepath.Join(dir, "session.jsonl"), data, 0644); err == nil {
 			meta.HasSession = true
 		}
