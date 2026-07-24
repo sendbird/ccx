@@ -470,17 +470,21 @@ func truncateLines(text string, width, maxLines int) []string {
 	var lines []string
 	remaining := text
 	for len(remaining) > 0 && len(lines) < maxLines {
-		if len(remaining) <= width {
+		if runewidth.StringWidth(remaining) <= width {
 			lines = append(lines, remaining)
 			break
 		}
-		lines = append(lines, remaining[:width])
-		remaining = remaining[width:]
+		// Hard-wrap by display width, cutting at a rune boundary so CJK/emoji
+		// never split mid-codepoint (byte-slicing `remaining[:width]` produced
+		// invalid UTF-8 and mis-sized rows for double-width characters).
+		prefix := runewidth.Truncate(remaining, width, "")
+		lines = append(lines, prefix)
+		remaining = remaining[len(prefix):]
 	}
 	if len(remaining) > 0 && len(lines) == maxLines {
 		last := lines[maxLines-1]
-		if len(last) > 3 {
-			lines[maxLines-1] = last[:len(last)-3] + "..."
+		if runewidth.StringWidth(last) > 3 {
+			lines[maxLines-1] = runewidth.Truncate(last, runewidth.StringWidth(last)-3, "...")
 		}
 	}
 	return lines

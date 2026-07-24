@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -367,9 +368,12 @@ func renderProjectDetail(stats session.GlobalStats, width int) string {
 		}
 
 		rank := fmt.Sprintf("%2d. ", i+1)
-		maxPathW := width - len(rank) - 2
-		if len(path) > maxPathW {
-			path = "..." + path[len(path)-maxPathW+3:]
+		maxPathW := width - runewidth.StringWidth(rank) - 2
+		if runewidth.StringWidth(path) > maxPathW {
+			// Keep the trailing (maxPathW-3) cells — the filename end is the
+			// important part — and prefix an ellipsis. Cell-width aware so CJK
+			// paths don't split mid-rune or mis-size the column.
+			path = runewidth.TruncateLeft(path, maxPathW-3, "...")
 		}
 		sb.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render(rank), path))
 
@@ -432,9 +436,12 @@ func renderProjectPathDetail(stats session.GlobalStats, width int) string {
 		}
 
 		rank := fmt.Sprintf("%2d. ", i+1)
-		maxPathW := width - len(rank) - 2
-		if len(path) > maxPathW {
-			path = "..." + path[len(path)-maxPathW+3:]
+		maxPathW := width - runewidth.StringWidth(rank) - 2
+		if runewidth.StringWidth(path) > maxPathW {
+			// Keep the trailing (maxPathW-3) cells — the filename end is the
+			// important part — and prefix an ellipsis. Cell-width aware so CJK
+			// paths don't split mid-rune or mis-size the column.
+			path = runewidth.TruncateLeft(path, maxPathW-3, "...")
 		}
 		sb.WriteString(fmt.Sprintf("  %s%s\n", labelStyle.Render(rank), path))
 
