@@ -3568,14 +3568,30 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		a.confirmAction = func() (tea.Model, tea.Cmd) { return a.deleteSession(sessCopy) }
 		return a, nil
 	case akm.Resume:
+		if sess.IsRemote {
+			a.copiedMsg = "Use Enter to attach to remote session"
+			return a, nil
+		}
 		return a.resumeSession(sess)
 	case akm.Edit:
+		if sess.IsRemote {
+			a.copiedMsg = "Edit not available for remote sessions"
+			return a, nil
+		}
 		return a.openEditMenu(sess)
 	case akm.CopyPath:
+		if sess.IsRemote {
+			a.copiedMsg = "No local path for remote session"
+			return a, nil
+		}
 		return a.copySelectedSessionPath()
 	case akm.Copy:
 		return a.copySessionAction()
 	case akm.Move:
+		if sess.IsRemote {
+			a.copiedMsg = "Move not available for remote sessions"
+			return a, nil
+		}
 		if sess.ProjectPath == "" {
 			a.copiedMsg = "No project path"
 			return a, nil
@@ -3665,8 +3681,16 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	case akm.RemoveMem:
 		return a.removeSessionMemory(sess)
 	case akm.Fork:
+		if sess.IsRemote {
+			a.copiedMsg = "Fork not available for remote sessions"
+			return a, nil
+		}
 		return a.forkSession(sess)
 	case akm.New:
+		if sess.IsRemote {
+			a.copiedMsg = "New session not available from remote row"
+			return a, nil
+		}
 		return a.startNewSessionInProject(sess)
 	case akm.Remote:
 		cfg := remote.Config{

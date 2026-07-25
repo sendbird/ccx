@@ -24,6 +24,8 @@ type SnapshotMeta struct {
 	Name        string    `yaml:"name"`
 	CreatedAt   time.Time `yaml:"created_at"`
 	SourcePod   string    `yaml:"source_pod"`
+	Transport   string    `yaml:"transport,omitempty"`
+	Host        string    `yaml:"host,omitempty"`
 	Context     string    `yaml:"context"`
 	Namespace   string    `yaml:"namespace"`
 	Image       string    `yaml:"image"`
@@ -251,6 +253,8 @@ func SaveSnapshot(ctx context.Context, cfg Config, podName, name string, src Sav
 		Name:      name,
 		CreatedAt: time.Now(),
 		SourcePod: podName,
+		Transport: cfg.Transport,
+		Host:      cfg.Host,
 		Context:   cfg.Context,
 		Namespace: cfg.Namespace,
 		Image:     cfg.Image,
@@ -260,18 +264,15 @@ func SaveSnapshot(ctx context.Context, cfg Config, podName, name string, src Sav
 	}
 
 	// Session JSONL — best effort, missing pod state shouldn't fail the snapshot.
-	t := cfg.BuildTransport()
-	if kt, ok := t.(*kubectlTransport); ok {
-		kt.podName = podName
-	}
+	t := cfg.BuildTransportForPod(podName)
 	if data, err := FetchSessionJSONL(cfg, t); err == nil && len(data) > 0 {
 		if err := os.WriteFile(filepath.Join(dir, "session.jsonl"), data, 0644); err == nil {
 			meta.HasSession = true
 		}
 	}
 
-	// Workdir tarball.
-	if tarball, err := fetchRemoteWorkdir(ctx, cfg, podName); err == nil && len(tarball) > 0 {
+	// Workdir tarball — uses the transport (k8s exec or ssh).
+	if tarball, err := fetchRemoteWorkdirWithTransport(ctx, cfg, t); err == nil && len(tarball) > 0 {
 		if err := os.WriteFile(filepath.Join(dir, "workdir.tgz"), tarball, 0644); err == nil {
 			meta.HasWorkdir = true
 			meta.WorkdirSize = int64(len(tarball))

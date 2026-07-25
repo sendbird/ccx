@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -572,6 +573,31 @@ func (a *App) handleRemoteFetch(msg remoteFetchMsg) (tea.Model, tea.Cmd) {
 	tmpFile.Sync()
 	a.remoteJSONLFile = tmpFile
 
+	// Also materialize the JSONL into the local ~/.claude/projects/ tree so
+	// the session can be resumed locally after the remote is stopped. The
+	// file is placed under the LOCAL project path's encoded directory (not
+	// the remote one) so a local `claude --resume <id>` finds it.
+	if a.remoteSession != nil {
+		localProject := a.remoteSession.Config.LocalDir
+		if localProject != "" {
+			encoded := session.EncodeProjectPath(localProject)
+			home := homeDir()
+			projDir := filepath.Join(home, ".claude", "projects", encoded)
+			os.MkdirAll(projDir, 0o755)
+			sessFile := filepath.Join(projDir, filepath.Base(tmpFile.Name())+".jsonl")
+			// Use the session ID from the virtual session if available.
+			for i := range a.sessions {
+				if a.sessions[i].IsRemote && a.sessions[i].RemotePodName == msg.podName {
+					if a.sessions[i].ID != "" {
+						sessFile = filepath.Join(projDir, a.sessions[i].ID+".jsonl")
+					}
+					break
+				}
+			}
+			os.WriteFile(sessFile, msg.data, 0o644)
+		}
+	}
+
 	// Update virtual session's FilePath
 	for i := range a.sessions {
 		if a.sessions[i].IsRemote && a.sessions[i].RemotePodName == msg.podName {
@@ -588,7 +614,16 @@ func (a *App) handleRemoteFetch(msg remoteFetchMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) handleRemoteExecDone(msg remoteExecDoneMsg) (tea.Model, tea.Cmd) {
-	a.copiedMsg = "Detached from remote — pod still running"
+	if msg.err != nil {
+		a.copiedMsg = "Remote attach error: " + msg.err.Error()
+	} else {
+		a.copiedMsg = "Detached from remote — session still running"
+	}
+	// Re-fetch the session JSONL after detach so the preview shows the latest
+	// conversation content (everything Claude did while attached).
+	if a.remoteSession != nil && a.remoteSession.PodName == msg.podName {
+		return a, a.autoFetchRemoteSession(msg.podName)
+	}
 	return a, nil
 }
 
@@ -822,6 +857,10 @@ func (a *App) executeCmdRemoteStart(input string) (tea.Model, tea.Cmd) {
 			cfg.WorkDir = val
 		case "workdir_template", "work_dir_template", "work-dir-template":
 			cfg.WorkDirTemplate = val
+		case "transport":
+			cfg.Transport = val
+		case "host":
+			cfg.Host = val
 		default:
 			promptParts = append(promptParts, part)
 		}
@@ -1214,6 +1253,55 @@ func (a *App) executeCmdRemotePull(input string) (tea.Model, tea.Cmd) {
 		defer cancel()
 		err := remote.FetchWorkdirToDir(ctx, cfg, pod, dest)
 		return remotePullMsg{podName: pod, dest: dest, err: err}
+	}
+}
+
+// executeCmdRemotePullSession fetches the remote session JSONL (conversation
+// transcript) and writes it into the local ~/.claude/projects/ tree, over-
+// writing the local session file so `claude --resume <id>` picks up everything
+// that happened on the remote. This is the "remote → local session sync" that
+// lets you work on a beefy remote and finish locally.
+func (a *App) executeCmdRemotePullSession() (tea.Model, tea.Cmd) {
+	sess, ok := a.selectedSession()
+	if !ok || !sess.IsRemote {
+		a.copiedMsg = "Select a remote session first"
+		return a, nil
+	}
+
+	cfg, ok := a.resolveRemoteConfig(sess.RemotePodName)
+	if !ok {
+		a.copiedMsg = "No config for remote session"
+		return a, nil
+	}
+
+	// Determine the local project path to materialize into.
+	localProject := cfg.LocalDir
+	if localProject == "" {
+		a.copiedMsg = "No local_dir configured — cannot determine local project path"
+		return a, nil
+	}
+
+	pod := sess.RemotePodName
+	a.copiedMsg = fmt.Sprintf("Pulling session %s → local...", pod)
+	return a, func() tea.Msg {
+		t := cfg.BuildTransportForPod(pod)
+		data, err := remote.FetchSessionJSONL(cfg, t)
+		if err != nil {
+			return remotePullMsg{podName: pod, dest: "", err: err}
+		}
+
+		// Write into ~/.claude/projects/<encoded local path>/<session-id>.jsonl
+		encoded := session.EncodeProjectPath(localProject)
+		home := homeDir()
+		projDir := filepath.Join(home, ".claude", "projects", encoded)
+		if err := os.MkdirAll(projDir, 0o755); err != nil {
+			return remotePullMsg{podName: pod, dest: "", err: err}
+		}
+		sessFile := filepath.Join(projDir, sess.ID+".jsonl")
+		if err := os.WriteFile(sessFile, data, 0o644); err != nil {
+			return remotePullMsg{podName: pod, dest: "", err: err}
+		}
+		return remotePullMsg{podName: pod, dest: sessFile, err: nil}
 	}
 }
 
