@@ -303,6 +303,12 @@ func StartFromSnapshot(name string, overrides Config, claudeDir string) (*Sessio
 	}
 
 	cfg := overrides
+	if cfg.Transport == "" {
+		cfg.Transport = meta.Transport
+	}
+	if cfg.Host == "" {
+		cfg.Host = meta.Host
+	}
 	if cfg.Context == "" {
 		cfg.Context = meta.Context
 	}
