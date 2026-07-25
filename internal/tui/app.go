@@ -4068,8 +4068,10 @@ func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
 			} else {
 				for _, saved := range remote.LoadSavedSessions() {
 					if saved.PodName == podName {
-						cfg := remote.Config{Context: saved.Context, Namespace: saved.Namespace}
-						remote.DeletePod(context.Background(), cfg, podName)
+						cfg := remote.Config{Transport: saved.Transport, Host: saved.Host, Context: saved.Context, Namespace: saved.Namespace}
+						cfg = cfg.Defaults()
+						t := cfg.BuildTransportForPod(podName)
+						t.Release(context.Background())
 						break
 					}
 				}

@@ -292,13 +292,19 @@ func SaveSnapshot(ctx context.Context, cfg Config, podName, name string, src Sav
 // FetchWorkdirToDir extracts the pod's workdir tarball into destDir on disk.
 // Used by `remote:pull` to bring guest changes back to the host LocalDir.
 func FetchWorkdirToDir(ctx context.Context, cfg Config, podName, destDir string) error {
+	return FetchWorkdirToDirWithTransport(ctx, cfg, cfg.BuildTransportForPod(podName), destDir)
+}
+
+// FetchWorkdirToDirWithTransport pulls the remote workdir via the given
+// transport (k8s or ssh) and extracts it into destDir.
+func FetchWorkdirToDirWithTransport(ctx context.Context, cfg Config, t Transport, destDir string) error {
 	if destDir == "" {
 		return fmt.Errorf("destination directory required")
 	}
 	if err := ValidateWorkdir(destDir); err != nil {
 		return err
 	}
-	tarball, err := fetchRemoteWorkdir(ctx, cfg, podName)
+	tarball, err := fetchRemoteWorkdirWithTransport(ctx, cfg, t)
 	if err != nil {
 		return err
 	}
@@ -316,6 +322,12 @@ func FetchWorkdirToDir(ctx context.Context, cfg Config, podName, destDir string)
 
 // fetchRemoteWorkdir tars+gzips cfg.WorkDir on the pod and streams it back.
 func fetchRemoteWorkdir(ctx context.Context, cfg Config, podName string) ([]byte, error) {
+	return fetchRemoteWorkdirWithTransport(ctx, cfg, cfg.BuildTransportForPod(podName))
+}
+
+// fetchRemoteWorkdirWithTransport tars the remote workdir via the given
+// transport (k8s exec or ssh), so SSH sessions can pull their workdir back.
+func fetchRemoteWorkdirWithTransport(ctx context.Context, cfg Config, t Transport) ([]byte, error) {
 	if cfg.WorkDir == "" {
 		return nil, fmt.Errorf("work_dir unset")
 	}
@@ -323,23 +335,14 @@ func fetchRemoteWorkdir(ctx context.Context, cfg Config, podName string) ([]byte
 	script := fmt.Sprintf(
 		"cd %s 2>/dev/null && tar czf - --exclude=node_modules --exclude=.git --exclude=vendor --exclude=tmp --exclude=__pycache__ --exclude=dist --exclude=build . 2>/dev/null",
 		shellQuote(cfg.WorkDir))
-	args := []string{
-		"--context", cfg.Context,
-		"-n", cfg.Namespace,
-		"exec", podName,
+	out, err := t.Exec(ctx, "sh", "-c", script)
+	if err != nil {
+		return nil, fmt.Errorf("fetch workdir: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	if cfg.Container != "" {
-		args = append(args, "-c", cfg.Container)
+	if len(out) == 0 {
+		return nil, fmt.Errorf("empty workdir tarball")
 	}
-	args = append(args, "--", "sh", "-c", script)
-	cmd := exec.CommandContext(ctx, "kubectl", args...)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("fetch workdir: %w", err)
-	}
-	return stdout.Bytes(), nil
+	return out, nil
 }
 
 func loadMeta(dir string) (SnapshotMeta, error) {
