@@ -3,7 +3,9 @@ package remote
 import (
 	"crypto/rand"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -58,7 +60,7 @@ func (c Config) Defaults() Config {
 		c.Transport = transportK8s
 	}
 	if c.Transport == transportSSH {
-		// SSH mode: keep user/home/workdir defaults; skip k8s-only fields.
+		// SSH mode: keep user/home defaults; skip k8s-only fields.
 		if c.RemoteUser == "" {
 			c.RemoteUser = "claude"
 		}
@@ -68,8 +70,18 @@ func (c Config) Defaults() Config {
 		if c.GitBranch == "" {
 			c.GitBranch = "main"
 		}
+		// WorkDir: if not explicitly set, mirror the local project's
+		// home-relative path on the remote (e.g. local /Users/x/src/proj
+		// with home /Users/x → remote /home/coder/src/proj). This keeps
+		// the project structure consistent and the encoded .claude/projects
+		// path matches between local and remote.
 		if c.WorkDir == "" {
-			c.WorkDir = "/workspace"
+			c.WorkDir = mirrorLocalPath(c.LocalDir, c.RemoteHome)
+		}
+		// RemoteProjectPath must equal WorkDir so the session JSONL is
+		// placed where Claude (cd'd into WorkDir) will find it via --resume.
+		if c.RemoteProjectPath == "" {
+			c.RemoteProjectPath = c.WorkDir
 		}
 		return c
 	}
@@ -156,6 +168,31 @@ func GeneratePodName() string {
 // kubernetes.io/arch convention (amd64, arm64).
 func HostArch() string {
 	return runtime.GOARCH
+}
+
+// mirrorLocalPath computes the remote workdir by mirroring the local project
+// path's home-relative portion onto the remote home. For example:
+//
+//	localDir = /Users/gavin.jeong/src/keyolk/ccx
+//	remoteHome = /home/coder
+//	→ /home/coder/src/keyolk/ccx
+//
+// If localDir is not under the local home, falls back to remoteHome/basename.
+// If localDir is empty, returns remoteHome (the remote home itself).
+func mirrorLocalPath(localDir, remoteHome string) string {
+	if localDir == "" {
+		return remoteHome
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(remoteHome, filepath.Base(localDir))
+	}
+	rel, err := filepath.Rel(home, localDir)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		// localDir is not under home — use basename as fallback.
+		return filepath.Join(remoteHome, filepath.Base(localDir))
+	}
+	return filepath.Join(remoteHome, rel)
 }
 
 // hostSlug converts an SSH host string (alias, user@host, user@host:port) to a

@@ -374,6 +374,8 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteFork("") }},
 		{name: "remote:pull", aliases: []string{"r:pull", "remote:sync-down", "r:sync-down"}, desc: "fetch pod workdir back to host",
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemotePull("remote:pull") }},
+		{name: "remote:pull-session", aliases: []string{"r:pull-session", "remote:sync-session", "r:sync-session"}, desc: "fetch remote session JSONL to local (overwrite local session for claude --resume)",
+			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemotePullSession() }},
 		{name: "remote:sync-up", aliases: []string{"r:sync-up"}, desc: "sync local session/workdir to remote pod",
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteStart("remote:sync-up") }},
 		{name: "remote:rm-snap", aliases: []string{"r:rm-snap"}, desc: "delete a saved snapshot",
