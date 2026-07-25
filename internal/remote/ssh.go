@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // sshKeepAliveOpts are SSH options that keep idle connections alive and detect
@@ -132,12 +133,32 @@ func (t *sshTransport) Upload(ctx context.Context, destDir string, tarball []byt
 // Prepare verifies SSH reachability and ensures the remote home and work
 // directories exist. Unlike k8s it does not allocate a pod; the host is
 // expected to already exist. User creation is best-effort (skipped if the
-// login user can't create it).
+// login user can't create it). All operations have a timeout so setup
+// never hangs on an unresponsive host.
 func (t *sshTransport) Prepare(ctx context.Context) error {
-	mkdir := fmt.Sprintf("mkdir -p %s %s 2>/dev/null; id -u %s >/dev/null 2>&1 || true",
-		t.cfg.RemoteHome, t.cfg.WorkDir, t.cfg.RemoteUser)
-	if _, err := t.Exec(ctx, "sh", "-c", mkdir); err != nil {
-		return fmt.Errorf("ssh prepare: %w", err)
+	// Quick reachability check — use the same SSH options as Exec (no
+	// BatchMode restrictions) so the SSH agent works on macOS. ConnectTimeout
+	// prevents hanging on dead hosts.
+	pingCtx, pingCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer pingCancel()
+	pingArgs := []string{"-o", "ConnectTimeout=5"}
+	pingArgs = append(pingArgs, sshKeepAliveOpts...)
+	pingArgs = append(pingArgs, t.cfg.SSHExtraArgs...)
+	pingArgs = append(pingArgs, t.cfg.Host, "true")
+	pingCmd := sshCommandContext(pingCtx, "ssh", pingArgs...)
+	if err := pingCmd.Run(); err != nil {
+		return fmt.Errorf("ssh: host %s unreachable: %w", t.cfg.Host, err)
+	}
+
+	// Ensure dirs exist — best-effort, don't fail if some dirs can't be created.
+	mkdir := fmt.Sprintf("mkdir -p %s %s 2>/dev/null || true",
+		t.cfg.RemoteHome, t.cfg.WorkDir)
+	execCtx, execCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer execCancel()
+	if _, err := t.Exec(execCtx, "sh", "-c", mkdir); err != nil {
+		// Don't fail — the dirs might already exist or we might not have
+		// permission. The sync step will fail later if needed.
+		return nil
 	}
 	return nil
 }
@@ -145,7 +166,8 @@ func (t *sshTransport) Prepare(ctx context.Context) error {
 func (t *sshTransport) Release(ctx context.Context) error { return nil }
 
 func (t *sshTransport) Status(ctx context.Context) (string, error) {
-	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5"}
+	args := []string{"-o", "ConnectTimeout=5"}
+	args = append(args, sshKeepAliveOpts...)
 	args = append(args, t.cfg.SSHExtraArgs...)
 	args = append(args, t.cfg.Host, "true")
 	c := sshCommandContext(ctx, "ssh", args...)

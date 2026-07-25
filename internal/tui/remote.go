@@ -1336,6 +1336,12 @@ func (a *App) installRemoteSession(sess *remote.Session, steps <-chan remote.Set
 		WorkDir:   sess.Config.WorkDir,
 		Status:    "starting",
 	}
+	// For SSH, clear k8s context/namespace from saved session so they don't
+	// leak into labels on restart.
+	if sess.Config.IsSSH() {
+		saved.Context = ""
+		saved.Namespace = ""
+	}
 	remote.AddSavedSession(saved)
 
 	var projectName, firstPrompt string
