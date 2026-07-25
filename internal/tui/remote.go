@@ -47,10 +47,18 @@ func cleanupStaleRemoteSessions() {
 		t := cfg.BuildTransportForPod(s.PodName)
 		status, err := t.Status(context.Background())
 		if err != nil {
+			// Ping error — keep the session, don't delete on transient failures.
 			kept = append(kept, s)
 			continue
 		}
-		if status == "Running" || status == "Pending" || status == "running" {
+		// Keep running/pending/unreachable/unknown. Only delete explicitly
+		// "notfound" (k8s pod gone) or "ended"/"failed"/"stopped".
+		switch status {
+		case "unreachable", "unknown", "Running", "Pending", "running":
+			kept = append(kept, s)
+		case "ended", "failed", "stopped", "Succeeded", "Failed":
+			// Drop — the remote is gone or the session ended.
+		default:
 			kept = append(kept, s)
 		}
 	}
@@ -630,9 +638,12 @@ func (a *App) stopRemoteSessionInternal(pull bool) (tea.Model, tea.Cmd) {
 			pullCfg = a.remoteSession.Config
 			pullDest = a.remoteSession.Config.LocalDir
 		}
-		if pull && pullDest != "" && pullCfg.Context != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-			if err := remote.FetchWorkdirToDir(ctx, pullCfg, podName, pullDest); err != nil {
+		// Pull works for both k8s and SSH — FetchWorkdirToDir uses the
+		// transport from pullCfg. Guard on pullDest (not Context) so SSH
+		// sessions with a LocalDir can pull too.
+		if pull && pullDest != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			if err := remote.FetchWorkdirToDirWithTransport(ctx, pullCfg, a.remoteSession.Transport, pullDest); err != nil {
 				a.copiedMsg = "Pull failed, stopping anyway: " + err.Error()
 			} else {
 				a.copiedMsg = fmt.Sprintf("Pulled workdir → %s, stopped %s", pullDest, podName)
@@ -654,13 +665,23 @@ func (a *App) stopRemoteSessionInternal(pull bool) (tea.Model, tea.Cmd) {
 		podName = sess.RemotePodName
 		for _, saved := range remote.LoadSavedSessions() {
 			if saved.PodName == podName {
-				cfg := remote.Config{Context: saved.Context, Namespace: saved.Namespace, WorkDir: saved.WorkDir}
+				cfg := remote.Config{
+					Transport: saved.Transport,
+					Host:      saved.Host,
+					Context:   saved.Context,
+					Namespace: saved.Namespace,
+					WorkDir:   saved.WorkDir,
+					LocalDir:  saved.LocalDir,
+				}
+				cfg = mergeRemoteConfig(a.remoteDefaults, cfg)
+				cfg = cfg.Defaults()
 				if pull {
 					pullCfg = cfg
 					pullDest = saved.LocalDir
 					if pullDest != "" {
-						ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-						if err := remote.FetchWorkdirToDir(ctx, pullCfg, podName, pullDest); err != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+						t := cfg.BuildTransportForPod(podName)
+						if err := remote.FetchWorkdirToDirWithTransport(ctx, pullCfg, t, pullDest); err != nil {
 							a.copiedMsg = "Pull failed, stopping anyway: " + err.Error()
 						} else {
 							a.copiedMsg = fmt.Sprintf("Pulled workdir → %s, stopped %s", pullDest, podName)
@@ -668,7 +689,10 @@ func (a *App) stopRemoteSessionInternal(pull bool) (tea.Model, tea.Cmd) {
 						cancel()
 					}
 				}
-				remote.DeletePod(context.Background(), cfg, podName)
+				// Release the transport (k8s: delete pod; ssh: no-op, tmux
+				// session stays alive for re-attach).
+				t := cfg.BuildTransportForPod(podName)
+				t.Release(context.Background())
 				break
 			}
 		}
@@ -737,11 +761,16 @@ func (a *App) attachToRemoteSession(sess session.Session) (tea.Model, tea.Cmd) {
 	for _, saved := range remote.LoadSavedSessions() {
 		if saved.PodName == sess.RemotePodName {
 			cfg := remote.Config{
+				Transport: saved.Transport,
+				Host:      saved.Host,
 				Context:   saved.Context,
 				Namespace: saved.Namespace,
 				SessionID: saved.SessionID,
 				WorkDir:   saved.WorkDir,
+				LocalDir:  saved.LocalDir,
 			}
+			cfg = mergeRemoteConfig(a.remoteDefaults, cfg)
+			cfg = cfg.Defaults()
 			cmd := remote.BuildAttachCmd(cfg, cfg.BuildTransportForPod(saved.PodName))
 			podName := saved.PodName
 			return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -813,20 +842,25 @@ func pollRemotePhasesCmd() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		phases := make(map[string]string, len(saved))
 		for _, s := range saved {
-			cfg := remote.Config{Context: s.Context, Namespace: s.Namespace}
-			phase, err := remote.PodPhase(ctx, cfg, s.PodName)
+			cfg := remote.Config{Transport: s.Transport, Host: s.Host, Context: s.Context, Namespace: s.Namespace}
+			t := cfg.BuildTransportForPod(s.PodName)
+			status, err := t.Status(ctx)
 			if err != nil {
-				phases[s.PodName] = "NotFound"
+				// Keep on error — don't delete a session just because a ping failed.
+				phases[s.PodName] = "unknown"
 				continue
 			}
-			if phase == "" {
-				phase = "Unknown"
+			// "unreachable" means the host is down but the session definition
+			// should survive (VPN off, laptop offline, etc.).
+			if status == "unreachable" {
+				phases[s.PodName] = "unreachable"
+				continue
 			}
-			phases[s.PodName] = phase
+			phases[s.PodName] = status
 		}
 		return remotePhaseMsg{phases: phases}
 	}
@@ -852,12 +886,16 @@ func (a *App) handleRemotePhase(msg remotePhaseMsg) (tea.Model, tea.Cmd) {
 			}
 			if s.RemoteStatus != status {
 				s.RemoteStatus = status
-				s.FirstPrompt = fmt.Sprintf("%s/%s/%s [%s]", s.RemoteContext, s.RemoteNamespace, pod, status)
+				if s.ProjectName != "" && strings.HasPrefix(s.ProjectName, "ssh:") {
+					s.FirstPrompt = fmt.Sprintf("%s [%s]", s.ProjectName[4:], status)
+				} else {
+					s.FirstPrompt = fmt.Sprintf("%s/%s/%s [%s]", s.RemoteContext, s.RemoteNamespace, pod, status)
+				}
 				changed = true
 			}
 			break
 		}
-		if phase == "NotFound" {
+		if phase == "NotFound" || phase == "notfound" {
 			remote.RemoveSavedSession(pod)
 			var filtered []session.Session
 			for _, s := range a.sessions {
@@ -869,7 +907,8 @@ func (a *App) handleRemotePhase(msg remotePhaseMsg) (tea.Model, tea.Cmd) {
 				a.sessions = filtered
 				changed = true
 			}
-		} else {
+		} else if phase == "unreachable" || phase == "unknown" {
+			// Keep the session but update status — don't delete.
 			remote.UpdateSavedSessionStatus(pod, status)
 		}
 	}
@@ -906,7 +945,8 @@ func (a *App) executeCmdRemoteExec(input string) (tea.Model, tea.Cmd) {
 	return a, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		out, err := remote.ExecInPod(ctx, cfg, pod, cmdParts...)
+		t := cfg.BuildTransportForPod(pod)
+		out, err := t.Exec(ctx, cmdParts...)
 		return remoteExecOutputMsg{podName: pod, out: out, err: err}
 	}
 }
@@ -939,10 +979,13 @@ func (a *App) resolveRemoteConfig(podName string) (remote.Config, bool) {
 	for _, saved := range remote.LoadSavedSessions() {
 		if saved.PodName == podName {
 			cfg := remote.Config{
+				Transport: saved.Transport,
+				Host:      saved.Host,
 				Context:   saved.Context,
 				Namespace: saved.Namespace,
 				WorkDir:   saved.WorkDir,
 				SessionID: saved.SessionID,
+				LocalDir:  saved.LocalDir,
 			}
 			cfg = mergeRemoteConfig(a.remoteDefaults, cfg)
 			cfg = cfg.Defaults()
@@ -966,15 +1009,17 @@ func (a *App) executeCmdRemotePhase() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	pod := sess.RemotePodName
-	a.copiedMsg = fmt.Sprintf("Querying %s/%s/%s...", cfg.Context, cfg.Namespace, pod)
+	target := cfg.Host
+	if target == "" {
+		target = fmt.Sprintf("%s/%s/%s", cfg.Context, cfg.Namespace, pod)
+	}
+	a.copiedMsg = fmt.Sprintf("Querying %s...", target)
 	return a, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		phase, err := remote.PodPhase(ctx, cfg, pod)
-		if err != nil {
-			phase = "NotFound"
-		}
-		return remotePhaseMsg{phases: map[string]string{pod: phase}}
+		t := cfg.BuildTransportForPod(pod)
+		status, _ := t.Status(ctx)
+		return remotePhaseMsg{phases: map[string]string{pod: status}}
 	}
 }
 
