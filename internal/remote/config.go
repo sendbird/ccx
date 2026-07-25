@@ -134,7 +134,13 @@ func (c Config) BuildTransport() Transport {
 
 // BuildTransportForPod returns a kubectlTransport bound to podName. Convenience
 // for callers that operate on saved k8s pods without a full Start() flow.
+// For SSH transports, use BuildTransport() instead — this always builds a k8s
+// transport. When the saved session's Transport field is "ssh", callers should
+// check IsSSH and use BuildTransport().
 func (c Config) BuildTransportForPod(podName string) Transport {
+	if c.IsSSH() {
+		return &sshTransport{cfg: c}
+	}
 	t := &kubectlTransport{cfg: c, podName: podName}
 	return t
 }
