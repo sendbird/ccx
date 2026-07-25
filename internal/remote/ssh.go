@@ -86,6 +86,12 @@ func (t *sshTransport) AttachCmd(shellCmd string) *exec.Cmd {
 
 	// Build a local retry wrapper script: retry on SSH exit 255 (connection
 	// dropped) up to sshReconnectMax times with a 2-second backoff.
+	// Each ssh arg is individually shell-quoted so the script's `sh -c`
+	// doesn't split the tmux command string.
+	quotedArgs := make([]string, len(sshArgs))
+	for i, a := range sshArgs {
+		quotedArgs[i] = shellQuote(a)
+	}
 	script := fmt.Sprintf(`#!/bin/sh
 max=%d
 for i in $(seq 1 $max); do
@@ -98,7 +104,7 @@ for i in $(seq 1 $max); do
 	fi
 	exit $rc
 done
-`, sshReconnectMax, strings.Join(sshArgs, " "))
+`, sshReconnectMax, strings.Join(quotedArgs, " "))
 
 	return exec.Command("sh", "-c", script)
 }
