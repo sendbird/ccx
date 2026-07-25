@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -49,10 +49,10 @@ func setupCfgApp(t *testing.T) *App {
 
 func TestBuildSkillFileItemsRecursive(t *testing.T) {
 	dir := writeTestSkillDir(t, "my-skill", map[string]string{
-		"SKILL.md":               "---\nname: my-skill\n---\nbody\n",
-		"references/palette.md":  "palette\n",
-		"scripts/run.sh":         "#!/bin/sh\n",
-		".hidden/secret.md":      "secret\n",
+		"SKILL.md":              "---\nname: my-skill\n---\nbody\n",
+		"references/palette.md": "palette\n",
+		"scripts/run.sh":        "#!/bin/sh\n",
+		".hidden/secret.md":     "secret\n",
 	})
 	items := buildSkillFileItems(dir, "my-skill", "")
 	if len(items) != 4 { // header + 3 visible files (hidden skipped)

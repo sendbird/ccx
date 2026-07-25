@@ -1144,7 +1144,7 @@ const cfgFilterMemory = -2 // show global + project + local (all "memory" scopes
 // filter or the integrated PLUGINS page.
 type cfgPage struct {
 	label     string
-	filter    int  // cfgFilterAll / cfgFilterMemory / ConfigCategory; ignored when isPlugins
+	filter    int // cfgFilterAll / cfgFilterMemory / ConfigCategory; ignored when isPlugins
 	isPlugins bool
 }
 
