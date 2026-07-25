@@ -552,14 +552,14 @@ func TestScanPluginsLSPFromManifest(t *testing.T) {
 
 func TestSplitPluginID(t *testing.T) {
 	tests := []struct {
-		id      string
-		name    string
-		mkt     string
+		id   string
+		name string
+		mkt  string
 	}{
 		{"my-plugin@marketplace", "my-plugin", "marketplace"},
 		{"plugin-no-mkt", "plugin-no-mkt", ""},
 		{"multi@at@signs", "multi@at", "signs"},
-		{"@leading-at", "@leading-at", ""},  // idx=0 not > 0, treated as no separator
+		{"@leading-at", "@leading-at", ""}, // idx=0 not > 0, treated as no separator
 	}
 	for _, tt := range tests {
 		name, mkt := splitPluginID(tt.id)

@@ -84,18 +84,18 @@ type wfProgressEntry struct {
 // `phases` use json.RawMessage because their shapes vary across runs (result:
 // string|object; phases may be absent on minimal/older runs).
 type wfFile struct {
-	RunID          string          `json:"runId"`
-	WorkflowName   string          `json:"workflowName"`
-	Summary        string          `json:"summary"`
-	Status         string          `json:"status"`
-	AgentCount     int             `json:"agentCount"`
-	DurationMS     int64           `json:"durationMs"`
-	TotalTokens    int64           `json:"totalTokens"`
-	TotalToolCalls int64           `json:"totalToolCalls"`
-	DefaultModel   string          `json:"defaultModel"`
-	Phases         json.RawMessage `json:"phases"`
+	RunID          string            `json:"runId"`
+	WorkflowName   string            `json:"workflowName"`
+	Summary        string            `json:"summary"`
+	Status         string            `json:"status"`
+	AgentCount     int               `json:"agentCount"`
+	DurationMS     int64             `json:"durationMs"`
+	TotalTokens    int64             `json:"totalTokens"`
+	TotalToolCalls int64             `json:"totalToolCalls"`
+	DefaultModel   string            `json:"defaultModel"`
+	Phases         json.RawMessage   `json:"phases"`
 	Progress       []wfProgressEntry `json:"workflowProgress"`
-	Result         json.RawMessage `json:"result"`
+	Result         json.RawMessage   `json:"result"`
 }
 
 // FindWorkflows returns the workflow runs recorded for a session, newest first.

@@ -490,7 +490,6 @@ func TestCommitMemorySearchShowsMatchesAndClearReturns(t *testing.T) {
 	}
 }
 
-
 func TestMemorySearchEnterDrillsIntoMatchFile(t *testing.T) {
 	root := t.TempDir()
 	app := setupConvApp(t, testEntries(), 160, 50)

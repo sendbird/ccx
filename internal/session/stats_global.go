@@ -20,9 +20,9 @@ func AggregateStats(sessions []Session, worktreeDirs ...string) GlobalStats {
 		CommandErrors:          make(map[string]int),
 		AllToolCallTimestamps:  make(map[string][]time.Time),
 		AllToolErrorTimestamps: make(map[string][]time.Time),
-		HookCounts:            make(map[string]int),
-		HookEventCounts:       make(map[string]int),
-		HookTimestamps:        make(map[string][]time.Time),
+		HookCounts:             make(map[string]int),
+		HookEventCounts:        make(map[string]int),
+		HookTimestamps:         make(map[string][]time.Time),
 	}
 
 	allFiles := make(map[string]bool)

@@ -45,33 +45,33 @@ type ShellJob struct {
 }
 
 type Session struct {
-	ID           string
-	ShortID      string
-	FilePath     string
-	ProjectPath  string
-	ProjectName  string
-	GitBranch    string
-	ModTime      time.Time
-	MsgCount     int
-	FirstPrompt  string
-	Created      time.Time
-	IsWorktree   bool
-	IsLive       bool
-	IsResponding bool
-	HasMemory    bool
-	HasTodos     bool
-	Todos        []TodoItem
-	HasTasks     bool
-	HasCrons     bool
-	HasPlan      bool
+	ID            string
+	ShortID       string
+	FilePath      string
+	ProjectPath   string
+	ProjectName   string
+	GitBranch     string
+	ModTime       time.Time
+	MsgCount      int
+	FirstPrompt   string
+	Created       time.Time
+	IsWorktree    bool
+	IsLive        bool
+	IsResponding  bool
+	HasMemory     bool
+	HasTodos      bool
+	Todos         []TodoItem
+	HasTasks      bool
+	HasCrons      bool
+	HasPlan       bool
 	HasScratchpad bool
-	PlanSlug     string   // first plan slug (kept for compat)
-	PlanSlugs    []string // all distinct plan slugs in order
-	Tasks        []TaskItem
-	Crons        []CronItem
-	TeamName     string // e.g. "supports-build"
-	TeamRole     string // "leader", "teammate", ""
-	TeammateName string // e.g. "build-deploy" (teammate only)
+	PlanSlug      string   // first plan slug (kept for compat)
+	PlanSlugs     []string // all distinct plan slugs in order
+	Tasks         []TaskItem
+	Crons         []CronItem
+	TeamName      string // e.g. "supports-build"
+	TeamRole      string // "leader", "teammate", ""
+	TeammateName  string // e.g. "build-deploy" (teammate only)
 
 	ParentSessionID string // UUID of parent session (empty if not a fork)
 

@@ -39,7 +39,7 @@ const (
 	iconTrendUp       = "▴"
 	iconTrendDown     = "▾"
 	iconStatusDot     = "●" // live/busy status dot before the session ID
-	iconBadgePR       = ""  // open pull request (code-fork glyph)
+	iconBadgePR       = "" // open pull request (code-fork glyph)
 	iconBarFull       = "█"
 	iconBarLight      = "▓"
 	iconBarMid        = "▒"
@@ -81,29 +81,29 @@ var (
 	colorBorderDim     = lipgloss.Color("#374151")
 	// Extended palette — named tokens so theming/NO_COLOR can be applied
 	// centrally and raw hex never appears in render paths.
-	colorSuccess     = lipgloss.Color("#22C55E") // green
-	colorGold        = lipgloss.Color("#FBBF24") // memory / wait badge
-	colorPurple      = lipgloss.Color("#A78BFA") // compact / plan / PR / monitor badge
-	colorCyan        = lipgloss.Color("#22D3EE") // bg badge
-	colorTeal        = lipgloss.Color("#06B6D4") // team / agent badge
-	colorOrange      = lipgloss.Color("#FB923C") // task / hook badge
-	colorPink        = lipgloss.Color("#F472B6") // here badge
-	colorLight       = lipgloss.Color("#E2E8F0") // light text
-	colorSky         = lipgloss.Color("#7DD3FC") // light cyan (web URL / diff hunk)
-	colorSelectedFg  = lipgloss.Color("#D1D5DB")
-	colorHelp        = lipgloss.Color("#9CA3AF")  // shortcut-key gray
-	colorBorder      = lipgloss.Color("#4B5563")
-	colorWhite       = lipgloss.Color("#FFFFFF")
-	colorRed         = lipgloss.Color("#FF0000")  // pure red (diff/delete marker)
-	colorRedSoft     = lipgloss.Color("#F87171")
-	colorGray        = lipgloss.Color("#A1A1AA")
-	colorSkyBlue     = lipgloss.Color("#87CEEB")
-	colorLime        = lipgloss.Color("#84CC16")  // custom badge
-	colorIndigo      = lipgloss.Color("#6366F1")
-	colorGreenSoft   = lipgloss.Color("#4ADE80")
-	colorNavy        = lipgloss.Color("#3B4D7A")
-	colorNavyDark    = lipgloss.Color("#2A3A5C")
-	colorMatchPink   = lipgloss.Color("#F9A8D4")  // search-match highlight
+	colorSuccess    = lipgloss.Color("#22C55E") // green
+	colorGold       = lipgloss.Color("#FBBF24") // memory / wait badge
+	colorPurple     = lipgloss.Color("#A78BFA") // compact / plan / PR / monitor badge
+	colorCyan       = lipgloss.Color("#22D3EE") // bg badge
+	colorTeal       = lipgloss.Color("#06B6D4") // team / agent badge
+	colorOrange     = lipgloss.Color("#FB923C") // task / hook badge
+	colorPink       = lipgloss.Color("#F472B6") // here badge
+	colorLight      = lipgloss.Color("#E2E8F0") // light text
+	colorSky        = lipgloss.Color("#7DD3FC") // light cyan (web URL / diff hunk)
+	colorSelectedFg = lipgloss.Color("#D1D5DB")
+	colorHelp       = lipgloss.Color("#9CA3AF") // shortcut-key gray
+	colorBorder     = lipgloss.Color("#4B5563")
+	colorWhite      = lipgloss.Color("#FFFFFF")
+	colorRed        = lipgloss.Color("#FF0000") // pure red (diff/delete marker)
+	colorRedSoft    = lipgloss.Color("#F87171")
+	colorGray       = lipgloss.Color("#A1A1AA")
+	colorSkyBlue    = lipgloss.Color("#87CEEB")
+	colorLime       = lipgloss.Color("#84CC16") // custom badge
+	colorIndigo     = lipgloss.Color("#6366F1")
+	colorGreenSoft  = lipgloss.Color("#4ADE80")
+	colorNavy       = lipgloss.Color("#3B4D7A")
+	colorNavyDark   = lipgloss.Color("#2A3A5C")
+	colorMatchPink  = lipgloss.Color("#F9A8D4") // search-match highlight
 
 	helpStyle = lipgloss.NewStyle().Foreground(colorDim)
 

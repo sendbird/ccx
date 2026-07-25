@@ -24,7 +24,7 @@ func TestReconstructFileChangesWriteThenEdit(t *testing.T) {
 	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
 	occ := []session.Artifact{
 		changeArtifactAt(base, "Write", `{"file_path":"/repo/svc.go","content":"a\nb\nc\n"}`, "/repo/svc.go"),
-		changeArtifactAt(base.Add(10 * time.Second), "Edit", `{"file_path":"/repo/svc.go","old_string":"b","new_string":"B"}`, "/repo/svc.go"),
+		changeArtifactAt(base.Add(10*time.Second), "Edit", `{"file_path":"/repo/svc.go","old_string":"b","new_string":"B"}`, "/repo/svc.go"),
 	}
 	initial, final, ok := reconstructFileChanges(occ)
 	if !ok {
@@ -51,7 +51,7 @@ func TestReconstructFileChangesMissingOldStringBails(t *testing.T) {
 	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
 	occ := []session.Artifact{
 		changeArtifactAt(base, "Write", `{"file_path":"/repo/svc.go","content":"a\nb\n"}`, "/repo/svc.go"),
-		changeArtifactAt(base.Add(10 * time.Second), "Edit", `{"file_path":"/repo/svc.go","old_string":"zzz","new_string":"B"}`, "/repo/svc.go"),
+		changeArtifactAt(base.Add(10*time.Second), "Edit", `{"file_path":"/repo/svc.go","old_string":"zzz","new_string":"B"}`, "/repo/svc.go"),
 	}
 	if _, _, ok := reconstructFileChanges(occ); ok {
 		t.Fatal("Edit with absent old_string must bail")
@@ -62,7 +62,7 @@ func TestReconstructFileChangesMultiEditBails(t *testing.T) {
 	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
 	occ := []session.Artifact{
 		changeArtifactAt(base, "Write", `{"file_path":"/repo/svc.go","content":"a\n"}`, "/repo/svc.go"),
-		changeArtifactAt(base.Add(10 * time.Second), "MultiEdit", `{"file_path":"/repo/svc.go","edits":[{"old_string":"a","new_string":"b"}]}`, "/repo/svc.go"),
+		changeArtifactAt(base.Add(10*time.Second), "MultiEdit", `{"file_path":"/repo/svc.go","edits":[{"old_string":"a","new_string":"b"}]}`, "/repo/svc.go"),
 	}
 	if _, _, ok := reconstructFileChanges(occ); ok {
 		t.Fatal("MultiEdit in chain must bail to per-occurrence fallback")

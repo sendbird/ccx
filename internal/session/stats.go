@@ -77,9 +77,9 @@ type SessionStats struct {
 	Models map[string]int
 
 	// Hook usage: command -> count, event -> count
-	HookCounts        map[string]int // command path -> total invocations
-	HookEventCounts   map[string]int // event type ("PreToolUse", "PostToolUse", "Stop") -> count
-	HookTimestamps    map[string][]time.Time // command -> timestamps
+	HookCounts      map[string]int         // command path -> total invocations
+	HookEventCounts map[string]int         // event type ("PreToolUse", "PostToolUse", "Stop") -> count
+	HookTimestamps  map[string][]time.Time // command -> timestamps
 }
 
 // ModelUsage tracks token counts per model for cost estimation.
@@ -115,11 +115,11 @@ type GlobalStats struct {
 	TotalCompactions                    int
 	SessionsWithCompaction              int
 
-	TotalCostUSD   float64
-	ModelTokens    map[string]*ModelUsage
+	TotalCostUSD float64
+	ModelTokens  map[string]*ModelUsage
 
-	TotalModelSwitches    int
-	SessionsWithSwitches  int
+	TotalModelSwitches   int
+	SessionsWithSwitches int
 
 	ToolErrors    map[string]int
 	SkillErrors   map[string]int
@@ -129,9 +129,9 @@ type GlobalStats struct {
 
 	AllTurnsPerRequest []int
 
-	SessionDurations []time.Duration
-	SessionTokens    []int64
-	SessionStarts    []time.Time
+	SessionDurations   []time.Duration
+	SessionTokens      []int64
+	SessionStarts      []time.Time
 	AllErrorTimestamps []time.Time
 
 	AllToolCallTimestamps  map[string][]time.Time
@@ -139,9 +139,9 @@ type GlobalStats struct {
 
 	AllMsgTimestamps []time.Time
 
-	HookCounts      map[string]int            // command -> total invocations
-	HookEventCounts map[string]int            // event type -> count
-	HookTimestamps  map[string][]time.Time    // command -> timestamps
+	HookCounts      map[string]int         // command -> total invocations
+	HookEventCounts map[string]int         // event type -> count
+	HookTimestamps  map[string][]time.Time // command -> timestamps
 
 	ProjectStats []ProjectStats // per-project aggregated stats, sorted by cost desc
 }

@@ -289,8 +289,8 @@ func (m *mockTransport) Upload(ctx context.Context, destDir string, tarball []by
 func (m *mockTransport) StreamFile(ctx context.Context, remotePath string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("streamed data")), nil
 }
-func (m *mockTransport) Prepare(ctx context.Context) error  { return nil }
-func (m *mockTransport) Release(ctx context.Context) error  { return nil }
+func (m *mockTransport) Prepare(ctx context.Context) error { return nil }
+func (m *mockTransport) Release(ctx context.Context) error { return nil }
 func (m *mockTransport) Status(ctx context.Context) (string, error) {
 	return "running", nil
 }

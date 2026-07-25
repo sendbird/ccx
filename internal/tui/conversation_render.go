@@ -123,7 +123,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		if filterTerm != "" && maxW > 0 {
 			label = highlightSnippet(label, filterTerm, maxW, style)
 		} else {
-							label = truncateContextText(label, maxW)
+			label = truncateContextText(label, maxW)
 			label = style.Render(label)
 		}
 		line := fmt.Sprintf("%s%s %s %s", indent, cursor, status, label)
@@ -166,7 +166,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 				}
 				maxW := width - lipgloss.Width(indent) - 12
 				if opDesc != "" {
-											opDesc = truncateContextText(opDesc, maxW)
+					opDesc = truncateContextText(opDesc, maxW)
 					label = "· " + style.Render(opDesc)
 				} else {
 					if selected {
@@ -202,7 +202,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		if filterTerm != "" && maxW > 0 {
 			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, highlightSnippet(subj, filterTerm, maxW, style))
 		} else {
-							subj = truncateContextText(subj, maxW)
+			subj = truncateContextText(subj, maxW)
 			line = fmt.Sprintf("%s%s %s %s%s", indent, cursor, status, idLabel, style.Render(subj))
 		}
 	case convAgent:
@@ -249,7 +249,7 @@ func renderConvTaskOrAgent(w io.Writer, ci convItem, selected bool, width int, c
 		if filterTerm != "" && maxW > 0 {
 			line = fmt.Sprintf("%s%s %s%s %s %s", indent, cursor, badge, typeStr, msgs, highlightSnippet(prompt, filterTerm, maxW, style))
 		} else {
-							prompt = truncateContextText(prompt, maxW)
+			prompt = truncateContextText(prompt, maxW)
 			line = fmt.Sprintf("%s%s %s%s %s %s", indent, cursor, badge, typeStr, msgs, style.Render(prompt))
 		}
 	}
@@ -464,7 +464,7 @@ func convMsgPreview(e session.Entry, maxW int) string {
 			for strings.Contains(text, "  ") {
 				text = strings.ReplaceAll(text, "  ", " ")
 			}
-							text = truncateContextText(text, maxW)
+			text = truncateContextText(text, maxW)
 			return text
 		}
 	}
@@ -479,7 +479,7 @@ func convMsgPreview(e session.Entry, maxW int) string {
 				return errorStyle.Render("[error]")
 			}
 			text = "[error] " + text
-							text = truncateContextText(text, maxW)
+			text = truncateContextText(text, maxW)
 			return errorStyle.Render(text)
 		}
 	}
@@ -492,13 +492,13 @@ func convMsgPreview(e session.Entry, maxW int) string {
 	}
 	if images > 0 {
 		s := fmt.Sprintf("[%d image(s)]", images)
-					s = truncateContextText(s, maxW)
+		s = truncateContextText(s, maxW)
 		return dimStyle.Render(s)
 	}
 	// Summarize tools
 	summary := mergedToolSummary(e)
 	if summary != "" {
-					summary = truncateContextText(summary, maxW)
+		summary = truncateContextText(summary, maxW)
 		return toolStyle.Render(summary)
 	}
 	return ""
@@ -1297,7 +1297,7 @@ func resolveTaskLabel(icon, verb, taskID string, agentsByID map[string]session.S
 	}
 	if cmd, ok := bgTasks[taskID]; ok {
 		short := cmd
-					short = truncateContextText(short, maxW)
+		short = truncateContextText(short, maxW)
 		return icon + " " + short, icon + " " + verb + ": " + cmd
 	}
 	shortID := taskID
