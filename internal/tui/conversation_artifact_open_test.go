@@ -35,7 +35,7 @@ func TestMetaScratchpadEntriesBuildsRowsAndTargets(t *testing.T) {
 	app.conv.sess.ProjectPath = root
 	app.conv.sess.ID = "scratch-sess"
 	writeTestScratchpad(t, root, "scratch-sess", map[string]string{
-		"notes.md": "scratch body\n",
+		"notes.md":  "scratch body\n",
 		"draft.txt": "draft\n",
 	})
 

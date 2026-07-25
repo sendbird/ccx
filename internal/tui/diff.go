@@ -24,8 +24,8 @@ func homeDir() string {
 // Diff styles for colorized output
 var (
 	diffAddStyle    = lipgloss.NewStyle().Foreground(colorGreenSoft) // green
-	diffDelStyle    = lipgloss.NewStyle().Foreground(colorRedSoft) // red
-	diffHunkStyle   = lipgloss.NewStyle().Foreground(colorSky) // cyan
+	diffDelStyle    = lipgloss.NewStyle().Foreground(colorRedSoft)   // red
+	diffHunkStyle   = lipgloss.NewStyle().Foreground(colorSky)       // cyan
 	diffHeaderStyle = lipgloss.NewStyle().Foreground(colorDim)
 	diffCtxStyle    = lipgloss.NewStyle().Foreground(colorHelp) // gray context lines
 )

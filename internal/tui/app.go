@@ -515,10 +515,10 @@ type App struct {
 	cfgSkillSavedPath     string
 	// cfgPluginsPage is true when the config view is on the PLUGINS page
 	// (integrated plugins view); cfgFilterCat is irrelevant then.
-	cfgPluginsPage bool
-	cfgTrash          []cfgTrashEntry   // undo stack for deleted items
-	cfgDeleteConfirm  bool              // waiting for second x press
-	cfgActionsMenu    bool              // config actions menu open
+	cfgPluginsPage   bool
+	cfgTrash         []cfgTrashEntry // undo stack for deleted items
+	cfgDeleteConfirm bool            // waiting for second x press
+	cfgActionsMenu   bool            // config actions menu open
 
 	// Plugin explorer (viewPlugins)
 	plgTree        *session.PluginTree

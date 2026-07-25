@@ -696,7 +696,8 @@ func (a *App) renderInspectorChangesByFile(arts []session.Artifact) string {
 // occurrence must be a Write (establishing a baseline) and every subsequent
 // Edit must apply cleanly. Unknown tools (MultiEdit/NotebookEdit) or a missing
 // old_string make reconstruction bail so the caller can fall back.
-func reconstructFileChanges(occ []session.Artifact) (initial, final string, ok bool) {	if len(occ) == 0 {
+func reconstructFileChanges(occ []session.Artifact) (initial, final string, ok bool) {
+	if len(occ) == 0 {
 		return "", "", false
 	}
 	sort.SliceStable(occ, func(i, j int) bool {
