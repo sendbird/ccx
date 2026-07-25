@@ -17,9 +17,14 @@ func newTestApp(sessions []session.Session) *App {
 	app := NewApp(sessions, Config{TmuxEnabled: true})
 	m, _ := app.Update(tea.WindowSizeMsg{Width: 160, Height: 50})
 	a := m.(*App)
+	// TestMain points HOME at a temp dir, so NewApp sees default preferences
+	// rather than the developer's ~/.config/ccx/config.yaml. The resets below
+	// therefore normalize against the *production defaults* (not against local
+	// config), which keeps index/visible-item assertions stable.
+	//
 	// Reset state to viewSessions — NewApp may restore a different view from
-	// persisted preferences (~/.config/ccx/config.yaml), which would break
-	// tests that assume the sessions view is active.
+	// persisted preferences, which would break tests that assume the sessions
+	// view is active.
 	a.state = viewSessions
 	a.sessPreviewMode = sessPreviewConversation
 	a.sessionsLoading = false
