@@ -488,8 +488,13 @@ func (a *App) executionRailCells() []string {
 		}
 		plain, _ := truncateExact(label, labelWidth)
 		prefix := "  "
-		if context.Key == a.conv.execution.CursorKey && a.conv.execution.Focused {
+		if a.conv.execution.Focused && context.Key == a.conv.execution.CursorKey {
+			// Cursor indicator when the rail is focused.
 			prefix = "> "
+		} else if context.Key == a.conv.execution.ActiveKey {
+			// Active context indicator when the rail is NOT focused —
+			// shows which context's conversation is currently displayed.
+			prefix = "▸ "
 		}
 		cell := prefix + executionStatusGlyph(context.Status) + " " + plain
 		if context.Key == a.conv.execution.ActiveKey {
