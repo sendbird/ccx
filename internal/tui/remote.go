@@ -1256,6 +1256,55 @@ func (a *App) executeCmdRemotePull(input string) (tea.Model, tea.Cmd) {
 	}
 }
 
+// executeCmdRemotePullSession fetches the remote session JSONL (conversation
+// transcript) and writes it into the local ~/.claude/projects/ tree, over-
+// writing the local session file so `claude --resume <id>` picks up everything
+// that happened on the remote. This is the "remote → local session sync" that
+// lets you work on a beefy remote and finish locally.
+func (a *App) executeCmdRemotePullSession() (tea.Model, tea.Cmd) {
+	sess, ok := a.selectedSession()
+	if !ok || !sess.IsRemote {
+		a.copiedMsg = "Select a remote session first"
+		return a, nil
+	}
+
+	cfg, ok := a.resolveRemoteConfig(sess.RemotePodName)
+	if !ok {
+		a.copiedMsg = "No config for remote session"
+		return a, nil
+	}
+
+	// Determine the local project path to materialize into.
+	localProject := cfg.LocalDir
+	if localProject == "" {
+		a.copiedMsg = "No local_dir configured — cannot determine local project path"
+		return a, nil
+	}
+
+	pod := sess.RemotePodName
+	a.copiedMsg = fmt.Sprintf("Pulling session %s → local...", pod)
+	return a, func() tea.Msg {
+		t := cfg.BuildTransportForPod(pod)
+		data, err := remote.FetchSessionJSONL(cfg, t)
+		if err != nil {
+			return remotePullMsg{podName: pod, dest: "", err: err}
+		}
+
+		// Write into ~/.claude/projects/<encoded local path>/<session-id>.jsonl
+		encoded := session.EncodeProjectPath(localProject)
+		home := homeDir()
+		projDir := filepath.Join(home, ".claude", "projects", encoded)
+		if err := os.MkdirAll(projDir, 0o755); err != nil {
+			return remotePullMsg{podName: pod, dest: "", err: err}
+		}
+		sessFile := filepath.Join(projDir, sess.ID+".jsonl")
+		if err := os.WriteFile(sessFile, data, 0o644); err != nil {
+			return remotePullMsg{podName: pod, dest: "", err: err}
+		}
+		return remotePullMsg{podName: pod, dest: sessFile, err: nil}
+	}
+}
+
 func (a *App) handleRemotePull(msg remotePullMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		a.copiedMsg = "Pull failed: " + msg.err.Error()
