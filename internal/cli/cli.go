@@ -483,34 +483,40 @@ func findSessionFile(claudeDir string) (string, string, error) {
 		return "", "", fmt.Errorf("no Claude session found in current window")
 	}
 
-	allSessions := session.LoadCachedSessions(claudeDir)
-	if len(allSessions) == 0 {
-		return "", "", fmt.Errorf("no cached sessions found (run ccx once first)")
+	cached := session.LoadCachedSessions(claudeDir)
+	matches := matchSessionsForPaths(cached, projPaths, samePath)
+
+	// The cache is only written by the TUI's full scan (session.ScanSessions),
+	// so the CLI alone never refreshes it: a session started since the last TUI
+	// run isn't in the cache at all. Scan the pane's project dirs directly.
+	//
+	// The result is NOT re-filtered by ProjectPath. ScanSessionsForPaths reads
+	// the directory encoded from each pane path, so the directory itself is the
+	// link — while the scanned ProjectPath is whatever the transcript's *last*
+	// isMeta line carried, which for a worktree with a nested module flips
+	// between the project and its subdirectory. Filtering on it would reproduce
+	// the very miss this fallback exists to fix.
+	if len(matches) == 0 {
+		if fresh, err := session.ScanSessionsForPaths(claudeDir, projPaths); err == nil {
+			matches = fresh
+		}
 	}
 
-	// Collect the best (most recent) session per project path
-	var matches []session.Session
-	seen := make(map[string]bool)
-	for _, projPath := range projPaths {
-		absProj, _ := filepath.Abs(projPath)
-		if absProj == "" {
-			absProj = projPath
-		}
-		var best *session.Session
-		for i := range allSessions {
-			absSP, _ := filepath.Abs(allSessions[i].ProjectPath)
-			if absSP == "" {
-				absSP = allSessions[i].ProjectPath
+	// Last resort: the pane sits in a subdirectory of a project that has a
+	// session (a nested module inside a worktree, say). Only this direction is
+	// safe. Matching downward too would let a pane in a broad parent like
+	// ~/src pick an arbitrary deep session under it, which is worse than
+	// failing. This pass runs against the cache — the fresh scan reads only
+	// the dir encoded from the pane path itself — and says so, since the
+	// session isn't at the current path.
+	if len(matches) == 0 {
+		if matches = matchSessionsForPaths(cached, projPaths, paneUnderSession); len(matches) > 0 {
+			nearest := make([]string, 0, len(matches))
+			for _, m := range matches {
+				nearest = append(nearest, m.ProjectPath)
 			}
-			if absSP == absProj {
-				if best == nil || allSessions[i].ModTime.After(best.ModTime) {
-					best = &allSessions[i]
-				}
-			}
-		}
-		if best != nil && !seen[best.ID] {
-			seen[best.ID] = true
-			matches = append(matches, *best)
+			fmt.Fprintf(os.Stderr, "ccx: no session at the current path; using nearest parent: %s\n",
+				strings.Join(nearest, ", "))
 		}
 	}
 
@@ -527,6 +533,79 @@ func findSessionFile(claudeDir string) (string, string, error) {
 		return "", "", err
 	}
 	return matches[idx].FilePath, matches[idx].ID, nil
+}
+
+// matchSessionsForPaths returns the best session for each project path,
+// deduplicated by session ID and ordered by projPaths. match decides whether a
+// session's absolute project path counts as a hit for a pane's absolute path.
+// Among hits, the fewest path segments between the two wins, and ties break on
+// the most recent ModTime — so an exact match always beats a nearby one, and a
+// direct parent beats a distant ancestor.
+func matchSessionsForPaths(sessions []session.Session, projPaths []string, match func(sessPath, panePath string) bool) []session.Session {
+	var matches []session.Session
+	seen := make(map[string]bool)
+	for _, projPath := range projPaths {
+		absProj := absOrSelf(projPath)
+		var best *session.Session
+		bestDist := 0
+		for i := range sessions {
+			absSP := absOrSelf(sessions[i].ProjectPath)
+			if !match(absSP, absProj) {
+				continue
+			}
+			dist := pathDistance(absSP, absProj)
+			if best == nil || dist < bestDist ||
+				(dist == bestDist && sessions[i].ModTime.After(best.ModTime)) {
+				best = &sessions[i]
+				bestDist = dist
+			}
+		}
+		if best != nil && !seen[best.ID] {
+			seen[best.ID] = true
+			matches = append(matches, *best)
+		}
+	}
+	return matches
+}
+
+// pathDistance counts the path segments separating a from b when one contains
+// the other (0 when equal). Unrelated paths get a large value so they always
+// lose to a related one.
+func pathDistance(a, b string) int {
+	switch {
+	case a == b:
+		return 0
+	case isUnder(a, b):
+		return strings.Count(strings.TrimPrefix(a, b), string(filepath.Separator))
+	case isUnder(b, a):
+		return strings.Count(strings.TrimPrefix(b, a), string(filepath.Separator))
+	default:
+		return 1 << 30
+	}
+}
+
+func absOrSelf(p string) string {
+	abs, _ := filepath.Abs(p)
+	if abs == "" {
+		return p
+	}
+	return abs
+}
+
+func samePath(sessPath, panePath string) bool { return sessPath == panePath }
+
+// paneUnderSession reports whether the pane sits inside the session's project
+// directory — the nested-module case. Deliberately one-directional: see the
+// call site for why the reverse is unsafe.
+func paneUnderSession(sessPath, panePath string) bool {
+	return isUnder(panePath, sessPath)
+}
+
+func isUnder(child, parent string) bool {
+	if child == "" || parent == "" {
+		return false
+	}
+	return strings.HasPrefix(child, strings.TrimSuffix(parent, string(filepath.Separator))+string(filepath.Separator))
 }
 
 // promptSessionChoice shows a numbered list and asks the user to pick one.
