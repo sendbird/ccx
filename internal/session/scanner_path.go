@@ -49,6 +49,68 @@ func MoveProject(oldPath, newPath string) error {
 	return nil
 }
 
+// MoveSession moves a single session's transcript (and its subagent/scratchpad
+// data) from the project directory for oldPath to the project directory for
+// newPath, leaving every other session under oldPath untouched. Unlike
+// MoveProject, this does not rename the whole project directory.
+func MoveSession(oldPath, newPath, sessionID string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home dir: %w", err)
+	}
+
+	oldEncoded := EncodeProjectPath(oldPath)
+	newEncoded := EncodeProjectPath(newPath)
+	projectsDir := filepath.Join(home, ".claude", "projects")
+	oldDir := filepath.Join(projectsDir, oldEncoded)
+	newDir := filepath.Join(projectsDir, newEncoded)
+
+	oldFile := filepath.Join(oldDir, sessionID+".jsonl")
+	if _, err := os.Stat(oldFile); os.IsNotExist(err) {
+		return fmt.Errorf("session file not found: %s", oldFile)
+	}
+	newFile := filepath.Join(newDir, sessionID+".jsonl")
+	if _, err := os.Stat(newFile); err == nil {
+		return fmt.Errorf("target already exists: %s", newFile)
+	}
+
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		return fmt.Errorf("create target project dir: %w", err)
+	}
+
+	if err := rewriteCwdInFile(oldFile, oldPath, newPath); err != nil {
+		return fmt.Errorf("rewrite cwd: %w", err)
+	}
+	if err := os.Rename(oldFile, newFile); err != nil {
+		return fmt.Errorf("rename session file: %w", err)
+	}
+
+	oldSubDir := filepath.Join(oldDir, sessionID)
+	if info, err := os.Stat(oldSubDir); err == nil && info.IsDir() {
+		if err := rewriteCwdInDir(oldSubDir, oldPath, newPath); err != nil {
+			return fmt.Errorf("rewrite cwd in subagents: %w", err)
+		}
+		if err := os.Rename(oldSubDir, filepath.Join(newDir, sessionID)); err != nil {
+			return fmt.Errorf("move subagents dir: %w", err)
+		}
+	}
+
+	oldScratchDir := filepath.Join(ScratchpadBase(), oldEncoded, sessionID)
+	if info, err := os.Stat(oldScratchDir); err == nil && info.IsDir() {
+		newScratchParent := filepath.Join(ScratchpadBase(), newEncoded)
+		if err := os.MkdirAll(newScratchParent, 0755); err != nil {
+			return fmt.Errorf("create target scratchpad dir: %w", err)
+		}
+		if err := os.Rename(oldScratchDir, filepath.Join(newScratchParent, sessionID)); err != nil {
+			return fmt.Errorf("move scratchpad dir: %w", err)
+		}
+	}
+
+	decodedPathCache.Delete(oldEncoded)
+
+	return nil
+}
+
 func rewriteCwdInDir(dir, oldCwd, newCwd string) error {
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
