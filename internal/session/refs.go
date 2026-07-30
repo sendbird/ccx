@@ -339,6 +339,36 @@ func RefStatusText(r SessionRef) string {
 	return ""
 }
 
+// RefStatusVariants returns progressively shorter plain-text status summaries
+// for a ref, longest first. Callers with a tight width budget (narrow list
+// panes) pick the widest form that fits instead of truncating mid-word — or
+// drop the status entirely when even the shortest form does not fit. Returns
+// nil when there is nothing to show.
+//
+// Parts are dropped by usefulness under pressure: the review decision goes
+// first, then CI, leaving the lifecycle state as the last thing standing.
+func RefStatusVariants(r SessionRef) []string {
+	full := RefStatusText(r)
+	if full == "" {
+		return nil
+	}
+	variants := []string{full}
+	if r.Kind == RefPR && r.State != RefStateUnknown {
+		if r.ChecksState != "" {
+			variants = append(variants, string(r.State)+" · "+checksText(r.ChecksState))
+		}
+		variants = append(variants, string(r.State))
+	}
+	// Successive steps collapse to the same string when a part was absent.
+	out := variants[:1]
+	for _, v := range variants[1:] {
+		if v != out[len(out)-1] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // reviewText renders a PR review decision as plain text.
 func reviewText(d string) string {
 	switch d {

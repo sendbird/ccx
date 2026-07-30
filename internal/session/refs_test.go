@@ -227,6 +227,52 @@ func TestRefStatusText(t *testing.T) {
 	}
 }
 
+// TestRefStatusVariants covers the progressively-shorter status forms a
+// width-constrained list pane picks from. Variants must be longest-first,
+// deduplicated, and always start with the full RefStatusText.
+func TestRefStatusVariants(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  SessionRef
+		want []string
+	}{
+		{
+			"pr full", SessionRef{Kind: RefPR, State: RefStateOpen, ReviewDecision: "APPROVED", ChecksState: "SUCCESS", Resolved: true},
+			[]string{"OPEN · approved · checks ✓", "OPEN · checks ✓", "OPEN"},
+		},
+		{
+			"pr no checks", SessionRef{Kind: RefPR, State: RefStateOpen, ReviewDecision: "APPROVED", Resolved: true},
+			[]string{"OPEN · approved", "OPEN"},
+		},
+		{
+			"pr state only", SessionRef{Kind: RefPR, State: RefStateMerged, Resolved: true},
+			[]string{"MERGED"},
+		},
+		{"pr unresolved", SessionRef{Kind: RefPR}, []string{"…"}},
+		{"pr resolved empty", SessionRef{Kind: RefPR, Resolved: true}, nil},
+		{"jira", SessionRef{Kind: RefJira, JiraStatus: "In Progress", Resolved: true}, []string{"In Progress"}},
+		{"artifact", SessionRef{Kind: RefArtifact}, []string{"published"}},
+	}
+	for _, c := range cases {
+		got := RefStatusVariants(c.ref)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: variant %d got %q want %q", c.name, i, got[i], c.want[i])
+			}
+		}
+		// Widths must be non-increasing so callers can take the first that fits.
+		for i := 1; i < len(got); i++ {
+			if len([]rune(got[i])) > len([]rune(got[i-1])) {
+				t.Errorf("%s: variant %d (%q) is longer than %q", c.name, i, got[i], got[i-1])
+			}
+		}
+	}
+}
+
 func TestSessionRefIsOpen(t *testing.T) {
 	cases := []struct {
 		ref  SessionRef
