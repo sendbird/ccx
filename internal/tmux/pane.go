@@ -414,31 +414,47 @@ func KillWindow(p Pane) error {
 	return exec.Command("tmux", "kill-window", "-t", target).Run()
 }
 
-// CurrentWindowClaudes returns project paths of Claude processes in the current tmux window.
+// CurrentWindowClaudes returns project paths of Claude processes running in
+// the tmux window this process actually lives in — not the tmux client's
+// active window, which may differ when several windows share one client.
+//
+// The earlier implementation asked tmux for "#{session_name}|#{window_index}",
+// i.e. the window the *client* is looking at. A Claude session running in a
+// background window of the same client (common during a multi-window build)
+// then resolved refs against the foreground window's panes instead of its
+// own, surfacing unrelated PRs. We now walk this process's own PPID chain to
+// the tmux pane that hosts it and use that pane's window. The client-active
+// window is the fallback when the pane can't be determined (e.g. a wrapper
+// has re-parented the process beyond tmux's view).
 func CurrentWindowClaudes() []string {
 	if !InTmux() {
 		return nil
 	}
-
-	out, err := exec.Command("tmux", "display-message", "-p",
-		"#{session_name}|#{window_index}").Output()
-	if err != nil {
-		return nil
-	}
-	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 2)
-	if len(parts) < 2 {
-		return nil
-	}
-	mySession, myWindow := parts[0], parts[1]
 
 	panes, err := ListPanes()
 	if err != nil {
 		return nil
 	}
 
+	// Pin "our" window by walking this process's own PPID chain to the tmux
+	// pane that hosts it. That pane's session|window is the window whose
+	// Claude panes we want — independent of which window the client shows.
+	mySession, myWindow := clientActiveWindow()
+	if own := findPaneByPID(panes, ownPanePID(panes)); own != nil {
+		mySession, myWindow = own.Session, own.Window
+	}
+
+	return claudesInWindow(panes, mySession, myWindow)
+}
+
+// claudesInWindow returns the absolute cwd of every pane in the named tmux
+// window that has a Claude process (direct child or deeper descendant) running
+// in it. Pure function over the pane list — extracted so the window-selection
+// logic is testable without a live tmux.
+func claudesInWindow(panes []Pane, session, window string) []string {
 	var paths []string
 	for _, p := range panes {
-		if p.Session != mySession || p.Window != myWindow {
+		if p.Session != session || p.Window != window {
 			continue
 		}
 		if !HasClaude(p.PID) {
@@ -450,6 +466,46 @@ func CurrentWindowClaudes() []string {
 		}
 	}
 	return paths
+}
+
+// findPaneByPID returns the pane with the given PID, or nil when panePID is 0
+// or no pane matches (e.g. this process lives outside any tmux pane).
+func findPaneByPID(panes []Pane, panePID int) *Pane {
+	if panePID == 0 {
+		return nil
+	}
+	for i := range panes {
+		if panes[i].PID == panePID {
+			return &panes[i]
+		}
+	}
+	return nil
+}
+
+// clientActiveWindow returns the session|window the tmux client currently
+// shows, as a fallback when ownPanePID can't attribute this process to a pane.
+func clientActiveWindow() (session, window string) {
+	out, err := exec.Command("tmux", "display-message", "-p",
+		"#{session_name}|#{window_index}").Output()
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 2)
+	if len(parts) < 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
+}
+
+// ownPanePID walks this process's PPID chain up to the tmux pane shell that
+// hosts it. Returns 0 when the chain doesn't reach a pane PID (the process
+// is outside tmux, or a wrapper has re-parented it beyond the visible tree).
+func ownPanePID(panes []Pane) int {
+	panePIDs := make(map[int]bool, len(panes))
+	for _, p := range panes {
+		panePIDs[p.PID] = true
+	}
+	return walkToPane(os.Getpid(), panePIDs, batchPPIDMap())
 }
 
 // CurrentWindowKey returns "session_name|window_index" for the current tmux window,
