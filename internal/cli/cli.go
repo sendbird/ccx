@@ -392,11 +392,12 @@ func RunSessions(claudeDir string, all bool) error {
 	return nil
 }
 
-// RunMove moves a project's session directory to newPath, taking every
-// session under it along. oldDir, if set, is used directly. Otherwise
-// sessionID resolves to its project dir; if that's empty too, the session
-// is resolved the same way other subcommands do (tmux window / live
-// registry match).
+// RunMove moves a session's project path to newPath. With --from, oldDir is
+// used directly and the whole project directory (every session under it) is
+// moved. Otherwise sessionID resolves to a specific session (defaulting to
+// the current tmux window's session), and only that session's transcript
+// (plus its subagent/scratchpad data) is moved, leaving sibling sessions
+// under the old project path untouched.
 func RunMove(claudeDir, sessionID, oldDir, newPath string) error {
 	newPath = strings.TrimSpace(newPath)
 	if newPath == "" {
@@ -415,31 +416,43 @@ func RunMove(claudeDir, sessionID, oldDir, newPath string) error {
 			return fmt.Errorf("resolve old path: %w", err)
 		}
 		oldPath = abs
-	} else if sessionID != "" {
-		sess, ok := session.FindSessionByID(claudeDir, sessionID)
+
+		if oldPath == newPath {
+			return fmt.Errorf("new path is the same as the current path: %s", oldPath)
+		}
+		if err := session.MoveProject(oldPath, newPath); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "%s -> %s\n", oldPath, newPath)
+		return nil
+	}
+
+	var sess session.Session
+	if sessionID != "" {
+		s, ok := session.FindSessionByID(claudeDir, sessionID)
 		if !ok {
 			return fmt.Errorf("session %s not found", sessionID)
 		}
-		oldPath = sess.ProjectPath
+		sess = s
 	} else {
 		_, sessID, err := findSessionFile(claudeDir)
 		if err != nil {
 			return err
 		}
-		sess, ok := session.FindSessionByID(claudeDir, sessID)
+		s, ok := session.FindSessionByID(claudeDir, sessID)
 		if !ok {
 			return fmt.Errorf("session %s not found", sessID)
 		}
-		oldPath = sess.ProjectPath
+		sess = s
 	}
 
-	if oldPath == newPath {
-		return fmt.Errorf("new path is the same as the current path: %s", oldPath)
+	if sess.ProjectPath == newPath {
+		return fmt.Errorf("new path is the same as the current path: %s", sess.ProjectPath)
 	}
-	if err := session.MoveProject(oldPath, newPath); err != nil {
+	if err := session.MoveSession(sess.ProjectPath, newPath, sess.ID); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "%s -> %s\n", oldPath, newPath)
+	fmt.Fprintf(os.Stdout, "%s -> %s\n", sess.ProjectPath, newPath)
 	return nil
 }
 
