@@ -36,6 +36,10 @@ type PickerResult struct {
 
 type pickerPreviewMode int
 
+// minRowLabelWidth is the floor for a list row's label. Optional detail (ref
+// count, PR/Jira status) is dropped rather than squeezing the label below this.
+const minRowLabelWidth = 12
+
 const (
 	pickerPreviewConversation pickerPreviewMode = iota
 	pickerPreviewArtifacts
@@ -61,6 +65,12 @@ type pickerModel struct {
 	searching   bool
 	searchInput textinput.Model
 	searchTerm  string
+
+	// showAllRefs overrides the refs picker's default open-only filter so
+	// merged/closed PRs and done Jira issues are listed too. Toggled with M,
+	// or implicitly when the search term contains an explicit is:merged /
+	// is:closed / is:all tag.
+	showAllRefs bool
 
 	preview viewport.Model
 	width   int
@@ -168,6 +178,12 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pickerRefStatusMsg:
 		if m.refStatus != nil {
 			m.refStatus[msg.ref.URL] = msg.ref
+		}
+		// A ref's newly-resolved state may move it out of (or into) the
+		// default open-only filter, so re-filter to keep the list honest.
+		if m.kind == "refs" {
+			m.filterItems()
+			m.updatePreview()
 		}
 		return m, nil
 	case tea.WindowSizeMsg:
@@ -424,13 +440,23 @@ func (m pickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc":
 		if m.searchTerm != "" {
 			m.searchTerm = ""
-			m.items = m.allItems
-			m.cursor = 0
+			m.filterItems()
 			m.updatePreview()
 			return m, nil
 		}
 		m.quit = true
 		return m, tea.Quit
+
+	case "M":
+		// Toggle showing merged/closed PRs and done Jira issues. Only
+		// meaningful for the refs picker, where the default open-only filter
+		// would otherwise hide them.
+		if m.kind == "refs" {
+			m.showAllRefs = !m.showAllRefs
+			m.filterItems()
+			m.updatePreview()
+		}
+		return m, nil
 
 	case "R":
 		// Refresh: re-read the session file and rebuild the item list, keeping
@@ -728,7 +754,64 @@ func renderConversationListRow(item PickerItem, selected bool, selectedMark, pla
 			lines = append(lines, textPrefix+dimStyle.Render(line))
 		}
 	}
+	// The 12-cell floors above can exceed listW on a very narrow pane, so clamp
+	// every produced line to the pane width as a last step.
+	clamp := lipgloss.NewStyle().MaxWidth(listW)
+	for i := range lines {
+		lines[i] = clamp.Render(lines[i])
+	}
 	return lines
+}
+
+// renderListRow renders one non-conversation list row clamped to exactly listW
+// cells. Everything after the label is optional detail: it is added only while
+// the budget allows, so a resolved PR status can never push the row past the
+// pane width and make lipgloss wrap it onto a second line (which would blow the
+// height budget and scramble the whole layout).
+func (m pickerModel) renderListRow(item PickerItem, cursored bool, check string, listW int, sel, dim, cat lipgloss.Style) string {
+	prefix := " "
+	if cursored {
+		prefix = ">"
+	}
+	badgePlain := padRightWidth(strings.ToUpper(item.Item.Category), 5)
+	// Widths are computed on the plain text; styling adds no cells.
+	used := runewidth.StringWidth(prefix+check+badgePlain) + 1 // +1 for the space after the badge
+
+	refBadgePlain := ""
+	if len(item.Refs) > 1 {
+		refBadgePlain = fmt.Sprintf(" ×%d", len(item.Refs))
+	}
+	refBadgeW := runewidth.StringWidth(refBadgePlain)
+	statusPlain := m.refStatusPlain(item.Item.URL, max(listW-used-minRowLabelWidth-refBadgeW, 0))
+
+	// The label yields space to the ref count and status, but never shrinks below
+	// minRowLabelWidth — an unreadable label is worse than a dropped badge. The
+	// status carries a 2-cell separator that must be budgeted here too, otherwise
+	// the final clamp eats the tail of the status ("MERGED" → "MERG").
+	statusW := 0
+	if statusPlain != "" {
+		statusW = runewidth.StringWidth(statusPlain) + 2
+	}
+	labelBudget := max(listW-used-refBadgeW-statusW, minRowLabelWidth)
+	label := item.Item.Label
+	if runewidth.StringWidth(label) > labelBudget {
+		label = truncateWidth(label, labelBudget)
+	}
+
+	labelStyle := dim
+	prefixStyled := " "
+	if cursored {
+		labelStyle = sel
+		prefixStyled = sel.Render(">")
+	}
+	row := prefixStyled + check + cat.Render(badgePlain) + " " + labelStyle.Render(label) +
+		dim.Render(refBadgePlain)
+	if statusPlain != "" {
+		row += "  " + dim.Render(statusPlain)
+	}
+	// Final clamp: styling and rounding can still leave a cell of slack, and one
+	// overflowing cell is enough to wrap the row.
+	return lipgloss.NewStyle().MaxWidth(listW).Render(row)
 }
 
 func (m pickerModel) View() string {
@@ -769,12 +852,6 @@ func (m pickerModel) View() string {
 		if m.selected[ri] {
 			check = sel.Render("* ")
 		}
-		badge := cat.Render(padRightWidth(strings.ToUpper(item.Item.Category), 5))
-		label := item.Item.Label
-		maxLabel := listW - 12
-		if maxLabel < 10 {
-			maxLabel = 10
-		}
 		if m.kind == "conversation" {
 			rows := renderConversationListRow(item, i == m.cursor, check, "  ", "", listW, sel, dim)
 			if len(listLines)+len(rows) > maxListLines && len(listLines) > 0 {
@@ -786,38 +863,31 @@ func (m pickerModel) View() string {
 		if len(listLines) >= maxListLines {
 			break
 		}
-		if runewidth.StringWidth(label) > maxLabel {
-			label = truncateWidth(label, maxLabel)
-		}
-		// Show ref count for items with multiple references
-		refBadge := ""
-		if len(item.Refs) > 1 {
-			refBadge = dim.Render(fmt.Sprintf(" ×%d", len(item.Refs)))
-		}
-		statusBadge := m.refStatusText(item.Item.URL, dim)
-		if i == m.cursor {
-			listLines = append(listLines, sel.Render(">")+check+badge+" "+sel.Render(label)+refBadge+statusBadge)
-		} else {
-			listLines = append(listLines, " "+check+badge+" "+dim.Render(label)+refBadge+statusBadge)
-		}
+		listLines = append(listLines, m.renderListRow(item, i == m.cursor, check, listW, sel, dim, cat))
 	}
+
+	// The search line and counter share the list pane, so they get the same
+	// per-line clamp as the rows: lipgloss wraps before it truncates, so an
+	// over-long line costs a row even with MaxHeight set on the box.
+	clampLine := lipgloss.NewStyle().MaxWidth(listW)
 
 	searchLine := ""
 	if m.searching {
-		searchLine = m.searchInput.View()
+		searchLine = clampLine.Render(m.searchInput.View())
 	} else if m.searchTerm != "" {
-		searchLine = dim.Render("[" + m.searchTerm + "]")
+		searchLine = clampLine.Render(dim.Render("[" + m.searchTerm + "]"))
 	}
 
 	scrollInfo := ""
 	if len(m.items) > 0 {
-		scrollInfo = dim.Render(fmt.Sprintf("[%d/%d]", m.cursor+1, len(m.items)))
+		scrollInfo = fmt.Sprintf("[%d/%d]", m.cursor+1, len(m.items))
 		if len(m.selected) > 0 {
-			scrollInfo += dim.Render(fmt.Sprintf(" %d selected", len(m.selected)))
+			scrollInfo += fmt.Sprintf(" %d selected", len(m.selected))
 		}
 	} else {
-		scrollInfo = dim.Render("no matches")
+		scrollInfo = "no matches"
 	}
+	scrollInfo = clampLine.Render(dim.Render(scrollInfo))
 
 	listContent := strings.Join(listLines, "\n")
 	if searchLine != "" {
@@ -825,7 +895,11 @@ func (m pickerModel) View() string {
 	}
 	listContent += "\n" + scrollInfo
 
-	listBox := lipgloss.NewStyle().Width(listW).Height(contentH).Render(listContent)
+	// MaxWidth/MaxHeight, not just Width/Height: the latter pad but do not
+	// truncate, so one over-long line would wrap and push the layout past the
+	// terminal's last row.
+	listBox := lipgloss.NewStyle().Width(listW).Height(contentH).
+		MaxWidth(listW).MaxHeight(contentH).Render(listContent)
 	borderColor := lipgloss.Color("#374151")
 	if m.previewFocused {
 		borderColor = lipgloss.Color("#38BDF8")
@@ -836,9 +910,12 @@ func (m pickerModel) View() string {
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(borderColor).
 		PaddingLeft(1).
+		MaxWidth(pw + 1). // +1 for the border column
+		MaxHeight(contentH).
 		Render(m.preview.View())
 
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#38BDF8")).
+		MaxWidth(m.width).
 		Render(fmt.Sprintf(" %s (%d)", m.kind, len(m.allItems)))
 
 	actions := "↵:jump"
@@ -846,7 +923,7 @@ func (m pickerModel) View() string {
 	case "urls":
 		actions = "↵:jump  o:open  e:$EDITOR"
 	case "refs":
-		actions = "↵:jump  o:open"
+		actions = "↵:jump  o:open  M:show all"
 	case "files":
 		actions = "↵:jump  e:$EDITOR"
 	case "changes":
@@ -860,29 +937,61 @@ func (m pickerModel) View() string {
 	if m.searching {
 		// Show filter hints when search is active
 		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
-		filterHints := ""
+		scopes := ""
 		switch m.kind {
 		case "urls":
-			filterHints = hint.Render("is:") + dim.Render("pr gh github jira slack other") + "  " + hint.Render("role:") + dim.Render("user asst")
+			scopes = "pr gh github jira slack other"
 		case "refs":
-			filterHints = hint.Render("is:") + dim.Render("pr jira") + "  " + hint.Render("role:") + dim.Render("user asst")
+			scopes = "pr jira open merged closed"
 		case "files":
-			filterHints = hint.Render("is:") + dim.Render("read write edit glob grep tool") + "  " + hint.Render("role:") + dim.Render("user asst")
+			scopes = "read write edit glob grep tool"
 		case "changes":
-			filterHints = hint.Render("is:") + dim.Render("change") + "  " + hint.Render("role:") + dim.Render("user asst")
+			scopes = "change"
 		case "images":
-			filterHints = hint.Render("is:") + dim.Render("image") + "  " + hint.Render("role:") + dim.Render("user asst")
+			scopes = "image"
 		case "conversation":
-			filterHints = hint.Render("is:") + dim.Render("conversation") + "  " + hint.Render("role:") + dim.Render("user asst")
+			scopes = "conversation"
 		}
-		footer = filterHints
+		if scopes != "" {
+			// Built from plain text first so the width check sees real cells,
+			// then styled — "is:<scopes>  role:user asst" clipped to one row.
+			plain := "is:" + scopes + "  role:user asst"
+			if runewidth.StringWidth(plain) <= m.width {
+				footer = hint.Render("is:") + dim.Render(scopes) + "  " + hint.Render("role:") + dim.Render("user asst")
+			} else {
+				footer = hint.Render("is:") + dim.Render(truncateWidth(scopes, max(m.width-3, 0)))
+			}
+		}
 	} else if m.previewFocused {
-		footer = dim.Render("j/k:scroll  ^d/^u:page  g/G:top/bottom  ←/esc:back")
+		footer = dim.Render(fitHint(m.width,
+			"j/k:scroll  ^d/^u:page  g/G:top/bottom  ←/esc:back",
+			"j/k:scroll  ^d/^u:page  ←/esc:back",
+			"j/k  ←:back",
+		))
 	} else {
-		footer = dim.Render(actions + "  y:copy  sp:select  a:all  A:none  →:preview  /:search  R:refresh  esc:quit")
+		footer = dim.Render(fitHint(m.width,
+			actions+"  y:copy  sp:select  a:all  A:none  →:preview  /:search  R:refresh  esc:quit",
+			actions+"  y:copy  sp:select  →:preview  /:search  esc:quit",
+			actions+"  /:search  esc:quit",
+			"↵:jump  /:search  esc:quit",
+		))
 	}
 
 	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, listBox, previewBox) + "\n" + footer + m.kittyImageLayer(contentH, listW, pw)
+}
+
+// fitHint returns the first hint variant that fits in width cells, falling back
+// to a hard truncation of the last (shortest) one. Footer hints wrap rather
+// than clip when they overflow, which costs a row the layout has not budgeted
+// for — dropping hints keeps the remaining ones readable.
+func fitHint(width int, variants ...string) string {
+	for _, v := range variants {
+		if runewidth.StringWidth(v) <= width {
+			return v
+		}
+	}
+	last := variants[len(variants)-1]
+	return truncateWidth(last, width)
 }
 
 // kittyImageLayer returns Kitty graphics escape sequences to render the
@@ -939,30 +1048,120 @@ func (m pickerModel) previewWidth() int { return m.width - m.listWidth() - 2 }
 
 func (m *pickerModel) filterItems() {
 	term := strings.ToLower(m.searchTerm)
-	if term == "" {
-		m.items = m.allItems
-		m.cursor = 0
-		return
-	}
 	terms := strings.Fields(term)
+
+	// Split explicit ref-state tags from plain search terms. The refs picker
+	// hides merged/closed PRs and done Jira issues by default so the list
+	// focuses on active work. An explicit `is:merged`/`is:closed`/`is:all`
+	// tag (or the M toggle) lifts the default filter AND, for `is:merged`/
+	// `is:closed`/`is:open`, narrows to only that state.
+	statusFilter := refStatusDefault
+	if m.showAllRefs {
+		statusFilter = refStatusAll
+	}
+	var wantedStates map[string]bool // nil = no state narrowing
+	addState := func(s string) {
+		if wantedStates == nil {
+			wantedStates = map[string]bool{}
+		}
+		wantedStates[s] = true
+	}
+	var plainTerms []string
+	for _, t := range terms {
+		switch t {
+		case "is:merged":
+			statusFilter = refStatusAll
+			addState("MERGED")
+		case "is:closed":
+			statusFilter = refStatusAll
+			addState("CLOSED")
+		case "is:open":
+			addState("OPEN")
+			addState("DRAFT")
+		case "is:all":
+			statusFilter = refStatusAll
+		default:
+			plainTerms = append(plainTerms, t)
+		}
+	}
+
 	var filtered []PickerItem
 	for _, item := range m.allItems {
-		text := strings.ToLower(item.FilterValue())
-		match := true
-		for _, t := range terms {
-			if !strings.Contains(text, t) {
-				match = false
-				break
+		if statusFilter == refStatusDefault && m.kind == "refs" {
+			if !m.refIsOpen(item) {
+				continue
 			}
 		}
-		if match {
-			filtered = append(filtered, item)
+		if wantedStates != nil && m.kind == "refs" {
+			if !m.refHasState(item, wantedStates) {
+				continue
+			}
 		}
+		if len(plainTerms) > 0 {
+			text := strings.ToLower(item.FilterValue())
+			match := true
+			for _, t := range plainTerms {
+				if !strings.Contains(text, t) {
+					match = false
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		filtered = append(filtered, item)
 	}
 	m.items = filtered
 	if m.cursor >= len(m.items) {
 		m.cursor = max(len(m.items)-1, 0)
 	}
+}
+
+// refStatusDefault hides merged/closed PRs and done Jira issues; refStatusAll
+// shows every ref regardless of state.
+type refStatusFilter int
+
+const (
+	refStatusDefault refStatusFilter = iota
+	refStatusAll
+)
+
+// refIsOpen reports whether a ref item is "active" (open/draft PR, or a Jira
+// issue that is not done). Unresolved refs are treated as open so they stay
+// visible until their status lands. Non-ref items (urls picker rows that are
+// not pr/jira) are always considered open — the filter only applies to refs.
+func (m pickerModel) refIsOpen(item PickerItem) bool {
+	if item.Item.Category != "pr" && item.Item.Category != "jira" {
+		return true
+	}
+	if m.refStatus == nil {
+		return true // unresolved → surface until status lands
+	}
+	ref, ok := m.refStatus[item.Item.URL]
+	if !ok {
+		return true // not yet resolved → keep visible
+	}
+	return ref.IsOpen()
+}
+
+// refHasState reports whether a ref item's resolved state matches any of the
+// wanted states (compared against SessionRef.State string values, e.g.
+// "MERGED", "CLOSED", "OPEN", "DRAFT"). Unresolved refs match nothing — an
+// explicit `is:merged` search shouldn't surface refs whose status hasn't
+// landed yet. Non-ref items never match a state query.
+func (m pickerModel) refHasState(item PickerItem, wanted map[string]bool) bool {
+	if item.Item.Category != "pr" && item.Item.Category != "jira" {
+		return false
+	}
+	if m.refStatus == nil {
+		return false
+	}
+	ref, ok := m.refStatus[item.Item.URL]
+	if !ok || !ref.Resolved {
+		return false
+	}
+	return wanted[string(ref.State)]
 }
 
 func (m pickerModel) realIndex(filteredIdx int) int {
@@ -994,21 +1193,24 @@ func (m pickerModel) selectedURLs() []string {
 	return nil
 }
 
-// refStatusText returns the styled PR/Jira status suffix (leading two spaces)
-// for a URL row, or "" when the URL has no resolved PR/Jira status.
-func (m pickerModel) refStatusText(url string, dim lipgloss.Style) string {
-	if m.refStatus == nil {
+// refStatusPlain returns the widest plain-text PR/Jira status for a URL that
+// fits in budget cells, or "" when the URL has no resolved status or even the
+// shortest form does not fit. Plain text (no styling) so callers can measure it.
+func (m pickerModel) refStatusPlain(url string, budget int) string {
+	if m.refStatus == nil || budget <= 0 {
 		return ""
 	}
 	ref, ok := m.refStatus[url]
 	if !ok {
 		return ""
 	}
-	txt := session.RefStatusText(ref)
-	if txt == "" {
-		return ""
+	// budget covers the two-space separator the caller prepends.
+	for _, v := range session.RefStatusVariants(ref) {
+		if runewidth.StringWidth(v)+2 <= budget {
+			return v
+		}
 	}
-	return "  " + dim.Render(txt)
+	return ""
 }
 
 func (m pickerModel) openItems(urls []string) {
