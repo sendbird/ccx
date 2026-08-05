@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sendbird/ccx/internal/claudecmd"
+	"github.com/sendbird/ccx/internal/clauderegistry"
 )
 
 // Pane represents a tmux pane with its metadata.
@@ -495,6 +496,59 @@ func clientActiveWindow() (session, window string) {
 		return "", ""
 	}
 	return parts[0], parts[1]
+}
+
+// CurrentWindowClaudeSessionIDs returns the session IDs of live Claude
+// processes running in the tmux window this process lives in.
+//
+// Panes are matched by process ancestry, not by cwd. Several panes in one
+// window frequently report the same pane_current_path (the shell never left
+// the directory the agent was launched from) while their Claude sessions live
+// in different projects — worktrees especially. Collapsing those panes to one
+// path made the refs lookup pick a single arbitrary session and miss the rest,
+// so we attribute each live registry entry to its owning pane instead.
+func CurrentWindowClaudeSessionIDs(live []clauderegistry.LiveSession) []string {
+	if !InTmux() || len(live) == 0 {
+		return nil
+	}
+	panes, err := ListPanes()
+	if err != nil {
+		return nil
+	}
+
+	mySession, myWindow := clientActiveWindow()
+	if own := findPaneByPID(panes, ownPanePID(panes)); own != nil {
+		mySession, myWindow = own.Session, own.Window
+	}
+
+	return claudeSessionsInWindow(panes, live, mySession, myWindow, batchPPIDMap())
+}
+
+// claudeSessionsInWindow attributes each live registry entry to the pane that
+// owns its process and returns the session IDs landing in the named window,
+// in registry order. Pure function over its inputs so the attribution logic is
+// testable without a live tmux or process tree.
+func claudeSessionsInWindow(panes []Pane, live []clauderegistry.LiveSession, session, window string, ppidOf map[int]int) []string {
+	inWindow := make(map[int]bool, len(panes))
+	panePIDs := make(map[int]bool, len(panes))
+	for _, p := range panes {
+		panePIDs[p.PID] = true
+		if p.Session == session && p.Window == window {
+			inWindow[p.PID] = true
+		}
+	}
+
+	var ids []string
+	seen := make(map[string]bool, len(live))
+	for _, l := range live {
+		panePID := walkToPane(l.PID, panePIDs, ppidOf)
+		if panePID == 0 || !inWindow[panePID] || l.SessionID == "" || seen[l.SessionID] {
+			continue
+		}
+		seen[l.SessionID] = true
+		ids = append(ids, l.SessionID)
+	}
+	return ids
 }
 
 // ownPanePID walks this process's PPID chain up to the tmux pane shell that
