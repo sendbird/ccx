@@ -299,6 +299,24 @@ func TestRefsFilterDefaultsToOpen(t *testing.T) {
 	}
 }
 
+// A completed lookup with no state means resolution failed, not that the PR is
+// inactive. Keep it visible until GitHub positively reports MERGED or CLOSED.
+func TestRefsFilterKeepsFailedResolutionVisible(t *testing.T) {
+	items := refFilterItems()
+	m := newPickerModel("refs", items, opener.Config{}, pickerContext{command: "refs"})
+	m.refStatus[items[0].Item.URL] = session.SessionRef{
+		Kind:     session.RefPR,
+		URL:      items[0].Item.URL,
+		State:    session.RefStateUnknown,
+		Resolved: true,
+	}
+	m.filterItems()
+
+	if got := pickerLabels(m); !equalSlices(got, []string{"o/r#1", "o/r#2", "o/r#3"}) {
+		t.Errorf("failed resolution filter: got %v, want all refs visible", got)
+	}
+}
+
 // TestRefsFilterShowsAllWithToggle guards the M toggle: after flipping
 // showAllRefs, every ref reappears regardless of state.
 func TestRefsFilterShowsAllWithToggle(t *testing.T) {
