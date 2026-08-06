@@ -74,7 +74,10 @@ type SessionRef struct {
 func (r SessionRef) IsOpen() bool {
 	switch r.Kind {
 	case RefPR:
-		return r.State == RefStateOpen || r.State == RefStateDraft
+		// Only a positively resolved terminal state is safe to hide. A failed
+		// `gh pr view` is recorded as Resolved=true with State=Unknown; treating
+		// that as inactive makes open PRs disappear during transient failures.
+		return r.State != RefStateMerged && r.State != RefStateClosed
 	case RefJira:
 		// Unknown Jira state is treated as open-ish so the link still surfaces;
 		// a resolved "done" is the only thing we hide from the open count.
@@ -621,11 +624,17 @@ type ghPRView struct {
 }
 
 func resolvePR(ctx context.Context, r SessionRef) SessionRef {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", r.URL,
-		"--json", "state,isDraft,reviewDecision,statusCheckRollup")
-	out, err := cmd.Output()
+	out, err := exec.CommandContext(ctx, "gh", "pr", "view", r.URL,
+		"--json", "state,isDraft,reviewDecision,statusCheckRollup").Output()
 	if err != nil {
-		return r // leave State=Unknown; link still renders
+		// Fine-grained tokens can read the PR but not statusCheckRollup. Retry
+		// without checks so lifecycle state still resolves and an open PR is not
+		// mistaken for inactive merely because CI metadata is inaccessible.
+		out, err = exec.CommandContext(ctx, "gh", "pr", "view", r.URL,
+			"--json", "state,isDraft,reviewDecision").Output()
+		if err != nil {
+			return r // leave State=Unknown; link still renders
+		}
 	}
 	var v ghPRView
 	if err := json.Unmarshal(out, &v); err != nil {

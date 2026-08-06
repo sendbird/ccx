@@ -485,6 +485,21 @@ func RunInfo(claudeDir string) error {
 // findSessionFile detects Claude sessions in the same tmux window.
 // If multiple sessions are found, prompts the user to choose one.
 func findSessionFile(claudeDir string) (string, string, error) {
+	// Prefer identity over location: the live registry knows exactly which
+	// session each Claude process runs, so panes are attributed by process
+	// ancestry. Path matching below cannot separate several panes of one window
+	// that report the same cwd while running sessions from different projects.
+	if matches := sessionsByID(claudeDir, tmux.CurrentWindowClaudeSessionIDs(liveSessions())); len(matches) > 0 {
+		if len(matches) == 1 {
+			return matches[0].FilePath, matches[0].ID, nil
+		}
+		idx, err := promptSessionChoice(matches)
+		if err != nil {
+			return "", "", err
+		}
+		return matches[idx].FilePath, matches[idx].ID, nil
+	}
+
 	projPaths := tmux.CurrentWindowClaudes()
 	if len(projPaths) == 0 {
 		live := clauderegistry.CwdSet()
@@ -546,6 +561,41 @@ func findSessionFile(claudeDir string) (string, string, error) {
 		return "", "", err
 	}
 	return matches[idx].FilePath, matches[idx].ID, nil
+}
+
+// liveSessions returns the live Claude registry, or nil when it is unavailable
+// (older Claude Code versions don't write it). Callers degrade to path matching.
+func liveSessions() []clauderegistry.LiveSession {
+	live, err := clauderegistry.Read()
+	if err != nil {
+		return nil
+	}
+	return live
+}
+
+// sessionsByID resolves session IDs to their transcripts, preserving the given
+// order and skipping IDs with no readable session. The cache is consulted first
+// because it already holds the parsed metadata; a session started since the last
+// TUI scan is absent from it, so those fall back to a direct lookup on disk.
+func sessionsByID(claudeDir string, ids []string) []session.Session {
+	if len(ids) == 0 {
+		return nil
+	}
+	byID := make(map[string]session.Session)
+	for _, s := range session.LoadCachedSessions(claudeDir) {
+		byID[s.ID] = s
+	}
+	out := make([]session.Session, 0, len(ids))
+	for _, id := range ids {
+		if s, ok := byID[id]; ok && s.FilePath != "" {
+			out = append(out, s)
+			continue
+		}
+		if s, ok := session.FindSessionByID(claudeDir, id); ok && s.FilePath != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // matchSessionsForPaths returns the best session for each project path,

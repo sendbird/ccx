@@ -282,6 +282,8 @@ func TestSessionRefIsOpen(t *testing.T) {
 		{SessionRef{Kind: RefPR, State: RefStateDraft}, true},
 		{SessionRef{Kind: RefPR, State: RefStateMerged}, false},
 		{SessionRef{Kind: RefPR, State: RefStateClosed}, false},
+		{SessionRef{Kind: RefPR, State: RefStateUnknown, Resolved: false}, true},
+		{SessionRef{Kind: RefPR, State: RefStateUnknown, Resolved: true}, true}, // failed resolve → surfaced
 		{SessionRef{Kind: RefJira, Resolved: true, JiraStatusDone: true}, false},
 		{SessionRef{Kind: RefJira, Resolved: true, JiraStatusDone: false}, true},
 		{SessionRef{Kind: RefJira, Resolved: false}, true}, // unresolved → surfaced

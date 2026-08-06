@@ -465,6 +465,12 @@ func (m pickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.allItems = fresh
 			m.selected = make(map[int]bool)
 			m.refPicking = false
+			// A failed lookup is cached like any other resolution. Manual refresh
+			// must force a network retry instead of replaying that unknown state.
+			if m.kind == "refs" || m.kind == "urls" {
+				session.ClearRefCache()
+				m.refStatus = make(map[string]session.SessionRef)
+			}
 			m.filterItems() // reapplies m.searchTerm and clamps the cursor
 			m.updatePreview()
 			return m, m.resolveRefsCmd()
