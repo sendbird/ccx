@@ -273,6 +273,44 @@ func resolveRefs(m pickerModel, states ...session.RefState) pickerModel {
 	return m
 }
 
+// A ref status can land before the first WindowSizeMsg, leaving m.width at 0.
+// The preview's truncation budgets are derived from that width, and the raw
+// arithmetic went negative — `ccx refs` panicked with "slice bounds out of
+// range [:-7]" while rendering the URL line. Repainting at an unknown width
+// must degrade, not crash.
+func TestUpdatePreviewSurvivesUnknownTerminalWidth(t *testing.T) {
+	items := refPickerItems(1)
+	items[0].Refs[0].Preview = strings.Repeat("long context line ", 20)
+	m := newPickerModel("refs", items, opener.Config{}, pickerContext{command: "refs"})
+
+	if got := m.previewWidth(); got <= 0 {
+		t.Fatalf("previewWidth() at width=0 is %d, want a positive floor", got)
+	}
+	// No WindowSizeMsg first — this is the ordering that panicked.
+	mm, _ := m.Update(pickerRefStatusMsg{ref: session.SessionRef{
+		Kind:     session.RefPR,
+		URL:      items[0].Item.URL,
+		State:    session.RefStateOpen,
+		Resolved: true,
+	}})
+	if _, ok := mm.(pickerModel); !ok {
+		t.Fatalf("Update returned %T, want pickerModel", mm)
+	}
+}
+
+// Every kind renders its preview through the same width budgets, so guard them
+// all against a zero-width terminal rather than only the refs path.
+func TestUpdatePreviewAtZeroWidthAcrossKinds(t *testing.T) {
+	for _, kind := range []string{"refs", "urls", "files", "changes", "conversation"} {
+		t.Run(kind, func(t *testing.T) {
+			items := refPickerItems(2)
+			items[0].Refs[0].Preview = strings.Repeat("wide ", 60)
+			m := newPickerModel(kind, items, opener.Config{}, pickerContext{command: kind})
+			m.updatePreview() // width still 0
+		})
+	}
+}
+
 func pickerLabels(m pickerModel) []string {
 	out := make([]string, len(m.items))
 	for i, it := range m.items {

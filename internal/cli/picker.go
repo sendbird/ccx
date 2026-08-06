@@ -629,11 +629,7 @@ func (m *pickerModel) updatePreview() {
 	}
 	sb.WriteString("\n")
 	if item.Item.URL != item.Item.Label {
-		url := item.Item.URL
-		if len(url) > pw-2 {
-			url = url[:pw-5] + "..."
-		}
-		sb.WriteString(dim.Render(url))
+		sb.WriteString(dim.Render(truncateWidth(item.Item.URL, pw-2)))
 		sb.WriteString("\n")
 	}
 	if m.kind == "changes" {
@@ -690,10 +686,7 @@ func (m *pickerModel) updatePreview() {
 				if strings.HasPrefix(line, "USER ") || strings.HasPrefix(line, "ASSISTANT ") || strings.HasPrefix(line, "ENTRY ") {
 					continue
 				}
-				if len(line) > pw-6 {
-					line = line[:pw-9] + "..."
-				}
-				sb.WriteString("    " + dim.Render(line) + "\n")
+				sb.WriteString("    " + dim.Render(truncateWidth(line, pw-6)) + "\n")
 			}
 		}
 		sb.WriteString("\n")
@@ -1049,8 +1042,17 @@ func (m pickerModel) kittyImageLayer(contentH, listW, previewW int) string {
 
 // --- Helpers ---
 
-func (m pickerModel) listWidth() int    { return m.width * 40 / 100 }
-func (m pickerModel) previewWidth() int { return m.width - m.listWidth() - 2 }
+func (m pickerModel) listWidth() int { return m.width * 40 / 100 }
+
+// previewWidth is floored at a usable minimum. Before the first WindowSizeMsg
+// m.width is 0, which made the raw arithmetic negative — any message that
+// repaints the preview earlier (a ref status landing, say) then panicked on a
+// negative slice bound.
+func (m pickerModel) previewWidth() int { return max(m.width-m.listWidth()-2, minPreviewWidth) }
+
+// minPreviewWidth keeps derived truncation budgets positive on an unknown or
+// very narrow terminal.
+const minPreviewWidth = 20
 
 func (m *pickerModel) filterItems() {
 	term := strings.ToLower(m.searchTerm)
