@@ -29,8 +29,11 @@ type ItemRef struct {
 
 // PickerItem is a deduplicated item with all its references.
 type PickerItem struct {
-	Item                  extract.Item
-	SessionID             string
+	Item      extract.Item
+	SessionID string
+	// Source is the compact label of the session this item came from, shown
+	// when a list aggregates several sessions of one tmux window.
+	Source                string
 	Refs                  []ItemRef // all places this item was referenced
 	ConversationArtifacts []extract.Item
 	ConversationText      string
@@ -40,6 +43,11 @@ type PickerItem struct {
 // Includes is:<category> tags for structured filtering.
 func (p PickerItem) FilterValue() string {
 	parts := []string{p.Item.Category, p.Item.Label, p.Item.URL}
+	// The origin session is searchable so `/tower` narrows an aggregated list
+	// to one session's items.
+	if p.Source != "" {
+		parts = append(parts, p.Source, "session:"+p.Source)
+	}
 	// Add is:<type> tag for structured search
 	cat := strings.ToLower(p.Item.Category)
 	parts = append(parts, "is:"+cat)

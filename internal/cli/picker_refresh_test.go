@@ -23,11 +23,12 @@ func TestPickerRefreshReextractsItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	items, err := extractItems("urls", path, "sess-1")
+	sources := []pickerSource{{filePath: path, sessID: "sess-1", label: "sess-1"}}
+	items, err := collectItems("urls", sources)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := newPickerModel("urls", items, opener.Config{}, pickerContext{command: "urls", filePath: path, sessID: "sess-1"})
+	m := newPickerModel("urls", items, opener.Config{}, pickerContext{command: "urls", sources: sources})
 	m.width, m.height = 120, 40
 	startCount := len(m.allItems)
 	if startCount == 0 {
@@ -58,8 +59,9 @@ func TestPickerRefreshKeepsSearchTerm(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	items, _ := extractItems("urls", path, "sess-2")
-	m := newPickerModel("urls", items, opener.Config{}, pickerContext{command: "urls", filePath: path, sessID: "sess-2"})
+	sources := []pickerSource{{filePath: path, sessID: "sess-2", label: "sess-2"}}
+	items, _ := collectItems("urls", sources)
+	m := newPickerModel("urls", items, opener.Config{}, pickerContext{command: "urls", sources: sources})
 	m.width, m.height = 120, 40
 	m.searchTerm = "alpha"
 	m.filterItems()
