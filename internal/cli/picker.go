@@ -37,8 +37,17 @@ type PickerResult struct {
 type pickerPreviewMode int
 
 // minRowLabelWidth is the floor for a list row's label. Optional detail (ref
-// count, PR/Jira status) is dropped rather than squeezing the label below this.
+// count, PR/Jira status, origin session) is dropped rather than squeezing the
+// label below this.
 const minRowLabelWidth = 12
+
+// Bounds for the origin-session column. Below minRowSourceWidth the label is
+// all ellipsis and tells the reader nothing, so it is dropped instead; above
+// maxRowSourceWidth a deep worktree name would crowd out the item itself.
+const (
+	minRowSourceWidth = 5
+	maxRowSourceWidth = 16
+)
 
 const (
 	pickerPreviewConversation pickerPreviewMode = iota
@@ -89,6 +98,11 @@ type pickerModel struct {
 	// show OPEN/MERGED/review/checks inline.
 	refStatus map[string]session.SessionRef
 
+	// showSource turns on the per-row origin column. A list built from a single
+	// session needs no provenance, so the width is only spent when the items
+	// actually come from more than one.
+	showSource bool
+
 	result *PickerResult
 	quit   bool
 
@@ -119,8 +133,25 @@ func newPickerModel(kind string, items []PickerItem, openerCfg opener.Config, ct
 		refStatus:        make(map[string]session.SessionRef),
 		opener:           openerCfg,
 		ctx:              ctx,
+		showSource:       hasMultipleSources(items),
 		langmap:          tui.LoadLangmap(configPath),
 	}
+}
+
+// hasMultipleSources reports whether the items came from more than one session.
+func hasMultipleSources(items []PickerItem) bool {
+	return countSources(items) > 1
+}
+
+// countSources counts the distinct origin sessions represented in the items.
+func countSources(items []PickerItem) int {
+	seen := make(map[string]bool)
+	for _, it := range items {
+		if it.Source != "" {
+			seen[it.Source] = true
+		}
+	}
+	return len(seen)
 }
 
 // pickerRefStatusMsg carries one resolved PR/Jira status back into the picker.
@@ -461,10 +492,11 @@ func (m pickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "R":
 		// Refresh: re-read the session file and rebuild the item list, keeping
 		// the active search term. Selection is reset (indices may have shifted).
-		if fresh, err := extractItems(m.ctx.command, m.ctx.filePath, m.ctx.sessID); err == nil {
+		if fresh, err := collectItems(m.ctx.command, m.ctx.sources); err == nil {
 			m.allItems = fresh
 			m.selected = make(map[int]bool)
 			m.refPicking = false
+			m.showSource = hasMultipleSources(fresh)
 			// A failed lookup is cached like any other resolution. Manual refresh
 			// must force a network retry instead of replaying that unknown state.
 			if m.kind == "refs" || m.kind == "urls" {
@@ -628,6 +660,10 @@ func (m *pickerModel) updatePreview() {
 		sb.WriteString(dim.Render(fmt.Sprintf("  (%d refs)", len(item.Refs))))
 	}
 	sb.WriteString("\n")
+	if m.showSource && item.Source != "" {
+		sb.WriteString(dim.Render(truncateWidth("session: "+item.Source, pw-2)))
+		sb.WriteString("\n")
+	}
 	if item.Item.URL != item.Item.Label {
 		sb.WriteString(dim.Render(truncateWidth(item.Item.URL, pw-2)))
 		sb.WriteString("\n")
@@ -702,7 +738,7 @@ func (m *pickerModel) updatePreview() {
 
 // --- View ---
 
-func renderConversationListRow(item PickerItem, selected bool, selectedMark, plainMark, badge string, listW int, selStyle, dimStyle lipgloss.Style) []string {
+func renderConversationListRow(item PickerItem, selected bool, selectedMark, plainMark, badge string, listW int, selStyle, dimStyle lipgloss.Style, source string) []string {
 	plainBadge := strings.ToUpper(item.Item.Category)
 	plainBadge = truncateWidth(plainBadge, 5)
 	plainBadge = padRightWidth(plainBadge, 5)
@@ -724,7 +760,13 @@ func renderConversationListRow(item PickerItem, selected bool, selectedMark, pla
 	textPrefix := strings.Repeat(" ", lipgloss.Width(plainPrefix))
 
 	label := item.Item.Label
-	maxHeader := max(listW-lipgloss.Width(plainPrefix), 12)
+	// The origin session shares the header line, so it is budgeted before the
+	// label is truncated to what remains.
+	sourceTag := ""
+	if source != "" {
+		sourceTag = " @" + truncateWidth(source, maxRowSourceWidth)
+	}
+	maxHeader := max(listW-lipgloss.Width(plainPrefix)-runewidth.StringWidth(sourceTag), 12)
 	if runewidth.StringWidth(label) > maxHeader {
 		label = truncateWidth(label, maxHeader)
 	}
@@ -733,7 +775,7 @@ func renderConversationListRow(item PickerItem, selected bool, selectedMark, pla
 			return selStyle.Render(label)
 		}
 		return dimStyle.Render(label)
-	}()}
+	}() + dimStyle.Render(sourceTag)}
 
 	textLines := strings.Split(item.ConversationText, "\n")
 	if len(textLines) == 0 {
@@ -791,7 +833,17 @@ func (m pickerModel) renderListRow(item PickerItem, cursored bool, check string,
 	if statusPlain != "" {
 		statusW = runewidth.StringWidth(statusPlain) + 2
 	}
-	labelBudget := max(listW-used-refBadgeW-statusW, minRowLabelWidth)
+	// The origin session comes last in the budget: provenance is worth showing
+	// but never worth wrapping the row or squeezing the label below its floor.
+	sourcePlain := ""
+	if m.showSource && item.Source != "" {
+		if budget := listW - used - refBadgeW - statusW - minRowLabelWidth - 1; budget >= minRowSourceWidth {
+			sourcePlain = " @" + truncateWidth(item.Source, min(budget, maxRowSourceWidth))
+		}
+	}
+	sourceW := runewidth.StringWidth(sourcePlain)
+
+	labelBudget := max(listW-used-refBadgeW-statusW-sourceW, minRowLabelWidth)
 	label := item.Item.Label
 	if runewidth.StringWidth(label) > labelBudget {
 		label = truncateWidth(label, labelBudget)
@@ -804,7 +856,7 @@ func (m pickerModel) renderListRow(item PickerItem, cursored bool, check string,
 		prefixStyled = sel.Render(">")
 	}
 	row := prefixStyled + check + cat.Render(badgePlain) + " " + labelStyle.Render(label) +
-		dim.Render(refBadgePlain)
+		dim.Render(refBadgePlain) + dim.Render(sourcePlain)
 	if statusPlain != "" {
 		row += "  " + dim.Render(statusPlain)
 	}
@@ -852,7 +904,11 @@ func (m pickerModel) View() string {
 			check = sel.Render("* ")
 		}
 		if m.kind == "conversation" {
-			rows := renderConversationListRow(item, i == m.cursor, check, "  ", "", listW, sel, dim)
+			source := ""
+			if m.showSource {
+				source = item.Source
+			}
+			rows := renderConversationListRow(item, i == m.cursor, check, "  ", "", listW, sel, dim, source)
 			if len(listLines)+len(rows) > maxListLines && len(listLines) > 0 {
 				break
 			}
@@ -913,9 +969,13 @@ func (m pickerModel) View() string {
 		MaxHeight(contentH).
 		Render(m.preview.View())
 
+	titleText := fmt.Sprintf(" %s (%d)", m.kind, len(m.allItems))
+	if n := countSources(m.allItems); n > 1 {
+		titleText = fmt.Sprintf(" %s (%d · %d sessions)", m.kind, len(m.allItems), n)
+	}
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#38BDF8")).
 		MaxWidth(m.width).
-		Render(fmt.Sprintf(" %s (%d)", m.kind, len(m.allItems)))
+		Render(titleText)
 
 	actions := "↵:jump"
 	switch m.kind {
@@ -1172,13 +1232,18 @@ func (m pickerModel) refHasState(item PickerItem, wanted map[string]bool) bool {
 	return wanted[string(ref.State)]
 }
 
+// realIndex maps a filtered-list position back to its index in allItems.
+// The key is the session plus the URL, not the URL alone: an aggregated list
+// can hold the same PR from two sessions, and matching on URL would map both
+// rows onto the first one — selecting or jumping from the second would act on
+// the wrong session.
 func (m pickerModel) realIndex(filteredIdx int) int {
 	if filteredIdx < 0 || filteredIdx >= len(m.items) {
 		return -1
 	}
 	target := m.items[filteredIdx]
 	for i, item := range m.allItems {
-		if item.Item.URL == target.Item.URL {
+		if item.Item.URL == target.Item.URL && item.SessionID == target.SessionID {
 			return i
 		}
 	}

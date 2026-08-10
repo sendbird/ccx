@@ -58,45 +58,45 @@ func Run(command, claudeDir string, plain bool) (*RunResult, error) {
 		return nil, RunInfo(claudeDir)
 	}
 
-	filePath, sessID, err := findSessionFile(claudeDir)
+	sessions, err := resolveWindowSessions(claudeDir)
 	if err != nil {
 		return nil, err
 	}
+	sources := pickerSources(sessions)
 
 	interactive := !plain && isTerminal()
 
 	if interactive {
-		return runInteractive(command, filePath, sessID, claudeDir)
+		return runInteractive(command, sources)
 	}
-	return nil, runPlain(command, filePath, sessID, claudeDir)
+	return nil, runPlain(command, sources, claudeDir)
 }
 
-func runPlain(command, filePath, sessID, claudeDir string) error {
-	entries, err := session.LoadMessages(filePath)
-	if err != nil {
-		return err
-	}
-
+func runPlain(command string, sources []pickerSource, claudeDir string) error {
 	switch command {
 	case "urls":
-		return printItems(extract.SessionURLs(filePath), "urls")
+		return printItems(collectExtracted(sources, extract.SessionURLs, itemStamp), "urls")
 	case "refs":
-		return printRefs(filePath)
+		return printRefs(sources)
 	case "files":
-		return printItems(extract.SessionFilePaths(filePath), "files")
+		return printItems(collectExtracted(sources, extract.SessionFilePaths, itemStamp), "files")
 	case "changes":
-		return printChanges(extract.SessionChanges(filePath))
+		return printChanges(collectExtracted(sources, extract.SessionChanges, changeStamp))
 	case "conversation":
-		return printConversation(extractConversationWithContext(entries, sessID))
+		items, err := collectItems(command, sources)
+		if err != nil {
+			return err
+		}
+		return printConversation(items)
 	case "images":
-		return printImages(filePath, sessID, claudeDir)
+		return printImages(sources, claudeDir)
 	default:
 		return fmt.Errorf("unknown command: %s\nRun 'ccx help' for usage", command)
 	}
 }
 
-func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, error) {
-	items, err := extractItems(command, filePath, sessID)
+func runInteractive(command string, sources []pickerSource) (*RunResult, error) {
+	items, err := collectItems(command, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, er
 	// open.command_template, exactly like the TUI's open paths.
 	openerCfg := loadOpenerConfig()
 	// Hand the picker the context it needs to re-extract on `R` (refresh).
-	ctx := pickerContext{command: command, filePath: filePath, sessID: sessID}
+	ctx := pickerContext{command: command, sources: sources}
 	result, err := RunPicker(command, items, openerCfg, ctx)
 	if err != nil {
 		return nil, err
@@ -120,12 +120,146 @@ func runInteractive(command, filePath, sessID, claudeDir string) (*RunResult, er
 }
 
 // pickerContext carries what the picker needs to re-extract its items when the
-// user presses `R` (refresh): the subcommand and the session file it reads.
+// user presses `R` (refresh): the subcommand and every transcript it reads.
 type pickerContext struct {
-	command  string
+	command string
+	sources []pickerSource
+}
+
+// pickerSource is one transcript a subcommand reads, plus the compact label its
+// items carry. Every subcommand aggregates all the sessions in the tmux window
+// into one list rather than asking the user to pick one, so each row has to say
+// where it came from.
+type pickerSource struct {
 	filePath string
 	sessID   string
+	label    string
 }
+
+// pickerSources pairs each session with its origin label. The label is the base
+// name of the project directory — that is what distinguishes sibling worktrees,
+// whereas ProjectName is the full shortened path and far too wide for a list
+// row. Sessions that would collide on the base name keep their short ID.
+func pickerSources(sessions []session.Session) []pickerSource {
+	seen := make(map[string]int, len(sessions))
+	for _, s := range sessions {
+		seen[sourceBase(s)]++
+	}
+	out := make([]pickerSource, 0, len(sessions))
+	for _, s := range sessions {
+		label := sourceBase(s)
+		if seen[label] > 1 {
+			label += ":" + s.ShortID
+		}
+		out = append(out, pickerSource{filePath: s.FilePath, sessID: s.ID, label: label})
+	}
+	return out
+}
+
+func sourceBase(s session.Session) string {
+	if s.ProjectPath != "" {
+		if b := filepath.Base(s.ProjectPath); b != "" && b != "." && b != string(filepath.Separator) {
+			return b
+		}
+	}
+	if s.ProjectName != "" {
+		return s.ProjectName
+	}
+	return s.ShortID
+}
+
+// collectItems builds the picker items for every session in the window, tagging
+// each with its origin and merging them into one time-ordered list.
+//
+// Items are NOT deduplicated across sessions: the same PR touched by two
+// sessions is two facts, and collapsing them would have to drop one session's
+// jump target. Within a session the existing per-command dedup still applies.
+//
+// A transcript that fails to load is skipped rather than failing the whole
+// command — one unreadable session should not hide the others. An error is
+// returned only when nothing could be read at all.
+func collectItems(command string, sources []pickerSource) ([]PickerItem, error) {
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("no Claude session found in current window")
+	}
+	var all []PickerItem
+	var firstErr error
+	for _, src := range sources {
+		items, err := extractItems(command, src.filePath, src.sessID)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for i := range items {
+			items[i].Source = src.label
+		}
+		all = append(all, items...)
+	}
+	if all == nil && firstErr != nil {
+		return nil, firstErr
+	}
+	sortSourcedItems(command, all)
+	return all, nil
+}
+
+// sortSourcedItems interleaves items from several sessions while keeping each
+// command's single-session ordering: newest-first everywhere except
+// conversation, which reads as a chronological transcript.
+func sortSourcedItems(command string, items []PickerItem) {
+	ascending := command == "conversation"
+	sort.SliceStable(items, func(i, j int) bool {
+		ti, tj := itemTime(items[i]), itemTime(items[j])
+		if ti.Equal(tj) {
+			return false
+		}
+		if ascending {
+			return ti.Before(tj)
+		}
+		return ti.After(tj)
+	})
+}
+
+// itemTime is the occurrence an aggregated list orders by: the stamp
+// sortAndStampItems already computed, or the newest ref for the commands that
+// do not stamp their items (conversation).
+func itemTime(p PickerItem) time.Time {
+	t := p.Item.Timestamp
+	for _, r := range p.Refs {
+		if r.Timestamp.After(t) {
+			t = r.Timestamp
+		}
+	}
+	return t
+}
+
+// sourced pairs a value from one session's transcript with that session's
+// origin label, for the --plain paths that render extract types directly
+// instead of going through PickerItem.
+type sourced[T any] struct {
+	val    T
+	source string
+}
+
+// collectExtracted runs a per-transcript extractor over every session and
+// merges the results newest-first, so --plain output interleaves sessions the
+// same way the interactive list does.
+func collectExtracted[T any](sources []pickerSource, list func(filePath string) []T, at func(T) time.Time) []sourced[T] {
+	var out []sourced[T]
+	for _, src := range sources {
+		for _, v := range list(src.filePath) {
+			out = append(out, sourced[T]{val: v, source: src.label})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return at(out[i].val).After(at(out[j].val))
+	})
+	return out
+}
+
+func itemStamp(i extract.Item) time.Time         { return i.Timestamp }
+func changeStamp(c extract.ChangeItem) time.Time { return c.Timestamp }
 
 // extractItems loads the session transcript and builds the picker items for the
 // given subcommand. Shared by initial launch and the picker's refresh.
@@ -177,6 +311,8 @@ func printHelp() {
 		fmt.Fprintf(os.Stderr, "  %-10s %s\n", c.Name, c.Desc)
 	}
 	fmt.Fprintf(os.Stderr, "\nOn a TTY, subcommands launch an interactive picker.\n")
+	fmt.Fprintf(os.Stderr, "Item lists cover every Claude session in the current tmux window;\n")
+	fmt.Fprintf(os.Stderr, "each row shows its origin session (search it with session:<name>).\n")
 	fmt.Fprintf(os.Stderr, "When piped, output is tab-separated for fzf/awk/cut.\n")
 	fmt.Fprintf(os.Stderr, "Use --plain to force non-interactive output.\n\n")
 	fmt.Fprintf(os.Stderr, "Examples:\n")
@@ -214,50 +350,72 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "  --view <mode>         Initial view: sessions|config|plugins|stats\n")
 }
 
-func printItems(items []extract.Item, kind string) error {
+func printItems(items []sourced[extract.Item], kind string) error {
 	if len(items) == 0 {
 		return fmt.Errorf("no %s found in session", kind)
 	}
-	for _, item := range items {
+	for _, it := range items {
+		item := it.val
 		cat := strings.ToUpper(item.Category)
 		if len(cat) < 5 {
 			cat += strings.Repeat(" ", 5-len(cat))
 		}
-		// Items arrive newest-first; append the timestamp as a trailing tab
-		// column so existing 3-column parsers keep working.
+		// Items arrive newest-first; the timestamp and the origin session are
+		// trailing tab columns so existing 3-column parsers keep working. The
+		// timestamp column is always emitted (empty when unknown) so the source
+		// stays in a fixed position.
+		ts := ""
 		if !item.Timestamp.IsZero() {
-			fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", cat, item.Label, item.URL, item.Timestamp.Format("2006-01-02 15:04:05"))
-		} else {
-			fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", cat, item.Label, item.URL)
+			ts = item.Timestamp.Format("2006-01-02 15:04:05")
 		}
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%s\n", cat, item.Label, item.URL, ts, it.source)
 	}
 	return nil
 }
 
-func printRefs(filePath string) error {
-	refs := session.ExtractSessionRefsFromFile(filePath)
-	if len(refs) == 0 {
+// printRefs resolves and prints the PR/Jira references of every session in the
+// window. Refs are ordered PRs-then-Jira and newest-first across sessions, the
+// same ordering a single session produces. Status resolution is URL-keyed and
+// cached, so a ref shared by two sessions costs one lookup.
+func printRefs(sources []pickerSource) error {
+	var all []sourced[session.SessionRef]
+	for _, src := range sources {
+		for _, r := range session.ExtractSessionRefsFromFile(src.filePath) {
+			all = append(all, sourced[session.SessionRef]{val: r, source: src.label})
+		}
+	}
+	if len(all) == 0 {
 		return fmt.Errorf("no PR/Jira references found in session")
 	}
+	kindOrder := map[session.RefKind]int{session.RefPR: 0, session.RefJira: 1, session.RefArtifact: 2}
+	sort.SliceStable(all, func(i, j int) bool {
+		ki, kj := kindOrder[all[i].val.Kind], kindOrder[all[j].val.Kind]
+		if ki != kj {
+			return ki < kj
+		}
+		return all[i].val.FirstSeen.After(all[j].val.FirstSeen)
+	})
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	refs = session.ResolveRefs(ctx, refs)
-	for _, r := range refs {
+	for _, it := range all {
+		r := session.ResolveRef(ctx, it.val)
 		kind := strings.ToUpper(string(r.Kind))
 		if len(kind) < 4 {
 			kind += strings.Repeat(" ", 4-len(kind))
 		}
 		status := session.RefStatusText(r)
-		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", kind, r.Label, status, r.URL)
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%s\n", kind, r.Label, status, r.URL, it.source)
 	}
 	return nil
 }
 
-func printChanges(items []extract.ChangeItem) error {
+func printChanges(items []sourced[extract.ChangeItem]) error {
 	if len(items) == 0 {
 		return fmt.Errorf("no changes found in session")
 	}
-	for _, item := range items {
+	for _, it := range items {
+		item := it.val
 		cat := ""
 		if len(item.ToolNames) > 0 {
 			cat = strings.ToUpper(item.ToolNames[0])
@@ -265,7 +423,7 @@ func printChanges(items []extract.ChangeItem) error {
 		if len(cat) < 5 {
 			cat += strings.Repeat(" ", 5-len(cat))
 		}
-		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", cat, item.Item.Label, item.Summary)
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", cat, item.Item.Label, item.Summary, it.source)
 	}
 	return nil
 }
@@ -280,35 +438,36 @@ func printConversation(items []PickerItem) error {
 		if len(role) < 5 {
 			role += strings.Repeat(" ", 5-len(role))
 		}
-		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", role, item.Item.Label, ref.EntryUUID)
+		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", role, item.Item.Label, ref.EntryUUID, item.Source)
 	}
 	return nil
 }
 
-func printImages(filePath, sessID, claudeDir string) error {
-	entries, err := session.LoadMessages(filePath)
-	if err != nil {
-		return err
-	}
-
+func printImages(sources []pickerSource, claudeDir string) error {
 	home, _ := os.UserHomeDir()
 	found := 0
-	for _, e := range entries {
-		for _, b := range e.Content {
-			if b.Type != "image" || b.ImagePasteID <= 0 {
-				continue
-			}
-			p := session.ImageCachePath(home, sessID, b.ImagePasteID)
-			if p == "" {
-				p, _ = session.ExtractImageToTemp(home, filePath, sessID, b.ImagePasteID)
-			}
-			if p != "" {
-				ts := ""
-				if !e.Timestamp.IsZero() {
-					ts = e.Timestamp.Format("15:04:05")
+	for _, src := range sources {
+		entries, err := session.LoadMessages(src.filePath)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			for _, b := range e.Content {
+				if b.Type != "image" || b.ImagePasteID <= 0 {
+					continue
 				}
-				fmt.Fprintf(os.Stdout, "%d\t%s\t%s\n", b.ImagePasteID, ts, p)
-				found++
+				p := session.ImageCachePath(home, src.sessID, b.ImagePasteID)
+				if p == "" {
+					p, _ = session.ExtractImageToTemp(home, src.filePath, src.sessID, b.ImagePasteID)
+				}
+				if p != "" {
+					ts := ""
+					if !e.Timestamp.IsZero() {
+						ts = e.Timestamp.Format("15:04:05")
+					}
+					fmt.Fprintf(os.Stdout, "%d\t%s\t%s\t%s\n", b.ImagePasteID, ts, p, src.label)
+					found++
+				}
 			}
 		}
 	}
@@ -482,22 +641,34 @@ func RunInfo(claudeDir string) error {
 	return nil
 }
 
-// findSessionFile detects Claude sessions in the same tmux window.
-// If multiple sessions are found, prompts the user to choose one.
+// findSessionFile resolves exactly one session in the current tmux window,
+// prompting when several match. Only `info` and `move` use it — they act on a
+// single session by nature. The item-listing subcommands aggregate every session
+// via resolveWindowSessions instead of making the user choose.
 func findSessionFile(claudeDir string) (string, string, error) {
+	matches, err := resolveWindowSessions(claudeDir)
+	if err != nil {
+		return "", "", err
+	}
+	if len(matches) == 1 {
+		return matches[0].FilePath, matches[0].ID, nil
+	}
+	idx, err := promptSessionChoice(matches)
+	if err != nil {
+		return "", "", err
+	}
+	return matches[idx].FilePath, matches[idx].ID, nil
+}
+
+// resolveWindowSessions returns every Claude session running in this process's
+// tmux window, most relevant first.
+func resolveWindowSessions(claudeDir string) ([]session.Session, error) {
 	// Prefer identity over location: the live registry knows exactly which
 	// session each Claude process runs, so panes are attributed by process
 	// ancestry. Path matching below cannot separate several panes of one window
 	// that report the same cwd while running sessions from different projects.
 	if matches := sessionsByID(claudeDir, tmux.CurrentWindowClaudeSessionIDs(liveSessions())); len(matches) > 0 {
-		if len(matches) == 1 {
-			return matches[0].FilePath, matches[0].ID, nil
-		}
-		idx, err := promptSessionChoice(matches)
-		if err != nil {
-			return "", "", err
-		}
-		return matches[idx].FilePath, matches[idx].ID, nil
+		return matches, nil
 	}
 
 	projPaths := tmux.CurrentWindowClaudes()
@@ -508,7 +679,7 @@ func findSessionFile(claudeDir string) (string, string, error) {
 		}
 	}
 	if len(projPaths) == 0 {
-		return "", "", fmt.Errorf("no Claude session found in current window")
+		return nil, fmt.Errorf("no Claude session found in current window")
 	}
 
 	cached := session.LoadCachedSessions(claudeDir)
@@ -549,18 +720,9 @@ func findSessionFile(claudeDir string) (string, string, error) {
 	}
 
 	if len(matches) == 0 {
-		return "", "", fmt.Errorf("no session found matching project paths: %s", strings.Join(projPaths, ", "))
+		return nil, fmt.Errorf("no session found matching project paths: %s", strings.Join(projPaths, ", "))
 	}
-	if len(matches) == 1 {
-		return matches[0].FilePath, matches[0].ID, nil
-	}
-
-	// Multiple sessions — prompt user to select
-	idx, err := promptSessionChoice(matches)
-	if err != nil {
-		return "", "", err
-	}
-	return matches[idx].FilePath, matches[idx].ID, nil
+	return matches, nil
 }
 
 // liveSessions returns the live Claude registry, or nil when it is unavailable
