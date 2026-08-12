@@ -490,6 +490,9 @@ func RunSessions(claudeDir string, all bool) error {
 			return fmt.Errorf("no sessions found: %w", err)
 		}
 	}
+	// The cache is only rewritten by a full scan, so a session started since
+	// then is missing here — exactly the sessions this command cares about.
+	allSessions = session.MergeLiveSessions(claudeDir, allSessions)
 	if len(allSessions) == 0 {
 		return fmt.Errorf("no sessions found")
 	}

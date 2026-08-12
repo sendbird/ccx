@@ -297,6 +297,9 @@ func main() {
 		livePaths := clauderegistry.Cwds()
 		initialSessions, _ = session.ScanSessionsForPaths(claudeDir, livePaths)
 	}
+	// Live sessions started since the last full scan aren't in the cache;
+	// pull them in so the first paint already shows them as [LIVE].
+	initialSessions = session.MergeLiveSessions(claudeDir, initialSessions)
 
 	if sessionID != "" {
 		found := false
