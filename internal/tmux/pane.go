@@ -562,25 +562,43 @@ func ownPanePID(panes []Pane) int {
 	return walkToPane(os.Getpid(), panePIDs, batchPPIDMap())
 }
 
-// CurrentWindowKey returns "session_name|window_index" for the current tmux window,
-// or "" when not running inside tmux.
+// CurrentWindowKey returns "session_name|window_index" for the tmux window
+// this process lives in, or "" when not running inside tmux.
+//
+// Resolved the same way as CurrentWindowClaudes — via this process's own pane —
+// rather than by asking tmux for the default target, which answers about the
+// window the *client* is currently looking at. Callers use this key to mark
+// which sessions are "in my window"; against the client-active window that
+// marking follows the user's focus instead of staying pinned to ccx.
 func CurrentWindowKey() string {
 	if !InTmux() {
 		return ""
 	}
-	out, err := exec.Command("tmux", "display-message", "-p",
-		"#{session_name}|#{window_index}").Output()
-	if err != nil {
+	if panes, err := ListPanes(); err == nil {
+		if own := findPaneByPID(panes, ownPanePID(panes)); own != nil {
+			return own.Session + "|" + own.Window
+		}
+	}
+	// Fall back to the client-active window when our pane can't be resolved.
+	session, window := clientActiveWindow()
+	if session == "" {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return session + "|" + window
 }
 
 // MoveWithAndSwitchPane moves the current pane (CSB) to the target's tmux window
 // as a side-by-side split, then focuses the target pane.
 func MoveWithAndSwitchPane(target Pane) error {
-	out, err := exec.Command("tmux", "display-message", "-p",
-		"#{pane_id}|#{session_name}:#{window_index}").Output()
+	// Target our own pane explicitly: without -t, tmux reports the pane the
+	// client is looking at, and we would join *that* pane into the target
+	// window instead of ours.
+	args := []string{"display-message", "-p"}
+	if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
+		args = append(args, "-t", paneID)
+	}
+	args = append(args, "#{pane_id}|#{session_name}:#{window_index}")
+	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
 		return SwitchToPane(target)
 	}

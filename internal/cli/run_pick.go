@@ -38,6 +38,7 @@ func RunPickSessionTUI(claudeDir, search string, multi bool) PickSessionExitCode
 		livePaths := clauderegistry.Cwds()
 		sessions, _ = session.ScanSessionsForPaths(claudeDir, livePaths)
 	}
+	sessions = session.MergeLiveSessions(claudeDir, sessions)
 	if len(sessions) == 0 {
 		fmt.Fprintln(os.Stderr, "ccx: no sessions found")
 		return PickSessionNoMatches

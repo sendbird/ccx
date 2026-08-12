@@ -242,7 +242,14 @@ func InvalidatePaneOffset() {
 }
 
 func fetchPaneOffset() {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pane_top} #{pane_left}").Output()
+	// Target our own pane for the same reason PaneVisible does: the default
+	// target follows the client's focus, not us.
+	args := []string{"display-message", "-p"}
+	if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
+		args = append(args, "-t", paneID)
+	}
+	args = append(args, "#{pane_top} #{pane_left}")
+	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
 		return
 	}
