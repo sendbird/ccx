@@ -156,6 +156,17 @@ func decodeProjectPath(dirName string) string {
 		return ""
 	}
 
+	// Every branch in tryResolvePath consumes exactly one part and costs one
+	// depth level, so resolving N parts needs N levels. Beyond maxResolveDepth
+	// the search cannot possibly succeed — and searching anyway is not free:
+	// two of the three branches recurse unconditionally, so the doomed tree is
+	// ~2^maxResolveDepth nodes, each paying an os.Stat. A scratchpad path with
+	// 25 segments burned 6.5s of syscalls here before returning "".
+	if len(parts) > maxResolveDepth {
+		decodedPathCache.Store(dirName, "")
+		return ""
+	}
+
 	result := tryResolvePath("/", parts)
 	if result != "" {
 		if info, err := os.Stat(result); err == nil && info.IsDir() {
@@ -171,22 +182,31 @@ func decodeProjectPath(dirName string) string {
 // For each '-' boundary, it tries: '/' (new dir), '-' (literal hyphen), '.' (dot).
 // Depth is limited to prevent exponential branching on long paths.
 func tryResolvePath(base string, remaining []string) string {
-	return tryResolvePathDepth(base, remaining, 0)
+	budget := maxResolveNodes
+	return tryResolvePathDepth(base, remaining, 0, &budget)
 }
 
 const maxResolveDepth = 20
 
-func tryResolvePathDepth(base string, remaining []string, depth int) string {
+// maxResolveNodes caps how many candidates the search may examine. The depth
+// limit alone doesn't bound the work: the two merge branches recurse without
+// checking the filesystem first, so a name that resolves nowhere still expands
+// a tree exponential in the part count. Real paths are found within a few
+// hundred nodes because the descend branch is gated on a successful os.Stat.
+const maxResolveNodes = 5000
+
+func tryResolvePathDepth(base string, remaining []string, depth int, budget *int) string {
 	if len(remaining) == 0 {
 		return base
 	}
-	if depth >= maxResolveDepth {
+	if depth >= maxResolveDepth || *budget <= 0 {
 		return ""
 	}
+	*budget--
 
 	candidate := filepath.Join(base, remaining[0])
 	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-		if result := tryResolvePathDepth(candidate, remaining[1:], depth+1); result != "" {
+		if result := tryResolvePathDepth(candidate, remaining[1:], depth+1, budget); result != "" {
 			return result
 		}
 	}
@@ -196,7 +216,7 @@ func tryResolvePathDepth(base string, remaining []string, depth int) string {
 		newRemaining := make([]string, 0, len(remaining)-1)
 		newRemaining = append(newRemaining, merged)
 		newRemaining = append(newRemaining, remaining[2:]...)
-		if result := tryResolvePathDepth(base, newRemaining, depth+1); result != "" {
+		if result := tryResolvePathDepth(base, newRemaining, depth+1, budget); result != "" {
 			return result
 		}
 	}
@@ -206,7 +226,7 @@ func tryResolvePathDepth(base string, remaining []string, depth int) string {
 		newRemaining := make([]string, 0, len(remaining)-1)
 		newRemaining = append(newRemaining, merged)
 		newRemaining = append(newRemaining, remaining[2:]...)
-		if result := tryResolvePathDepth(base, newRemaining, depth+1); result != "" {
+		if result := tryResolvePathDepth(base, newRemaining, depth+1, budget); result != "" {
 			return result
 		}
 	}
