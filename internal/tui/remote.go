@@ -40,6 +40,10 @@ func (a *App) injectRemoteSessions(sessions []session.Session) []session.Session
 }
 
 // cleanupStaleRemoteSessions removes saved sessions whose remote no longer exists.
+//
+// Every saved remote costs a network round-trip here, and an unreachable host
+// costs the whole ConnectTimeout — so this must never run on the startup path.
+// cleanupStaleRemotesCmd is the way in.
 func cleanupStaleRemoteSessions() {
 	saved := remote.LoadSavedSessions()
 	var kept []remote.SavedSession
@@ -67,6 +71,21 @@ func cleanupStaleRemoteSessions() {
 		remote.SaveSessions(kept)
 	}
 }
+
+// cleanupStaleRemotesCmd runs the staleness sweep off the startup path. It
+// reports whether anything was dropped so the caller can rebuild the list only
+// when the saved set actually changed.
+func cleanupStaleRemotesCmd() tea.Cmd {
+	return func() tea.Msg {
+		before := len(remote.LoadSavedSessions())
+		cleanupStaleRemoteSessions()
+		after := len(remote.LoadSavedSessions())
+		return remotesCleanedMsg{changed: after != before}
+	}
+}
+
+// remotesCleanedMsg reports the result of the async staleness sweep.
+type remotesCleanedMsg struct{ changed bool }
 
 func loadSavedRemoteSessions() []session.Session {
 	saved := remote.LoadSavedSessions()

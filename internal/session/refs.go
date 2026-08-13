@@ -53,6 +53,10 @@ type SessionRef struct {
 	Title string // human-readable title (artifact description/label; empty for PR/Jira)
 
 	FirstSeen time.Time // timestamp of the entry where this ref first appeared
+	// FirstSeenUUID is the uuid of that same entry, so a digest row can jump
+	// back into the conversation at the moment the ref appeared rather than
+	// only opening the session. Empty when the transcript line carried no uuid.
+	FirstSeenUUID string
 
 	State RefState // resolved lifecycle state (RefStateUnknown until fetched)
 
@@ -130,6 +134,7 @@ func ExtractSessionRefsFromFile(filePath string) []SessionRef {
 			continue
 		}
 		var ts time.Time
+		var uuid string
 		tsParsed := false
 		for _, raw := range locs {
 			u := cleanRefURL(string(raw))
@@ -149,10 +154,12 @@ func ExtractSessionRefsFromFile(filePath string) []SessionRef {
 			}
 			if !tsParsed {
 				ts = lineTimestamp(line)
+				uuid = lineUUID(line)
 				tsParsed = true
 			}
 			seen[ref.Label] = true
 			ref.FirstSeen = ts
+			ref.FirstSeenUUID = uuid
 			refs = append(refs, ref)
 		}
 	}
@@ -181,6 +188,26 @@ func lineTimestamp(line []byte) time.Time {
 
 var bTimestampKey = []byte(`"timestamp":"`)
 
+// lineUUID pulls the entry's own "uuid":"<...>" value out of a raw JSONL line
+// without a full JSON decode — the uuid counterpart of lineTimestamp. The
+// entry's own uuid is the only "uuid" key Claude Code writes at any depth of a
+// transcript line (verified across a 36k-line corpus), so the first match is
+// the entry uuid. Returns "" when absent.
+func lineUUID(line []byte) string {
+	i := bytes.Index(line, bUUIDKey)
+	if i < 0 {
+		return ""
+	}
+	rest := line[i+len(bUUIDKey):]
+	end := bytes.IndexByte(rest, '"')
+	if end < 0 {
+		return ""
+	}
+	return string(rest[:end])
+}
+
+var bUUIDKey = []byte(`"uuid":"`)
+
 // ExtractSessionRefs scans a session's entries for PR and Jira URLs and returns
 // a deduplicated, ordered list (PRs first, then Jira). References are keyed by
 // their canonical Label (e.g. "sendbird/ccx#52"), so the same PR referenced via
@@ -192,6 +219,7 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 	var refs []SessionRef
 	for i := range entries {
 		ts := entries[i].Timestamp
+		uuid := entries[i].UUID
 		for _, b := range entries[i].Content {
 			for _, text := range [2]string{b.Text, b.ToolInput} {
 				if text == "" {
@@ -213,6 +241,7 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 					}
 					seen[ref.Label] = true
 					ref.FirstSeen = ts
+					ref.FirstSeenUUID = uuid
 					refs = append(refs, ref)
 				}
 			}
@@ -548,8 +577,12 @@ func ResolveRef(ctx context.Context, r SessionRef) SessionRef {
 	}
 	if cached, ok := getCachedRef(r.URL); ok {
 		// The cache is keyed by URL and stores only resolved status; keep this
-		// occurrence's FirstSeen/Label rather than the cached entry's.
+		// occurrence's first-appearance/Label rather than the cached entry's.
+		// FirstSeenUUID must travel with FirstSeen — it names an entry in THIS
+		// session's transcript, and a uuid from whichever session happened to
+		// populate the cache would not resolve here.
 		cached.FirstSeen = r.FirstSeen
+		cached.FirstSeenUUID = r.FirstSeenUUID
 		cached.Label = r.Label
 		return cached
 	}
@@ -563,6 +596,7 @@ func ResolveRef(ctx context.Context, r SessionRef) SessionRef {
 	// Another goroutine may have resolved this URL while we waited for a slot.
 	if cached, ok := getCachedRef(r.URL); ok {
 		cached.FirstSeen = r.FirstSeen
+		cached.FirstSeenUUID = r.FirstSeenUUID
 		cached.Label = r.Label
 		return cached
 	}

@@ -299,17 +299,31 @@ type App struct {
 	sessRefsCacheID        string // session ID the refs cursor currently tracks
 	sessWorkflowsCache     string
 	sessWorkflowsCacheKey  string
-	sessWfRuns             []session.WorkflowRun // parsed runs for the selected session
-	sessWfAgents           []session.Subagent    // workflow-nested agents (label-joined), drill-down targets
-	sessWfCursor           int                   // cursor within the workflow agent list
-	sessPreviewAgents      []session.Subagent    // agents shown in Tasks/Plan preview
-	sessAgentCursor        int                   // cursor within agents list
-	sessPreviewRefs        []session.SessionRef  // ordered refs shown in the References preview (open PRs first)
-	sessRefsCursor         int                   // cursor within the References preview list
-	sessRefsSelected       map[string]bool       // selected ref URLs for multi-open/copy (keyed by SessionRef.URL)
-	sessRefsResolved       bool                  // whether the currently-previewed session's refs have been resolved
-	refsInFlight           map[string]bool       // session IDs with a resolve pass currently running (prevents re-targeting every tick)
-	openURL                func(string) error    // opens a URL in the browser; overridable in tests (defaults to `open`)
+	sessWfRuns             []session.WorkflowRun   // parsed runs for the selected session
+	sessWfAgents           []session.Subagent      // workflow-nested agents (label-joined), drill-down targets
+	sessWfCursor           int                     // cursor within the workflow agent list
+	sessPreviewAgents      []session.Subagent      // agents shown in Tasks/Plan preview
+	sessAgentCursor        int                     // cursor within agents list
+	sessPreviewRefs        []session.SessionRef    // ordered refs shown in the References preview (open PRs first)
+	sessRefsCursor         int                     // cursor within the References preview list
+	sessRefsSelected       map[string]bool         // selected ref URLs for multi-open/copy (keyed by SessionRef.URL)
+	sessRefsResolved       bool                    // whether the currently-previewed session's refs have been resolved
+	refsInFlight           map[string]bool         // session IDs with a resolve pass currently running (prevents re-targeting every tick)
+	sessOutputs            []session.SessionOutput // transcript/disk-derived outputs (refs merged in at render time)
+	sessOutputsRows        []session.SessionOutput // what the digest currently shows, in cursor order
+	sessOutputsCache       string
+	sessOutputsCacheKey    string
+	sessOutputsCacheID     string             // session ID the outputs digest currently tracks
+	sessOutputsCollected   string             // dataKey of the collection in sessOutputs ("" = not collected yet)
+	sessOutputsCursor      int                // cursor within the Outputs digest list
+	outputsInFlight        map[string]bool    // session IDs with a collection currently running
+	dayOutputRows          []dayOutputRow     // outputs shown in the daily view's day pane, in cursor order
+	dayOutputsCursor       int                // cursor within the day pane's output list
+	dayOutputsCacheID      string             // day key the cursor currently tracks
+	preDailyGroupMode      int                // grouping to restore when the daily view is toggled back off
+	dailyPreviewMode       sessPreview        // preview mode remembered for the daily view
+	browserPreviewMode     sessPreview        // preview mode remembered for every other grouping
+	openURL                func(string) error // opens a URL in the browser; overridable in tests (defaults to `open`)
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -573,6 +587,9 @@ func (a *App) selectedSession() (session.Session, bool) {
 	if pi, ok := sel.(projectItem); ok && len(pi.sessions) > 0 {
 		return pi.sessions[0], true
 	}
+	if di, ok := sel.(dayItem); ok && len(di.sessions) > 0 {
+		return di.sessions[0], true
+	}
 	return session.Session{}, false
 }
 
@@ -582,9 +599,18 @@ func (a *App) selectedProject() (projectItem, bool) {
 	return pi, ok
 }
 
+// selectedDay returns the date row at the cursor, if any (daily view).
+func (a *App) selectedDay() (dayItem, bool) {
+	di, ok := a.sessionList.SelectedItem().(dayItem)
+	return di, ok
+}
+
 func (a *App) selectedSessionListItemKey() string {
 	if pi, ok := a.selectedProject(); ok {
-		return "project:" + pi.basePath
+		return "project:" + projectFoldKey(pi)
+	}
+	if di, ok := a.selectedDay(); ok {
+		return "day:" + di.dayKey
 	}
 	if sess, ok := a.selectedSession(); ok {
 		return "session:" + sess.ID
@@ -600,7 +626,12 @@ func (a *App) restoreSessionListSelection(key string) {
 	for i, item := range a.sessionList.VisibleItems() {
 		switch v := item.(type) {
 		case projectItem:
-			if key == "project:"+v.basePath {
+			if key == "project:"+projectFoldKey(v) {
+				a.sessionList.Select(i)
+				return
+			}
+		case dayItem:
+			if key == "day:"+v.dayKey {
 				a.sessionList.Select(i)
 				return
 			}
@@ -667,7 +698,7 @@ func (a *App) visibleProjectBrowserItems() int {
 	n := 0
 	for _, item := range a.sessionList.VisibleItems() {
 		switch item.(type) {
-		case projectItem, sessionItem:
+		case projectItem, dayItem, sessionItem:
 			n++
 		}
 	}
@@ -814,9 +845,10 @@ const (
 	sessPreviewShells
 	sessPreviewContexts
 	sessPreviewRefs     // PR / Jira references with resolved status
+	sessPreviewOutputs  // digest of everything the session produced
 	sessPreviewLive     // tmux pane capture
 	sessPreviewRemote   // remote session status/stream
-	numSessPreviewModes = 12
+	numSessPreviewModes = 13
 )
 
 // Config holds application configuration from CLI flags.
@@ -863,6 +895,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		selectedSet:         make(map[string]bool),
 		hiddenBadges:        make(map[string]bool),
 		refsInFlight:        make(map[string]bool),
+		outputsInFlight:     make(map[string]bool),
 		sessRefsSelected:    make(map[string]bool),
 		notifyPrev:          make(map[string]session.LifecycleState),
 		sessionRowCache:     newSessionRowCache(1024),
@@ -874,6 +907,15 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		// header. CLI flags or persisted preferences below can still
 		// override this.
 		sessGroupMode: groupProjectCentric,
+		// Where `D` returns to when the daily view was the startup grouping (a
+		// persisted preference or -group daily): the browser's default, not the
+		// zero value, which would drop the user into flat.
+		preDailyGroupMode: groupProjectCentric,
+		// Each view remembers its own preview. The daily view exists to show
+		// results, so it opens on the outputs digest rather than a wall of
+		// conversation text; the project browser keeps the conversation preview.
+		dailyPreviewMode:   sessPreviewOutputs,
+		browserPreviewMode: sessPreviewConversation,
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
@@ -901,8 +943,11 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		a.autoStateFilter = true
 	}
 
-	// Cleanup stale remote sessions, then restore remaining as virtual items
-	cleanupStaleRemoteSessions()
+	// Restore saved remote sessions. The staleness check that used to run here
+	// pings every saved remote synchronously — a single unreachable SSH host
+	// costs the full ConnectTimeout (~2.5s) before ccx paints anything. It now
+	// runs as a command from Init() instead; a stale row lingering for one
+	// round-trip is a far smaller cost than a blocked first frame.
 	a.sessions = append(loadSavedRemoteSessions(), a.sessions...)
 	a.sessSplit = SplitPane{List: &a.sessionList, ItemHeight: 2}
 	a.conv.split = SplitPane{List: &a.convList, Show: true, Folds: &FoldState{}, ItemHeight: 1}
@@ -923,17 +968,34 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	// (struct literal above) is groupProjectCentric; an explicit choice here
 	// overrides it.
 	if a.config.GroupMode != "" {
-		modeMap := map[string]int{"flat": groupFlat, "proj": groupProject, "tree": groupTree, "chain": groupChain, "fork": groupFork, "repo": groupBaseProject, "projects": groupProjectCentric}
-		if m, ok := modeMap[a.config.GroupMode]; ok {
+		if m, ok := groupModeFromString(a.config.GroupMode); ok {
 			a.sessGroupMode = m
+			// Remember a non-daily startup grouping as `D`'s return target, so
+			// toggling out of the daily view lands back where the user started.
+			if m != groupDaily {
+				a.preDailyGroupMode = m
+			}
 		}
 	}
 	if a.config.PreviewMode != "" {
-		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "scratch": sessPreviewScratchpad, "scratchpad": sessPreviewScratchpad, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "refs": sessPreviewRefs, "pr": sessPreviewRefs, "live": sessPreviewLive}
+		modeMap := map[string]sessPreview{"conv": sessPreviewConversation, "stats": sessPreviewStats, "mem": sessPreviewMemory, "scratch": sessPreviewScratchpad, "scratchpad": sessPreviewScratchpad, "tasks": sessPreviewTasksPlan, "agents": sessPreviewAgents, "wf": sessPreviewWorkflows, "workflows": sessPreviewWorkflows, "shells": sessPreviewShells, "contexts": sessPreviewContexts, "ctx": sessPreviewContexts, "refs": sessPreviewRefs, "pr": sessPreviewRefs, "out": sessPreviewOutputs, "outputs": sessPreviewOutputs, "live": sessPreviewLive}
 		if m, ok := modeMap[a.config.PreviewMode]; ok {
 			a.sessPreviewMode = m
 			a.sessSplit.Show = true
+			// The persisted preview belongs to whichever view is starting; the
+			// other keeps its own default so a swap does not inherit a pane that
+			// makes no sense there.
+			if a.sessGroupMode == groupDaily {
+				a.dailyPreviewMode = m
+			} else {
+				a.browserPreviewMode = m
+			}
 		}
+	}
+	// Starting in the daily view with no explicit -preview: open on its own
+	// default (outputs) rather than the browser's conversation preview.
+	if a.sessGroupMode == groupDaily && a.config.PreviewMode == "" {
+		a.sessPreviewMode = a.dailyPreviewMode
 	}
 	if a.config.ViewMode != "" {
 		modeMap := map[string]viewState{
@@ -963,6 +1025,11 @@ func (a *App) Init() tea.Cmd {
 			sessions, err := session.ScanSessions(claudeDir)
 			return sessionsScannedMsg{sessions: sessions, err: err}
 		})
+	}
+	// Sweep dead remotes concurrently with the scan — batched commands run in
+	// parallel, so an unreachable host's connect timeout costs nothing on screen.
+	if a.hasRemoteSessions() {
+		cmds = append(cmds, cleanupStaleRemotesCmd())
 	}
 	return tea.Batch(cmds...)
 }
@@ -1187,6 +1254,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case remotesCleanedMsg:
+		// A remote that no longer exists was dropped from the saved set; drop
+		// its virtual row too. Nothing changed is the common case — leave the
+		// list (and the cursor) alone.
+		if msg.changed {
+			live := make(map[string]bool)
+			for _, s := range loadSavedRemoteSessions() {
+				live[s.RemotePodName] = true
+			}
+			kept := a.sessions[:0]
+			for _, s := range a.sessions {
+				if s.IsRemote && !live[s.RemotePodName] {
+					continue
+				}
+				kept = append(kept, s)
+			}
+			a.sessions = kept
+			a.rebuildSessionList()
+		}
+		return a, nil
+
 	case sessionsScannedMsg:
 		// Full scan complete — replace partial live sessions with full list
 		a.sessionsLoading = false
@@ -1277,6 +1365,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			break
 		}
+		// Push the extracted list onto the list widget's snapshot copies. The
+		// refs themselves — not their resolved status — are what a parent row's
+		// rollup counts, so a date row's PR/Jira/artifact badges (and its
+		// Produced list) fill in from the extract alone. Without this they wait
+		// on refStatusMsg, which never arrives for a session whose links all
+		// resolve from cache, and a day with 40 PRs reports zero.
+		a.syncSessionRefsToList(msg.id)
+		if a.state == viewSessions && a.sessSplit.Show {
+			if di, ok := a.selectedDay(); ok {
+				a.sessSplit.CacheKey = ""
+				a.updateDayPreview(di)
+			}
+		}
 		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessRefsCacheKey = ""
@@ -1284,7 +1385,34 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, tea.Batch(previewCmd, statusCmd)
 			}
 		}
+		// The Outputs digest lists refs alongside plans/memory/files, so it has
+		// the same stake in the extract landing.
+		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewOutputs {
+			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
+				a.sessOutputsCacheKey = ""
+				previewCmd := a.updateSessionOutputsPreview(sess)
+				return a, tea.Batch(previewCmd, statusCmd)
+			}
+		}
 		return a, statusCmd
+
+	case outputsCollectedMsg:
+		// A transcript scan landed. Ignore it when the user has since moved to a
+		// different session — the digest state tracks exactly one session, and
+		// adopting a stale result would show another session's outputs.
+		delete(a.outputsInFlight, msg.id)
+		if a.sessOutputsCacheID != msg.id {
+			return a, nil
+		}
+		a.sessOutputs = msg.outputs
+		a.sessOutputsCollected = msg.dataKey
+		a.sessOutputsCacheKey = ""
+		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewOutputs {
+			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
+				return a, a.updateSessionOutputsPreview(sess)
+			}
+		}
+		return a, nil
 
 	case refStatusMsg:
 		// One ref's status landed: merge it into the session (matched by URL) and,
@@ -1312,10 +1440,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reflect the newly-resolved status onto the list row so the open-PR/Jira
 		// badge fills in live, whether or not the References preview is open.
 		a.syncSessionRefsToList(msg.id)
+		// A date row's pane is built from its children's refs, so a landing
+		// status adds rows to the day's "Produced" list.
+		if a.state == viewSessions && a.sessSplit.Show {
+			if di, ok := a.selectedDay(); ok {
+				a.sessSplit.CacheKey = ""
+				a.updateDayPreview(di)
+			}
+		}
 		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessRefsCacheKey = "" // force re-render with the newly-resolved ref
 				return a, a.updateSessionRefsPreview(sess)
+			}
+		}
+		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewOutputs {
+			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
+				a.sessOutputsCacheKey = ""
+				return a, a.updateSessionOutputsPreview(sess)
 			}
 		}
 		// Re-render the conversation view so the Session Refs & URLs flow row
@@ -1899,6 +2041,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			items = a.selectedSessions()
 		} else if pi, ok := a.selectedProject(); ok {
 			items = append(items, pi.sessions...)
+		} else if di, ok := a.selectedDay(); ok {
+			items = append(items, di.sessions...)
 		} else if sess, ok := a.selectedSession(); ok {
 			items = []session.Session{sess}
 		}
@@ -1946,9 +2090,24 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.toggleProjectFold(pi)
 			return a, nil
 		}
+		// Date rows (daily view) behave the same, but only while the list has
+		// focus — with the preview focused, Enter belongs to the preview's own
+		// cursor (e.g. opening the output under it).
+		if di, ok := a.sessionList.SelectedItem().(dayItem); ok && !sp.Focus {
+			a.toggleDayFold(di)
+			return a, nil
+		}
 		// Remote sessions: attach interactively
 		if sess, ok := a.selectedSession(); ok && sess.IsRemote {
 			return a.attachToRemoteSession(sess)
+		}
+		// If the day pane is focused, Enter anchors to the session that produced
+		// the output under the cursor. This must come before the preview-mode
+		// checks below: a date row's pane is the day's outputs regardless of the
+		// selected mode, so those would otherwise act on a stale session's rows.
+		if sp.Focus && sp.Show && a.selectedOwnsDayPane() && len(a.dayOutputRows) > 0 {
+			m, cmd, _ := a.openSelectedDayOutput()
+			return m, cmd
 		}
 		// If conversation preview is focused, jump to the selected message
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
@@ -1969,6 +2128,12 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// would fall through to openConversation).
 		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewRefs && len(a.sessPreviewRefs) > 0 {
 			m, cmd, _ := a.openSelectedRefs()
+			return m, cmd
+		}
+		// If the Outputs digest is focused, open the output under the cursor
+		// (URL in the browser, otherwise jump to the producing entry).
+		if sp.Focus && sp.Show && a.sessPreviewMode == sessPreviewOutputs && len(a.sessOutputsRows) > 0 {
+			m, cmd, _ := a.openSelectedOutput()
 			return m, cmd
 		}
 		// If the Session Context tree is focused, drill into the node under the
@@ -1994,6 +2159,16 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if pi, ok := a.selectedProject(); ok {
 			for _, s := range pi.sessions {
+				if a.selectedSet[s.ID] {
+					delete(a.selectedSet, s.ID)
+				} else {
+					a.selectedSet[s.ID] = true
+				}
+			}
+			return a, nil
+		}
+		if di, ok := a.selectedDay(); ok {
+			for _, s := range di.sessions {
 				if a.selectedSet[s.ID] {
 					delete(a.selectedSet, s.ID)
 				} else {
@@ -2080,6 +2255,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// ref state), then force the open preview to re-read: clear the process
 		// -wide ref TTL cache and invalidate the current mode's caches so
 		// updateSessionPreview re-fetches instead of short-circuiting.
+		// The tmux window scan is memoized too — an explicit refresh is the user
+		// asking for current reality, so drop it as well.
+		tmux.InvalidateWindowClaudes()
 		cmd := a.doRefresh()
 		// Live/remote previews are driven by their own streams (doRefresh already
 		// calls refreshSessionPreviewLive); re-running updateSessionPreview for
@@ -2150,6 +2328,16 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.stateMenu = true
 			return a, nil
 		}
+	}
+
+	// Toggle the daily view in place. It is an axis you flip while reading —
+	// date-first vs project-first — so it gets a key rather than only
+	// `:group:daily`, and it works with the preview focused too: which grouping
+	// the list uses is independent of which pane has the cursor. Returning to
+	// the previous grouping restores whatever the user was in (persisted across
+	// restarts), not a hardcoded default.
+	if key == "D" {
+		return a, a.toggleDailyView()
 	}
 
 	// Sessions list vim-style jumps: gg = top, G = end.
@@ -2261,8 +2449,10 @@ func (a *App) skipHeaderInDirection(oldIdx, newIdx int) {
 	if _, ok := visible[cur].(sessionItem); ok {
 		return
 	}
-	// projectItem rows are selectable (cursor can land on a project header).
-	if _, ok := visible[cur].(projectItem); ok {
+	// projectItem / dayItem rows are selectable (the cursor can land on a
+	// project or date header).
+	switch visible[cur].(type) {
+	case projectItem, dayItem:
 		return
 	}
 	dir := 1
@@ -2272,7 +2462,7 @@ func (a *App) skipHeaderInDirection(oldIdx, newIdx int) {
 	idx := cur + dir
 	for idx >= 0 && idx < len(visible) {
 		switch visible[idx].(type) {
-		case sessionItem, projectItem:
+		case sessionItem, projectItem, dayItem:
 			a.sessionList.Select(idx)
 			return
 		}
@@ -2282,7 +2472,7 @@ func (a *App) skipHeaderInDirection(oldIdx, newIdx int) {
 	idx = cur - dir
 	for idx >= 0 && idx < len(visible) {
 		switch visible[idx].(type) {
-		case sessionItem, projectItem:
+		case sessionItem, projectItem, dayItem:
 			a.sessionList.Select(idx)
 			return
 		}
@@ -2315,6 +2505,14 @@ func (a *App) liveNewlineCmd() tea.Cmd {
 // handleFocusedPreviewKeys handles keys when the session preview pane is focused.
 // Returns (model, cmd, handled). If handled is false, the caller should continue processing.
 func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
+	// A date row — or a project row inside the daily tree — owns the preview
+	// regardless of the selected preview mode: its pane is that scope's outputs,
+	// not a session's. Guarded on the row alone, so a scope with nothing
+	// produced yet still does not fall through to a previously-previewed
+	// session's handler.
+	if a.selectedOwnsDayPane() {
+		return a.handleDayPreviewKeys(sp, key)
+	}
 	if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
 		return a.handleConvPreviewKeys(sp, key)
 	}
@@ -2326,6 +2524,9 @@ func (a *App) handleFocusedPreviewKeys(sp *SplitPane, key string) (tea.Model, te
 	}
 	if a.sessPreviewMode == sessPreviewRefs && len(a.sessPreviewRefs) > 0 {
 		return a.handleRefsPreviewKeys(sp, key)
+	}
+	if a.sessPreviewMode == sessPreviewOutputs && len(a.sessOutputsRows) > 0 {
+		return a.handleOutputsPreviewKeys(sp, key)
 	}
 	if a.sessPreviewMode == sessPreviewContexts && len(a.sessCtxNodes) > 0 {
 		return a.handleContextsPreviewKeys(sp, key)
@@ -2944,6 +3145,8 @@ func (a *App) handleSessPageMenu(key string) (tea.Model, tea.Cmd) {
 		return a, a.setSessPreviewMode(sessPreviewContexts)
 	case "r":
 		return a, a.setSessPreviewMode(sessPreviewRefs)
+	case "o":
+		return a, a.setSessPreviewMode(sessPreviewOutputs)
 	case "l":
 		if sess, ok := a.selectedSession(); ok {
 			if sess.IsRemote {
@@ -2963,7 +3166,8 @@ func (a *App) renderSessPageHintBox() string {
 	line2 := hl.Render("m") + d.Render(":mem") + sp + hl.Render("x") + d.Render(":scratch") + sp + hl.Render("t") + d.Render(":tasks")
 	line3 := hl.Render("a") + d.Render(":agents") + sp + hl.Render("l") + d.Render(":live")
 	line4 := hl.Render("w") + d.Render(":workflows") + sp + hl.Render("c") + d.Render(":contexts")
-	body := strings.Join([]string{line1, line2, line3, line4, d.Render("esc:cancel")}, "\n")
+	line5 := hl.Render("r") + d.Render(":refs") + sp + hl.Render("o") + d.Render(":outputs")
+	body := strings.Join([]string{line1, line2, line3, line4, line5, d.Render("esc:cancel")}, "\n")
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorDim).
@@ -4730,6 +4934,19 @@ func (a *App) invalidateOpenPreviewCaches() {
 		a.sessWorkflowsCacheKey = ""
 	case sessPreviewRefs:
 		a.invalidateSelectedSessionRefs()
+	case sessPreviewOutputs:
+		// The digest is refs plus transcript/disk state, so both halves reset.
+		// Dropping the in-flight latch is the escape hatch: if a collection was
+		// ever armed without a command reaching the runtime, refresh is the only
+		// thing that can re-dispatch it.
+		a.invalidateSelectedSessionRefs()
+		if sess, ok := a.selectedSession(); ok {
+			delete(a.outputsInFlight, sess.ID)
+		}
+		a.sessOutputsCacheKey = ""
+		a.sessOutputsCacheID = ""
+		a.sessOutputsCollected = ""
+		a.sessOutputs = nil
 	case sessPreviewAgents:
 		// No per-session memo; the shared CacheKey reset below suffices.
 	}
@@ -4956,6 +5173,14 @@ func (a *App) refreshActivePreview() tea.Cmd {
 
 // --- Session split pane ---
 
+// previewDispatchesCmd reports whether a preview mode's update returns a
+// tea.Cmd that must be dispatched from an Update path. View() cannot dispatch
+// commands, so the render path must not drive these modes — it would drop the
+// extract/resolve and strand the pane on its placeholder.
+func previewDispatchesCmd(mode sessPreview) bool {
+	return mode == sessPreviewLive || mode == sessPreviewRefs || mode == sessPreviewOutputs
+}
+
 func (a *App) renderSessionSplit() string {
 	if a.sessionList.Width() == 0 {
 		return ""
@@ -4976,11 +5201,12 @@ func (a *App) renderSessionSplit() string {
 	}
 
 	// Don't call updateSessionPreview from the render path for modes whose
-	// update returns an async cmd (live, refs) — View() cannot dispatch a cmd, so
-	// it would be lost. Those modes are initialized and their cmds dispatched from
-	// Update paths (setSessPreviewMode, the navigation debounce, resizeAll). View
-	// only re-renders their already-populated content (the resize block below).
-	if a.sessPreviewMode != sessPreviewLive && a.sessPreviewMode != sessPreviewRefs {
+	// update returns an async cmd (live, refs, outputs) — View() cannot dispatch a
+	// cmd, so it would be lost. Those modes are initialized and their cmds
+	// dispatched from Update paths (setSessPreviewMode, the navigation debounce,
+	// resizeAll). View only re-renders their already-populated content (the
+	// resize block below).
+	if !previewDispatchesCmd(a.sessPreviewMode) {
 		_ = a.updateSessionPreview()
 	}
 
@@ -4998,6 +5224,19 @@ func (a *App) renderSessionSplit() string {
 		}
 		if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 && !isRemoteSetup {
 			a.refreshConvPreview()
+		} else if a.sessPreviewMode == sessPreviewOutputs && !isRemoteSetup {
+			// Re-render the digest at the new width from already-collected rows.
+			// A day row keeps its own summary pane (selectedSession would hand us
+			// an arbitrary child), and this path must never dispatch — View
+			// cannot deliver a cmd, so arming a latch here would strand the pane.
+			if _, isDay := a.selectedDay(); !isDay {
+				a.sessOutputsCacheKey = ""
+				if sess, ok := a.selectedSession(); ok {
+					a.refreshOutputsPreviewLayout(sess)
+				}
+			} else {
+				a.sessSplit.CacheKey = "" // let the next Update redraw the day pane
+			}
 		} else if a.sessPreviewMode != sessPreviewLive && !isRemoteSetup {
 			a.sessSplit.CacheKey = ""
 			_ = a.updateSessionPreview()
@@ -5100,20 +5339,53 @@ func (a *App) updateSessionPreview() tea.Cmd {
 	if !a.sessSplit.Show {
 		return nil
 	}
+	if di, ok := a.selectedDay(); ok {
+		// A date row previews the day itself — which sessions ran and what each
+		// produced — rather than an arbitrary child's detail. Drilling into a
+		// child session is what opens the per-session Outputs digest.
+		// The pane is the day's outputs regardless of preview mode, so the mode
+		// is not part of the key; the cursor and focus are, so moving the
+		// highlight re-renders.
+		cacheKey := fmt.Sprintf("day:%s:%d:%d:%t", di.dayKey, len(di.sessions), a.dayOutputsCursor, a.sessSplit.Focus)
+		if cacheKey == a.sessSplit.CacheKey {
+			return nil
+		}
+		a.sessSplit.CacheKey = cacheKey
+		a.sessPreviewPinned = false
+		a.updateDayPreview(di)
+		return nil
+	}
 	if pi, ok := a.selectedProject(); ok {
-		// In refs mode a project head row previews its representative session's
-		// refs (selectedSession returns pi.sessions[0] for a projectItem). The
-		// project-summary preview has no refs, so route refs mode through the
+		// In the daily view a project row is the middle tier: it aggregates one
+		// day's work in one project, so its pane is that slice's outputs — not a
+		// representative session's, and not the generic project summary.
+		if pi.dayKey != "" {
+			cacheKey := fmt.Sprintf("dayproj:%s:%s:%d:%d:%t", pi.dayKey, pi.basePath,
+				len(pi.sessions), a.dayOutputsCursor, a.sessSplit.Focus)
+			if cacheKey == a.sessSplit.CacheKey {
+				return nil
+			}
+			a.sessSplit.CacheKey = cacheKey
+			a.sessPreviewPinned = false
+			a.updateDayProjectPreview(pi)
+			return nil
+		}
+		// In refs/outputs mode a project head row previews its representative
+		// session (selectedSession returns pi.sessions[0] for a projectItem). The
+		// project-summary preview has neither, so route those modes through the
 		// session path instead — otherwise the extract is never dispatched and
 		// the preview sticks on "Resolving…" (projectCentric is the default group
 		// mode, so this is the common case, not an edge case).
-		if a.sessPreviewMode == sessPreviewRefs && len(pi.sessions) > 0 {
+		if len(pi.sessions) > 0 && previewDispatchesCmd(a.sessPreviewMode) && a.sessPreviewMode != sessPreviewLive {
 			cacheKey := fmt.Sprintf("%d:%s", a.sessPreviewMode, pi.sessions[0].ID)
 			if cacheKey == a.sessSplit.CacheKey {
 				return nil
 			}
 			a.sessSplit.CacheKey = cacheKey
 			a.sessPreviewPinned = false
+			if a.sessPreviewMode == sessPreviewOutputs {
+				return a.updateSessionOutputsPreview(pi.sessions[0])
+			}
 			return a.updateSessionRefsPreview(pi.sessions[0])
 		}
 		cacheKey := fmt.Sprintf("project:%d:%s", a.sessPreviewMode, pi.basePath)
@@ -5171,6 +5443,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		a.updateSessionContextsPreview(sess)
 	case sessPreviewRefs:
 		return a.updateSessionRefsPreview(sess)
+	case sessPreviewOutputs:
+		return a.updateSessionOutputsPreview(sess)
 	case sessPreviewLive:
 		if sess.IsLive {
 			a.sessSplit.Preview.SetContent(dimStyle.Render("(connecting…)"))
@@ -5622,26 +5896,55 @@ func (a *App) handleJumpFromPicker() (tea.Model, tea.Cmd) {
 
 		// Navigate to the target entry UUID
 		if targetUUID != "" {
-			items := a.convList.VisibleItems()
-			for j, li := range items {
-				ci, ok := li.(convItem)
-				if !ok || ci.kind != convMsg {
-					continue
-				}
-				for idx := ci.merged.startIdx; idx <= ci.merged.endIdx && idx < len(a.conv.messages); idx++ {
-					if a.conv.messages[idx].UUID == targetUUID {
-						a.selectConvBody(j)
-						a.liveTail = false
-						a.conv.split.BottomAlign = false
-						a.updateConvPreview()
-						return a, cmd
-					}
-				}
-			}
+			a.selectConvEntryByUUID(targetUUID)
 		}
 		return a, cmd
 	}
 	return a, nil
+}
+
+// selectConvEntryByUUID moves the conversation cursor to the row containing the
+// entry with the given UUID and pins the preview there (no live-tail snap).
+// Reports whether a matching row was found. The conversation must already be
+// open — callers pair this with openConversation.
+func (a *App) selectConvEntryByUUID(uuid string) bool {
+	if uuid == "" {
+		return false
+	}
+	for j, li := range a.convList.VisibleItems() {
+		ci, ok := li.(convItem)
+		if !ok || ci.kind != convMsg {
+			continue
+		}
+		for idx := ci.merged.startIdx; idx <= ci.merged.endIdx && idx < len(a.conv.messages); idx++ {
+			if a.conv.messages[idx].UUID != uuid {
+				continue
+			}
+			a.selectConvBody(j)
+			a.liveTail = false
+			a.conv.split.BottomAlign = false
+			a.updateConvPreview()
+			return true
+		}
+	}
+	return false
+}
+
+// jumpToSessionEntry opens the given session's conversation and navigates to
+// the entry that produced something (an output, a decision). When the UUID no
+// longer resolves — a compacted or truncated transcript — the conversation
+// still opens at its default position rather than the jump failing silently.
+func (a *App) jumpToSessionEntry(sessID, uuid string) (tea.Model, tea.Cmd) {
+	sess, ok := a.sessionByIDFromStore(sessID)
+	if !ok {
+		return a, nil
+	}
+	a.currentSess = sess
+	cmd := a.openConversation(sess)
+	if !a.selectConvEntryByUUID(uuid) {
+		a.copiedMsg = "Entry not found in transcript; opened conversation"
+	}
+	return a, cmd
 }
 
 func (a *App) updateSessionStatsPreview(sess session.Session) {
@@ -6162,6 +6465,38 @@ func (a *App) syncSessionRefsToList(id string) bool {
 			items[i] = v
 			setListItemsPreservingFilter(&a.sessionList, items)
 			return true
+		case dayItem:
+			// Date rows carry the same rollup: update the embedded session and
+			// re-sum the day's ref counts so the PR/Jira/artifact badges fill in.
+			found := false
+			for j := range v.sessions {
+				if v.sessions[j].ID == id {
+					v.sessions[j].Refs = fresh.Refs
+					v.sessions[j].RefsResolved = fresh.RefsResolved
+					found = true
+				}
+			}
+			if !found {
+				continue
+			}
+			v.openPRs, v.prs, v.jiras, v.artifacts = 0, 0, 0, 0
+			for j := range v.sessions {
+				n, _ := v.sessions[j].OpenRefCounts()
+				v.openPRs += n
+				for _, r := range v.sessions[j].Refs {
+					switch r.Kind {
+					case session.RefPR:
+						v.prs++
+					case session.RefJira:
+						v.jiras++
+					case session.RefArtifact:
+						v.artifacts++
+					}
+				}
+			}
+			items[i] = v
+			setListItemsPreservingFilter(&a.sessionList, items)
+			return true
 		}
 	}
 	return false
@@ -6179,6 +6514,24 @@ func (a *App) syncSessionRefsToList(id string) bool {
 // ~10ms offline line scan, and the follow-on status resolve is already capped by
 // resolveSem (4 concurrent). refsInFlight dedups so a row in view across many
 // ticks is only worked once.
+// nextUnextracted returns up to n of the given sessions whose refs have not
+// been extracted yet, in order. Used to spread a parent row's fan-out across
+// successive passes instead of paying for all of its children at once.
+func (a *App) nextUnextracted(sessions []session.Session, n int) []session.Session {
+	out := make([]session.Session, 0, n)
+	for _, s := range sessions {
+		if len(out) >= n {
+			break
+		}
+		cur, ok := a.sessionByIDFromStore(s.ID)
+		if !ok || !cur.HasRefs || cur.RefsResolved || len(cur.Refs) > 0 || a.refsInFlight[cur.ID] {
+			continue
+		}
+		out = append(out, cur)
+	}
+	return out
+}
+
 func (a *App) resolveVisibleRefsCmd() tea.Cmd {
 	if a.state != viewSessions {
 		return nil
@@ -6189,12 +6542,35 @@ func (a *App) resolveVisibleRefsCmd() tea.Cmd {
 	}
 	start, end := a.sessionList.Paginator.GetSliceBounds(len(items))
 	var cmds []tea.Cmd
+	// Parent rows carry their children's refs in a rollup badge, so a folded
+	// day (or project) still needs its sessions extracted — otherwise the daily
+	// view's whole point, the per-day PR/Jira/artifact counts, stays at zero.
+	//
+	// A date row can own hundreds of sessions, though, so expanding every one of
+	// them turns a page of ~13 extracts into ~54 (measured on a real store) and
+	// costs ~250ms the moment the view opens. Instead each pass takes only the
+	// next slice of a parent's unextracted children: the first frame stays cheap
+	// and the rollup fills in over the following ticks, converging on the exact
+	// count rather than settling for an approximation. refsInFlight and the
+	// already-extracted check below make each session cost exactly one pass, so
+	// this walks forward and terminates.
+	const parentFanoutPerPass = 4
+	var visible []session.Session
 	for _, item := range items[start:end] {
-		si, ok := item.(sessionItem)
-		if !ok {
-			continue
+		switch v := item.(type) {
+		case sessionItem:
+			visible = append(visible, v.sess)
+		case dayItem:
+			visible = append(visible, a.nextUnextracted(v.sessions, parentFanoutPerPass)...)
 		}
-		s, ok := a.sessionByIDFromStore(si.sess.ID)
+	}
+	seen := make(map[string]bool, len(visible))
+	for _, vs := range visible {
+		if seen[vs.ID] {
+			continue // an expanded day lists its children twice
+		}
+		seen[vs.ID] = true
+		s, ok := a.sessionByIDFromStore(vs.ID)
 		if !ok || !s.HasRefs || s.RefsResolved || a.refsInFlight[s.ID] || len(s.Refs) > 0 {
 			continue
 		}
@@ -7850,7 +8226,7 @@ func (a *App) bumpPastHeader(start, dir int) {
 	idx := start
 	for idx >= 0 && idx < len(visible) {
 		switch visible[idx].(type) {
-		case sessionItem, projectItem:
+		case sessionItem, projectItem, dayItem:
 			a.sessionList.Select(idx)
 			return
 		}
@@ -7956,10 +8332,10 @@ func (a *App) resizeAll() tea.Cmd {
 }
 
 func (a *App) rebuildSessionList() {
-	selectedID := ""
-	if sess, ok := a.selectedSession(); ok {
-		selectedID = sess.ID
-	}
+	// What the cursor was on, in terms that survive a regrouping. See
+	// cursorAnchor: aggregate rows carry their own identity (day key, project
+	// path) so the live tick minting a newer session can't move the anchor.
+	anchor := a.sessionListAnchor()
 
 	// Preserve active filter
 	var filterTerm string
@@ -7994,15 +8370,13 @@ func (a *App) rebuildSessionList() {
 		a.applyStartupFilter()
 	}
 
-	// Restore cursor to previously selected session.
+	// Restore cursor to the previously selected row.
 	// Use VisibleItems() because Select() operates on the visible (filtered) index space.
-	if selectedID != "" {
-		for i, item := range a.sessionList.VisibleItems() {
-			if si, ok := item.(sessionItem); ok && si.sess.ID == selectedID {
-				a.sessionList.Select(i)
-				return
-			}
-		}
+	// Select() also sets the paginator page, so the restored row is scrolled
+	// into view rather than merely selected off-screen.
+	if i := anchor.findIn(a.sessionList.VisibleItems()); i >= 0 {
+		a.sessionList.Select(i)
+		return
 	}
 	// Default: ensure cursor isn't parked on a header.
 	a.bumpPastHeader(0, +1)
@@ -8015,6 +8389,10 @@ func (a *App) toggleSessGroupFoldAtCursor() {
 	// Project rows (project-centric view) have their own toggle key.
 	if pi, ok := a.sessionList.SelectedItem().(projectItem); ok {
 		a.toggleProjectFold(pi)
+		return
+	}
+	if di, ok := a.sessionList.SelectedItem().(dayItem); ok {
+		a.toggleDayFold(di)
 		return
 	}
 	si, ok := a.sessionList.SelectedItem().(sessionItem)
@@ -8084,7 +8462,14 @@ func (a *App) setAllSessGroupsFolded(folded bool) {
 				delete(a.sessFolded, v.groupKey)
 			}
 		case projectItem:
-			key := "repo:" + v.basePath
+			key := projectFoldKey(v)
+			if folded {
+				a.sessFolded[key] = true
+			} else {
+				delete(a.sessFolded, key)
+			}
+		case dayItem:
+			key := dayFoldKey(v.dayKey)
 			if folded {
 				a.sessFolded[key] = true
 			} else {
@@ -8111,11 +8496,38 @@ func (a *App) toggleProjectFold(pi projectItem) {
 	if a.sessFolded == nil {
 		a.sessFolded = make(map[string]bool)
 	}
-	key := "repo:" + pi.basePath
+	key := projectFoldKey(pi)
 	a.sessFolded[key] = !a.sessFolded[key]
 	a.rebuildSessionList()
 	for i, item := range a.sessionList.VisibleItems() {
-		if p, ok := item.(projectItem); ok && p.basePath == pi.basePath {
+		if p, ok := item.(projectItem); ok && projectFoldKey(p) == key {
+			a.sessionList.Select(i)
+			break
+		}
+	}
+}
+
+// projectFoldKey returns the sessFolded key for a project row. In the daily
+// view the key is scoped to the date, since the same project appears under
+// every day it was worked on and one shared key would fold them all at once.
+func projectFoldKey(pi projectItem) string {
+	if pi.dayKey != "" {
+		return dayProjectFoldKey(pi.dayKey, pi.basePath)
+	}
+	return "repo:" + pi.basePath
+}
+
+// toggleDayFold flips the fold state of a date row (daily view), keeping the
+// cursor on that same date after the rebuild — the projectItem convention.
+func (a *App) toggleDayFold(di dayItem) {
+	if a.sessFolded == nil {
+		a.sessFolded = make(map[string]bool)
+	}
+	key := dayFoldKey(di.dayKey)
+	a.sessFolded[key] = !a.sessFolded[key]
+	a.rebuildSessionList()
+	for i, item := range a.sessionList.VisibleItems() {
+		if d, ok := item.(dayItem); ok && d.dayKey == di.dayKey {
 			a.sessionList.Select(i)
 			break
 		}
@@ -8155,6 +8567,15 @@ func (a *App) renderBreadcrumb() string {
 	switch a.state {
 	case viewSessions:
 		crumbs = []crumb{{" Projects", viewSessions}}
+		if a.sessGroupMode == groupDaily {
+			// The daily view organizes by date, not by project, so the crumb
+			// names the day at the cursor rather than claiming a project root.
+			crumbs = []crumb{{" Daily", viewSessions}}
+			if di, ok := a.selectedDay(); ok {
+				crumbs = append(crumbs, crumb{dayLabel(di.day, time.Now()), viewSessions})
+				break
+			}
+		}
 		// Show selected project name in breadcrumb
 		if sess, ok := a.selectedSession(); ok && a.sessionList.Width() > 0 {
 			proj := sess.ProjectName
@@ -8355,10 +8776,16 @@ func (a *App) breadcrumbRightStatus() string {
 	var parts []string
 
 	// Main browser badge: always present it as PROJECTS in the UI even if
-	// alternate legacy grouping modes still exist internally.
+	// alternate legacy grouping modes still exist internally. The daily view is
+	// the one exception — it is a distinct organizing axis the user chose, not
+	// a legacy variant of the project browser.
 	if a.state == viewSessions {
 		modeStyle := lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
-		parts = append(parts, modeStyle.Render("PROJECTS"))
+		label := "PROJECTS"
+		if a.sessGroupMode == groupDaily {
+			label = "DAILY"
+		}
+		parts = append(parts, modeStyle.Render(label))
 		if badge := a.stateFilterBadge(); badge != "" {
 			filterMode := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 			parts = append(parts, filterMode.Render(badge))

@@ -259,8 +259,8 @@ func main() {
 		flag.StringVar(&initialFocus, "initial-focus", "", "startup focus strategy: tmux (default: tmux window match, else most recent) | cwd (adds a CWD-based directory-walk fallback before most recent)")
 		flag.StringVar(&worktreeDir, "worktree-dir", ".worktree", "subdirectory name for git worktrees")
 		flag.StringVar(&searchQuery, "search", "", "start with session list filtered by search query")
-		flag.StringVar(&groupMode, "group", "", "initial group mode (flat|proj|tree|chain|fork)")
-		flag.StringVar(&previewMode, "preview", "", "initial preview mode (conv|stats|mem|tasks)")
+		flag.StringVar(&groupMode, "group", "", "initial group mode (flat|proj|tree|chain|fork|repo|projects|daily)")
+		flag.StringVar(&previewMode, "preview", "", "initial preview mode (conv|stats|mem|scratch|tasks|agents|wf|shells|contexts|refs|outputs)")
 		flag.StringVar(&viewMode, "view", "", "initial view (sessions|config|plugins|stats)")
 		flag.StringVar(&sessionID, "session", "", "open a specific session by ID (prefix match)")
 		flag.Usage = func() {

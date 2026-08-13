@@ -31,6 +31,7 @@ ccx -view config           # start in config explorer
 ccx -view stats            # start in global stats
 ccx -view plugins          # start in plugin explorer
 ccx -group tree            # start with tree grouping
+ccx -group daily           # start in the daily activity view
 ccx -preview stats         # start with stats preview open
 ccx -search "is:live"      # start filtered to live sessions
 ```
@@ -94,8 +95,8 @@ ccx sessions -pick -multi | jq '.sessions | length'
 | `-version`, `-v` | Print version and exit |
 | `-dir PATH` | Claude data directory (default: `~/.claude`) |
 | `-view MODE` | Initial view: `sessions`, `config`, `plugins`, `stats` |
-| `-group MODE` | Initial grouping: `flat`, `proj`, `tree`, `chain`, `fork` |
-| `-preview MODE` | Initial preview: `conv`, `stats`, `mem`, `tasks` |
+| `-group MODE` | Initial grouping: `flat`, `proj`, `tree`, `chain`, `fork`, `repo`, `projects`, `daily` |
+| `-preview MODE` | Initial preview: `conv`, `stats`, `mem`, `scratch`, `tasks`, `refs`, `outputs` |
 | `-search QUERY` | Start with session filter applied |
 | `-tmux` | Enable tmux integration (auto-detected) |
 | `-tmux-auto-live` | Auto-enter live session in same tmux window |
@@ -117,8 +118,9 @@ Browse all Claude Code sessions across projects, sorted by recency.
   - **Tree** — team hierarchy with leader/teammate nesting
   - **Chain** — resume-chain grouping (parent → child)
   - **Fork** — agent-fork grouping
+  - **Daily** (`D`) — day → project → session tree (newest day first), previewing what each level produced
 - **Directory filter** (`g`) — scope to a single project directory
-- **Preview pane** (`Tab` to cycle): conversation, stats, memory, tasks/plan, workflows, live
+- **Preview pane** (`Tab` to cycle): conversation, stats, memory, tasks/plan, workflows, outputs, references, live
 - **Fleet notifications** — when a live session transitions into an attention state (→ `WAIT`/`DONE`/`STUCK`), a `(!)N` indicator appears in the status bar; press `n` to jump to the most recently notified session
 - **Multi-select** (`Space`) — bulk delete, copy paths, send input
 - **Actions menu** (`x`) — delete, move, resume, copy path, worktree, kill, input, jump, URLs, files
@@ -220,6 +222,34 @@ Drill into any session to see one chronological spine containing conversation tu
 - **Live controls** — `L` toggles live tail, `I` sends input, and `J` switches to the tmux pane when a conversation turn is selected
 
 ![Kitty image preview](docs/gifs/08-kitty-image-preview.png)
+
+#### Daily Activity View (`D`, or `:group:daily`)
+
+A date-first view for reviewing what got done rather than which project it happened in. Press `D` to flip into it from any grouping and `D` again to return — it is an axis you toggle while reading, not a mode you commit to. `D` works whether the list or the preview has focus, keeps the cursor on the same session across the swap, and remembers the grouping it returns to across restarts (so starting in the daily view still takes you back to *your* view, not the default). Each view keeps its own preview mode — the daily view opens on outputs, the project browser on the conversation — so a swap never lands you on the wrong pane.
+
+The list nests three tiers — **day → project → session** — each folding with `Enter`/`o` and aggregating exactly what its level needs: a date row rolls up the whole day, a project row rolls up that day's work in one repo, and sessions sit underneath. A busy day really can hold 250+ sessions across 30 projects, and the project tier is what keeps that readable.
+
+The preview always shows **what that scope produced** — PRs, Jira issues, artifacts and plans, one row each. Selecting a date row shows the day's outputs; selecting a project row narrows to that project on that day. The sessions themselves are not listed in the pane: they are one row below in the list.
+
+Every output row carries the session that produced it as an anchor (`a1b2c3 · ~/src/repo`). Focus the preview and press `Enter` on a row to land in that conversation **at the message where the output first appeared** — the digest tells you *what* came out, and the anchor is how you get to *how*. `o` opens the output itself (a PR, Jira issue or artifact in the browser), and `y` copies its URL or path. Outputs referenced from several sessions collapse to one row with a `+N` spread marker, anchored to the earliest session (where the work happened, not where it was later quoted) — and the jump lands in *that* session, at *its* first mention.
+
+Sessions are bucketed by the calendar day of their **last** activity. A session that spans midnight appears once, under the day it was last active — it is never duplicated across dates.
+
+**Known limitation — produced vs. referenced.** A reference counts as an output if the session's transcript contains its URL, which includes links that were merely read or quoted (a `kubernetes/kubernetes` PR consulted during debugging shows up next to the PR the session actually opened). Artifacts already avoid this — they are only counted from the `Published … at <url>` tool result — but PRs and Jira issues have no equivalent creation marker yet. Treat the Produced list as "references this day touched", weighted toward what it created.
+
+#### Outputs Digest (`p` → `o`, or `:preview:outputs`)
+
+The per-session counterpart of the daily view: what this session produced, not what it said. Rows are grouped as results first, then working material:
+
+| Section | Source |
+|---------|--------|
+| Pull Requests / Jira Issues / Artifacts | Links found in the transcript, with live status (shares the References pipeline and its cache) |
+| Plans | `ExitPlanMode` writes plus the plan files recorded on the session |
+| Memory | Writes under a `memory/` directory or `MEMORY.md`, titled with the note's frontmatter description |
+| Files Changed | `Edit`/`Write`/`MultiEdit`/`NotebookEdit` targets, collapsed per path with a write count (`Read` does not count) |
+| Scratchpad | Files in the session's scratchpad directory |
+
+With the preview focused, `↑↓` moves the cursor, `y` copies the row's URL or path, and `Enter` opens it: external references go to the browser, and everything else jumps into the conversation at the entry that produced it.
 
 #### Subagent and Workflow Support
 
@@ -371,8 +401,8 @@ Available from any view. Suggestions are context-aware — only relevant command
 | `view:config` | All | Open config explorer |
 | `view:config:hooks` | All | Config → hooks filter |
 | `view:plugins` | All | Open plugin explorer |
-| `group:flat\|proj\|tree\|chain\|fork` | Sessions | Change grouping mode |
-| `preview:conv\|stats\|mem\|tasks\|wf\|live` | Sessions | Change preview mode (`wf` = workflow runs) |
+| `group:flat\|proj\|tree\|chain\|fork\|repo\|projects\|daily` | Sessions | Change grouping mode |
+| `preview:conv\|stats\|mem\|tasks\|wf\|refs\|outputs\|live` | Sessions | Change preview mode (`wf` = workflow runs, `outputs` = what the session produced) |
 | `set:ratio N` | Sessions | Set split pane ratio (15-85) |
 | `page:memory\|hooks\|mcp\|skills\|keymaps\|shortcuts\|...` | Config | Filter config category |
 | `page:tools\|errors\|overview` | Stats | Switch stats page |

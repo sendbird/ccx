@@ -14,7 +14,8 @@ import (
 
 // Preferences holds persisted view preferences that survive restarts.
 type Preferences struct {
-	GroupMode       string   `yaml:"group_mode,omitempty"`        // flat|proj|tree|chain|fork
+	GroupMode       string   `yaml:"group_mode,omitempty"`        // flat|proj|tree|chain|fork|repo|projects|daily
+	PrevGroupMode   string   `yaml:"prev_group_mode,omitempty"`   // grouping `D` returns to when leaving the daily view
 	PreviewMode     string   `yaml:"preview_mode,omitempty"`      // conv|stats|mem|tasks|agents|shells|contexts|live
 	ViewMode        string   `yaml:"view_mode,omitempty"`         // sessions|config|plugins|stats
 	ConvDetailLevel int      `yaml:"conv_detail_level,omitempty"` // 0=compact,1=standard,2=verbose
@@ -366,6 +367,21 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	}
 }
 
+// groupModeNames maps the persisted/CLI name of a grouping to its constant.
+// Shared by preference restore and the -group flag so the two can never accept
+// different sets of names.
+var groupModeNames = map[string]int{
+	"flat": groupFlat, "proj": groupProject, "tree": groupTree,
+	"chain": groupChain, "fork": groupFork, "repo": groupBaseProject,
+	"projects": groupProjectCentric, "daily": groupDaily, "day": groupDaily,
+}
+
+// groupModeFromString resolves a grouping name, reporting whether it is known.
+func groupModeFromString(name string) (int, bool) {
+	m, ok := groupModeNames[name]
+	return m, ok
+}
+
 // groupModeString converts a group mode int to its string name.
 func groupModeString(mode int) string {
 	switch mode {
@@ -383,6 +399,8 @@ func groupModeString(mode int) string {
 		return "repo"
 	case groupProjectCentric:
 		return "projects"
+	case groupDaily:
+		return "daily"
 	}
 	return ""
 }
@@ -410,6 +428,8 @@ func sessPreviewString(mode sessPreview) string {
 		return "contexts"
 	case sessPreviewRefs:
 		return "refs"
+	case sessPreviewOutputs:
+		return "outputs"
 	case sessPreviewLive:
 		return "live"
 	}
@@ -465,6 +485,7 @@ func (a *App) capturePreferences() Preferences {
 
 	return Preferences{
 		GroupMode:       groupModeString(a.sessGroupMode),
+		PrevGroupMode:   groupModeString(a.preDailyGroupMode),
 		PreviewMode:     sessPreviewString(a.sessPreviewMode),
 		ViewMode:        viewStateString(a.state),
 		ConvDetailLevel: int(a.conv.rightPaneMode),
@@ -482,6 +503,12 @@ func (a *App) capturePreferences() Preferences {
 func (a *App) applyPreferences(p Preferences) {
 	if a.config.GroupMode == "" && p.GroupMode != "" {
 		a.config.GroupMode = p.GroupMode
+	}
+	// Restore where `D` returns to. Without this, a user whose saved grouping is
+	// daily always lands in the default on toggle-out rather than the view they
+	// actually work in.
+	if m, ok := groupModeFromString(p.PrevGroupMode); ok && m != groupDaily {
+		a.preDailyGroupMode = m
 	}
 	if a.config.PreviewMode == "" && p.PreviewMode != "" {
 		a.config.PreviewMode = p.PreviewMode
