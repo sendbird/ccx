@@ -1767,7 +1767,11 @@ func (a *App) View() string {
 	if a.actionsMenu && a.state == viewSessions {
 		hintBox := a.renderActionsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("x:actions — pick an action")
+		if a.outputsPreviewActionsActive() {
+			help = formatHelp("x:actions — pick an action for this output")
+		} else {
+			help = formatHelp("x:actions — pick an action")
+		}
 	}
 
 	if a.sessPageMenu && a.state == viewSessions {
@@ -1977,6 +1981,13 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Clear actions menu on any unrelated key
 	if a.actionsMenu {
 		return a.handleActionsMenu(key)
+	}
+
+	// Preview-page menu ("p" prefix). Intercepted here with the other overlays
+	// rather than inside the focused-preview block, because `p` now opens it
+	// from the list side too.
+	if a.sessPageMenu {
+		return a.handleSessPageMenu(key)
 	}
 
 	// State-filter toggle menu ("s" prefix)
@@ -2193,6 +2204,21 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case km.Session.Actions:
+		// A focused outputs digest owns `x` for the row under its cursor. This
+		// comes first: without it, a day-scoped project row would fall into the
+		// project arm below and silently multi-select the whole project — an
+		// action about the LIST while the user is looking at the PANE.
+		if a.outputsPreviewActionsActive() {
+			if _, ok := a.outputActionTarget(); !ok {
+				// Focused on a digest with nothing in it. Say so rather than
+				// falling through to the list's session actions, which would act
+				// on a row the user is not looking at.
+				a.copiedMsg = "Nothing produced to act on"
+				return a, nil
+			}
+			a.actionsMenu = true
+			return a, nil
+		}
 		if a.hasMultiSelection() {
 			a.actionsMenu = true
 			return a, nil
@@ -2394,16 +2420,24 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Focused preview: custom conversation nav or simple scroll
 	if sp.Focus && sp.Show {
-		if a.sessPageMenu {
-			return a.handleSessPageMenu(key)
-		}
-		if key == "p" {
-			a.sessPageMenu = true
-			return a, nil
-		}
 		if m, cmd, handled := a.handleFocusedPreviewKeys(sp, key); handled {
 			return m, cmd
 		}
+	}
+
+	// Preview-page menu. Reachable from BOTH sides: the common position is the
+	// cursor in the LIST wanting to change what the right pane shows, and
+	// gating this on preview focus made the combo look like it did not exist.
+	// Suppressed on rows that have no preview modes at all — see
+	// rowSupportsPreviewModes, which the number keys already honor. Two
+	// mechanisms for one thing must not disagree.
+	if key == "p" {
+		if !a.rowSupportsPreviewModes() {
+			a.copiedMsg = "This row always shows what it produced"
+			return a, nil
+		}
+		a.sessPageMenu = true
+		return a, nil
 	}
 
 	// List boundary (up/down always navigate list, scroll preview at edges)
@@ -3744,6 +3778,16 @@ func (a *App) sessionPreviewActionsActive() bool {
 func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	a.actionsMenu = false
 	a.copiedMsg = ""
+	// A focused outputs digest acts on the row under its cursor, not on a
+	// session in the list. Checked before every other arm for the same reason
+	// the `x` case is: the row may also be a project row, whose session actions
+	// would otherwise win.
+	if a.outputsPreviewActionsActive() {
+		if row, ok := a.outputActionTarget(); ok {
+			return a.runOutputAction(row, key)
+		}
+		return a, nil
+	}
 	if a.sessionPreviewActionsActive() {
 		switch key {
 		case "c":
@@ -5226,10 +5270,13 @@ func (a *App) renderSessionSplit() string {
 			a.refreshConvPreview()
 		} else if a.sessPreviewMode == sessPreviewOutputs && !isRemoteSetup {
 			// Re-render the digest at the new width from already-collected rows.
-			// A day row keeps its own summary pane (selectedSession would hand us
-			// an arbitrary child), and this path must never dispatch — View
-			// cannot deliver a cmd, so arming a latch here would strand the pane.
-			if _, isDay := a.selectedDay(); !isDay {
+			// A row that owns the day pane keeps its own summary (selectedSession
+			// would hand us an arbitrary child), and this path must never
+			// dispatch — View cannot deliver a cmd, so arming a latch here would
+			// strand the pane. selectedOwnsDayPane, not selectedDay: a day-scoped
+			// PROJECT row owns that pane too, and checking only date rows let a
+			// resize overwrite its "Produced" list with a child session's digest.
+			if !a.selectedOwnsDayPane() {
 				a.sessOutputsCacheKey = ""
 				if sess, ok := a.selectedSession(); ok {
 					a.refreshOutputsPreviewLayout(sess)
@@ -7654,6 +7701,9 @@ func (a *App) renderActionsHintBox() string {
 	akm := a.keymap.Actions
 
 	var lines []string
+	if a.outputsPreviewActionsActive() {
+		return a.renderOutputActionsHintBox()
+	}
 	if a.hasMultiSelection() && !a.sessionPreviewActionsActive() {
 		header := fmt.Sprintf("%d selected", len(a.selectedSet))
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))

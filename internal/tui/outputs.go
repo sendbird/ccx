@@ -186,7 +186,7 @@ func (a *App) renderOutputs(outs []session.SessionOutput, width int, collecting,
 	var sb strings.Builder
 	title := "── Outputs ──"
 	if len(outs) > 0 && a.sessSplit.Focus {
-		title = "── Outputs  ↵:open  y:copy ──"
+		title = "── Outputs  ↵:open  y:copy  x:actions ──"
 	}
 	sb.WriteString(statTitleStyle.Render(title) + "\n")
 	if collecting {
@@ -252,8 +252,187 @@ func outputLine(o session.SessionOutput, width int, selected bool) string {
 	return head + "  " + dimStyle.Render(truncate(o.Detail, avail)) + suffix
 }
 
+// --- Row actions (shared by both output digests) ---
+
+// outputActionKind names one thing you can do with an output row. The row's own
+// fields decide which of these apply — a plan slug with no file has nothing to
+// edit, a scratchpad file has no URL — and only the applicable ones are ever
+// offered. Advertising an action a row cannot perform is the confusion this
+// menu exists to remove.
+type outputActionKind int
+
+const (
+	outputActionOpenURL outputActionKind = iota
+	outputActionJump                     // to the transcript entry that produced it
+	outputActionSession                  // to the producing conversation, no entry recorded
+	outputActionEdit                     // open the local file in $EDITOR
+	outputActionCopy                     // URL when there is one, else the path
+)
+
+// outputAction is one applicable entry: the key that picks it, the label the
+// hint box shows, and what it does.
+type outputAction struct {
+	kind  outputActionKind
+	key   string
+	label string
+}
+
+// outputActionsFor returns the actions that actually apply to o, in the order
+// they are offered. hasSession says whether the caller knows which session
+// produced the row (the day pane carries an anchor id; the per-session digest
+// tracks one session), which is what makes the uuid-less "open the conversation"
+// fallback possible.
+func (a *App) outputActionsFor(o session.SessionOutput, hasSession bool) []outputAction {
+	akm := a.keymap.Actions
+	var acts []outputAction
+	if o.URL != "" {
+		acts = append(acts, outputAction{outputActionOpenURL, "o", "open in browser"})
+	}
+	switch {
+	case o.MessageUUID != "":
+		acts = append(acts, outputAction{outputActionJump, "enter", "jump to first mention"})
+	case hasSession:
+		// A plan slug inherited from a parent session records no entry, so there
+		// is nothing to jump to — but the conversation itself is still reachable
+		// and is the honest phrasing of what Enter will do.
+		acts = append(acts, outputAction{outputActionSession, "enter", "open the conversation"})
+	}
+	if o.Path != "" {
+		acts = append(acts, outputAction{outputActionEdit, akm.Edit, "open in $EDITOR"})
+	}
+	if o.URL != "" {
+		acts = append(acts, outputAction{outputActionCopy, akm.CopyPath, "copy URL"})
+	} else if o.Path != "" {
+		acts = append(acts, outputAction{outputActionCopy, akm.CopyPath, "copy path"})
+	}
+	return acts
+}
+
+// outputActionRow is whichever digest row the actions menu is acting on,
+// flattened to what the actions need: the output plus the session that produced
+// it. The day pane fills sessID from the row's anchor, the per-session digest
+// from the session the digest is tracking.
+type outputActionRow struct {
+	out    session.SessionOutput
+	sessID string
+}
+
+// outputActionTarget returns the row under the cursor in whichever digest owns
+// the focused pane, or false when neither does.
+func (a *App) outputActionTarget() (outputActionRow, bool) {
+	if a.selectedOwnsDayPane() {
+		r, ok := a.selectedDayOutput()
+		if !ok {
+			return outputActionRow{}, false
+		}
+		return outputActionRow{out: r.out, sessID: r.sessID}, true
+	}
+	o, ok := a.selectedOutput()
+	if !ok {
+		return outputActionRow{}, false
+	}
+	// The digest tracks exactly one session (sessOutputsCacheID); the list
+	// cursor can resolve to a different one, and jumping against that would
+	// open the wrong transcript.
+	return outputActionRow{out: o, sessID: a.sessOutputsCacheID}, true
+}
+
+// runOutputAction performs the action the key picked, if it applies to the row.
+// An inapplicable key does nothing — the menu never offered it.
+func (a *App) runOutputAction(row outputActionRow, key string) (tea.Model, tea.Cmd) {
+	for _, act := range a.outputActionsFor(row.out, row.sessID != "") {
+		if act.key != key {
+			continue
+		}
+		switch act.kind {
+		case outputActionOpenURL:
+			if err := a.openInBrowser(row.out.URL); err != nil {
+				a.copiedMsg = "Open failed: " + err.Error()
+			} else {
+				a.copiedMsg = "Opened " + row.out.Title
+			}
+			return a, nil
+		case outputActionJump:
+			return a.jumpToSessionEntry(row.sessID, row.out.MessageUUID)
+		case outputActionSession:
+			sess, ok := a.sessionByIDFromStore(row.sessID)
+			if !ok {
+				return a, nil
+			}
+			a.currentSess = sess
+			return a, a.openConversation(sess)
+		case outputActionEdit:
+			// tea.ExecProcess (inside openInEditor) is mandatory here: shelling
+			// out from a running Bubble Tea program without releasing the
+			// terminal leaves both the editor and the TUI writing to it.
+			return a.openInEditor(row.out.Path)
+		case outputActionCopy:
+			target := row.out.URL
+			if target == "" {
+				target = row.out.Path
+			}
+			copyToClipboard(target)
+			a.copiedMsg = "Copied " + row.out.Title
+			return a, nil
+		}
+	}
+	return a, nil
+}
+
+// renderOutputActionsHintBox renders the actions menu for the digest row under
+// the cursor. It names the row (kind and title) so the user can see what they
+// are about to act on, and lists ONLY the actions that apply to it — an entry
+// for something the row cannot do is the confusion this menu replaces.
+func (a *App) renderOutputActionsHintBox() string {
+	row, ok := a.outputActionTarget()
+	if !ok {
+		return ""
+	}
+	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	d := dimStyle
+
+	kind := outputSection(row.out.Kind)
+	header := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(truncate(row.out.Title, 48))
+	if kind != "" {
+		header = d.Render(kind+"  ") + header
+	}
+
+	lines := []string{header}
+	acts := a.outputActionsFor(row.out, row.sessID != "")
+	if len(acts) == 0 {
+		// Reachable in principle (a row with no url, no path and no anchor); say
+		// so rather than showing an empty box.
+		lines = append(lines, d.Render("no actions for this row"))
+	}
+	for _, act := range acts {
+		lines = append(lines, hl.Render(displayKey(act.key))+d.Render(":"+act.label))
+	}
+	lines = append(lines, d.Render("esc:cancel"))
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 1)
+	return boxStyle.Render(strings.Join(lines, "\n"))
+}
+
+// outputsPreviewActionsActive reports whether the focused preview is an outputs
+// digest, and so owns the `x` actions menu. Both digests qualify: the day pane
+// (a date row or a day-scoped project row, which updateSessionPreview routes
+// there regardless of the preview mode) and the per-session digest. The day
+// check comes first for the same reason handleFocusedPreviewKeys puts it first
+// — those rows own the pane whatever sessPreviewMode says.
+func (a *App) outputsPreviewActionsActive() bool {
+	if !a.sessSplit.Focus || !a.sessSplit.Show {
+		return false
+	}
+	return a.selectedOwnsDayPane() || a.sessPreviewMode == sessPreviewOutputs
+}
+
 // handleOutputsPreviewKeys drives the Outputs digest when the preview pane has
 // focus: cursor movement plus Enter/o to open and y to copy the row's target.
+// `x` opens the fuller actions menu (see outputsPreviewActionsActive) — these
+// direct keys stay as the fast path.
 func (a *App) handleOutputsPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cmd, bool) {
 	switch key {
 	case "enter", "o":

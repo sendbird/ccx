@@ -231,7 +231,7 @@ The list nests three tiers — **day → project → session** — each folding 
 
 The preview always shows **what that scope produced** — PRs, Jira issues, artifacts and plans, one row each. Selecting a date row shows the day's outputs; selecting a project row narrows to that project on that day. The sessions themselves are not listed in the pane: they are one row below in the list.
 
-Every output row carries the session that produced it as an anchor (`a1b2c3 · ~/src/repo`). Focus the preview and press `Enter` on a row to land in that conversation **at the message where the output first appeared** — the digest tells you *what* came out, and the anchor is how you get to *how*. `o` opens the output itself (a PR, Jira issue or artifact in the browser), and `y` copies its URL or path. Outputs referenced from several sessions collapse to one row with a `+N` spread marker, anchored to the earliest session (where the work happened, not where it was later quoted) — and the jump lands in *that* session, at *its* first mention.
+Every output row carries the session that produced it as an anchor (`a1b2c3 · ~/src/repo`). Focus the preview and press `Enter` on a row to land in that conversation **at the message where the output first appeared** — the digest tells you *what* came out, and the anchor is how you get to *how*. `o` opens the output itself (a PR, Jira issue or artifact in the browser), `y` copies its URL or path, and `x` lists every action that applies to the row (see [Output Row Actions](#output-row-actions-x)). Outputs referenced from several sessions collapse to one row with a `+N` spread marker, anchored to the earliest session (where the work happened, not where it was later quoted) — and the jump lands in *that* session, at *its* first mention.
 
 Sessions are bucketed by the calendar day of their **last** activity. A session that spans midnight appears once, under the day it was last active — it is never duplicated across dates.
 
@@ -249,7 +249,25 @@ The per-session counterpart of the daily view: what this session produced, not w
 | Files Changed | `Edit`/`Write`/`MultiEdit`/`NotebookEdit` targets, collapsed per path with a write count (`Read` does not count) |
 | Scratchpad | Files in the session's scratchpad directory |
 
-With the preview focused, `↑↓` moves the cursor, `y` copies the row's URL or path, and `Enter` opens it: external references go to the browser, and everything else jumps into the conversation at the entry that produced it.
+With the preview focused, `↑↓` moves the cursor, `y` copies the row's URL or path, and `Enter` opens it: external references go to the browser, and everything else jumps into the conversation at the entry that produced it. `x` opens the row's full action menu — see below.
+
+#### Output Row Actions (`x`)
+
+Both output panes — the daily view's **Produced** list and the per-session **Outputs** digest — put every action for the row under the cursor behind `x`, the same modal-hint pattern the session browser uses. The menu lists **only what the row can actually do**, because a PR has no file to edit and a scratchpad file has no URL to open:
+
+| Key | Action | Offered when |
+|-----|--------|--------------|
+| `o` | Open in browser | The row has a URL (PR, Jira issue, artifact) |
+| `↵` | Jump to first mention | The row records the transcript entry it came from |
+| `↵` | Open the conversation | No entry was recorded (e.g. a plan slug inherited from a parent session), but the producing session is known |
+| `e` | Open in `$EDITOR` | The row is a local file (Files Changed, Scratchpad, plan files, memory notes) |
+| `y` | Copy | Always — the URL when there is one, the path otherwise |
+
+The hint box names the row it acts on (its section and title) so you can see what you are about to do it to. `Enter`, `o` and `y` keep working directly without the menu — `x` is the discoverable surface, not a replacement for the fast path. Letters follow your `actions` keymap (`edit`, `copy_path`), so rebinding those rebinds these.
+
+#### Switching the Preview (`p`)
+
+`p` opens the preview-mode menu — `v`:conv `s`:stats `m`:mem `x`:scratch `t`:tasks `a`:agents `w`:workflows `c`:contexts `r`:refs `o`:outputs `l`:live — from **either side**, whether the cursor is in the list or the preview has focus. It is the letter-based counterpart to the number keys (`0`-`9`), and follows the same rule about honesty: on a date row or a day-scoped project row the menu does not open, because those rows always render that scope's outputs and cannot honor any preview mode. The number keys already refuse there for the same reason.
 
 #### Subagent and Workflow Support
 
@@ -353,7 +371,8 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `[` / `]` | Adjust split ratio |
 | `Space` | Multi-select toggle |
 | `1-9` | Number key shortcuts (configurable) |
-| `x` | Actions menu (delete, move, resume, fork, URLs, files, ...) |
+| `p` | Preview-mode menu (works from the list *and* the focused preview) |
+| `x` | Actions menu (delete, move, resume, fork, URLs, files, ...) — on a focused outputs pane, the row's own actions |
 | `v` | Views menu (stats/config/plugins) |
 | `:` | Command mode |
 | `Ctrl+S` | Cross-session search |

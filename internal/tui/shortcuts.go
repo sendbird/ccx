@@ -285,7 +285,7 @@ func (a *App) isInOverlay() bool {
 	return a.actionsMenu || a.editMenu || a.convActionsMenu ||
 		a.executionContextMenu || a.conv.execution.Focused ||
 		a.viewsMenu || a.statsPageMenu || a.inspectorMenu || a.showHelp ||
-		a.stateMenu
+		a.stateMenu || a.sessPageMenu
 }
 
 // shortcutHint returns a compact hint string showing active shortcuts
