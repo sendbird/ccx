@@ -298,3 +298,162 @@ func selectedConvEntryUUID(a *App) string {
 	}
 	return a.conv.messages[ci.merged.startIdx].UUID
 }
+
+// TestDayPaneActionsMenuActsOnTheRow guards the day pane's half of the x-actions
+// work: with the pane focused, `x` must act on the OUTPUT under the cursor, not
+// on the day's sessions. A day-scoped project row is the trap — the plain `x`
+// path multi-selects the whole project, which is an action about the list while
+// the user is looking at the pane.
+func TestDayPaneActionsMenuActsOnTheRow(t *testing.T) {
+	sessions := []session.Session{{
+		ID: "maker", ShortID: "maker", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a",
+		ModTime: dayOf(0),
+		Refs: []session.SessionRef{{
+			Kind: session.RefPR, Label: "sendbird/ccx#5",
+			URL: "https://github.com/sendbird/ccx/pull/5", Resolved: true,
+		}},
+	}}
+	app := dayPaneApp(t, sessions)
+
+	if !app.outputsPreviewActionsActive() {
+		t.Fatal("a focused day pane must own the x actions menu")
+	}
+
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	got := m.(*App)
+	if !got.actionsMenu {
+		t.Fatal("x did not open the actions menu on the focused day pane")
+	}
+	if len(got.selectedSet) > 0 {
+		t.Errorf("x multi-selected %d sessions instead of acting on the row", len(got.selectedSet))
+	}
+	box := got.renderActionsHintBox()
+	if !strings.Contains(box, "sendbird/ccx#5") {
+		t.Errorf("the menu does not name the row it acts on:\n%s", box)
+	}
+	if strings.Contains(box, ":delete") {
+		t.Errorf("the session actions menu rendered over the day pane:\n%s", box)
+	}
+
+	var opened string
+	got.openURL = func(u string) error { opened = u; return nil }
+	m, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if opened != "https://github.com/sendbird/ccx/pull/5" {
+		t.Errorf("x→o opened %q, want the row's PR", opened)
+	}
+	if m.(*App).actionsMenu {
+		t.Error("the menu should close after a key is picked")
+	}
+}
+
+// TestDayPaneActionsAnchorToTheRowsSession pins the day pane's extra field: the
+// row's anchor session, which the per-session digest does not need. Without it,
+// the uuid-less fallback ("open the conversation") could not be offered.
+func TestDayPaneActionsAnchorToTheRowsSession(t *testing.T) {
+	app := newTestApp(nil)
+	app.sessGroupMode = groupDaily
+	app.dayOutputRows = []dayOutputRow{{
+		out:    session.SessionOutput{Kind: session.OutputPlan, Title: "some-plan"},
+		sessID: "planner",
+	}}
+	app.dayOutputsCursor = 0
+
+	acts := app.outputActionsFor(app.dayOutputRows[0].out, app.dayOutputRows[0].sessID != "")
+	var kinds []outputActionKind
+	for _, a := range acts {
+		kinds = append(kinds, a.kind)
+	}
+	if len(kinds) != 1 || kinds[0] != outputActionSession {
+		t.Fatalf("a uuid-less plan slug with an anchor should offer exactly the conversation, got %+v", acts)
+	}
+}
+
+// TestDayPaneActionsOnProjectRow pins the day-scoped project row, which owns the
+// same pane (selectedOwnsDayPane) but is a projectItem — the arm the plain `x`
+// path would otherwise route into.
+func TestDayPaneActionsOnProjectRow(t *testing.T) {
+	sessions := []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a",
+		ModTime: dayOf(0),
+		Refs: []session.SessionRef{{
+			Kind: session.RefPR, Label: "sendbird/ccx#1",
+			URL: "https://github.com/sendbird/ccx/pull/1", Resolved: true,
+		}},
+	}}
+	app := newTestApp(sessions)
+	app.sessGroupMode = groupDaily
+	app.rebuildSessionList()
+
+	idx := -1
+	for i, item := range app.sessionList.VisibleItems() {
+		if pi, ok := item.(projectItem); ok && pi.dayKey != "" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("expected a day-scoped project row in the daily tree")
+	}
+	app.sessionList.Select(idx)
+	app.sessSplit.Show = true
+	app.sessSplit.Focus = true
+	_ = app.updateSessionPreview()
+
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	got := m.(*App)
+	if len(got.selectedSet) > 0 {
+		t.Errorf("x on a focused day-project pane multi-selected %d sessions instead of acting on the row", len(got.selectedSet))
+	}
+	if box := got.renderActionsHintBox(); !strings.Contains(box, "sendbird/ccx#1") {
+		t.Errorf("the menu does not name the row it acts on:\n%s", box)
+	}
+}
+
+// TestDayProjectPaneSurvivesResize guards a bug found while wiring the actions
+// menu: the resize branch in renderSessionSplit guarded only selectedDay(), so
+// on a day-scoped PROJECT row — which owns the same pane — a window resize fell
+// through to the per-session digest path and overwrote the "Produced" list with
+// an arbitrary child session's outputs.
+func TestDayProjectPaneSurvivesResize(t *testing.T) {
+	sessions := []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a",
+		ModTime: dayOf(0),
+		Refs: []session.SessionRef{{
+			Kind: session.RefPR, Label: "sendbird/ccx#1",
+			URL: "https://github.com/sendbird/ccx/pull/1", Resolved: true,
+		}},
+	}}
+	app := newTestApp(sessions)
+	app.sessGroupMode = groupDaily
+	// The digest mode is what makes the resize branch reachable; a day-scoped
+	// row renders the day pane regardless, which is exactly the mismatch.
+	app.sessPreviewMode = sessPreviewOutputs
+	app.rebuildSessionList()
+
+	idx := -1
+	for i, item := range app.sessionList.VisibleItems() {
+		if pi, ok := item.(projectItem); ok && pi.dayKey != "" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("expected a day-scoped project row in the daily tree")
+	}
+	app.sessionList.Select(idx)
+	app.sessSplit.Show = true
+	app.sessSplit.Focus = true
+	_ = app.updateSessionPreview()
+
+	if before := app.sessSplit.Preview.View(); !strings.Contains(before, "Produced") {
+		t.Fatalf("fixture should start on the day-project pane, got:\n%s", before)
+	}
+
+	m, _ := app.Update(tea.WindowSizeMsg{Width: 140, Height: 44})
+	got := m.(*App)
+	_ = got.View() // the resize branch lives in the render path
+
+	if after := got.sessSplit.Preview.View(); !strings.Contains(after, "Produced") {
+		t.Errorf("resize replaced the day-project pane with a session digest:\n%s", after)
+	}
+}
