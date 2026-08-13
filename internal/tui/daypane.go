@@ -184,7 +184,7 @@ func (a *App) renderOutputsPane(title, subtitle, summary string, rows []dayOutpu
 
 	heading := fmt.Sprintf("Produced (%d)", len(rows))
 	if len(rows) > 0 && a.sessSplit.Focus {
-		heading += "  ↵:jump to first mention  o:open  y:copy"
+		heading += "  ↵:jump to first mention  o:open  y:copy  x:actions"
 	}
 	sb.WriteString(section.Render(heading) + "\n")
 
@@ -215,7 +215,7 @@ func (a *App) renderOutputsPane(title, subtitle, summary string, rows []dayOutpu
 	// belongs to the list (it folds the row); focused, the keys are this pane's,
 	// and saying otherwise sent people to the wrong action.
 	if a.sessSplit.Focus {
-		sb.WriteString(dimStyle.Render("↵ jumps to where it first appeared  •  o opens it  •  y copies  •  ↑↓ moves between outputs"))
+		sb.WriteString(dimStyle.Render("↵ jumps to where it first appeared  •  o opens it  •  y copies  •  x lists every action for the row  •  ↑↓ moves between outputs"))
 	} else {
 		sb.WriteString(dimStyle.Render("↵/o folds this row  •  tab focuses this pane"))
 	}

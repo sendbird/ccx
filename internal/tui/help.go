@@ -74,24 +74,27 @@ func (a *App) sessHelpLine() string {
 	sk := a.keymap.Session
 	var h string
 	if !a.sessSplit.Show {
-		h = fmtKey(sk.Open, "open") + " " + fmtKey(sk.Actions, "actions") + " →:preview " + fmtKey(sk.Search, "search")
+		h = fmtKey(sk.Open, "open") + " " + fmtKey(sk.Actions, "actions") + " →:preview p:page " + fmtKey(sk.Search, "search")
 	} else if a.sessSplit.Focus {
-		switch a.sessPreviewMode {
-		case sessPreviewConversation:
+		switch {
+		case a.outputsPreviewActionsActive():
+			// Both digests: the row under the cursor is what the keys act on.
+			h = "↑↓:nav ↵:jump o:open " + fmtKey(sk.Actions, "actions") + " ←:unfocus p:page"
+		case a.sessPreviewMode == sessPreviewConversation:
 			h = "↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
-		case sessPreviewAgents:
+		case a.sessPreviewMode == sessPreviewAgents:
 			h = "↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
-		case sessPreviewWorkflows:
+		case a.sessPreviewMode == sessPreviewWorkflows:
 			h = "↑↓:agent ↵:transcript ←:unfocus tab:mode"
-		case sessPreviewRefs:
+		case a.sessPreviewMode == sessPreviewRefs:
 			h = "↑↓:nav ↵:open sp:select ←:unfocus tab:mode"
-		case sessPreviewContexts:
+		case a.sessPreviewMode == sessPreviewContexts:
 			h = "↑↓:node ↵:open ←:unfocus tab:mode"
 		default:
 			h = "↑↓:scroll ←:unfocus tab:mode"
 		}
 	} else {
-		h = "↑↓:nav →:focus tab:mode ←:close"
+		h = "↑↓:nav →:focus tab:mode p:page ←:close"
 	}
 	h += " " + a.helpSuffix()
 	return formatHelp(h)
