@@ -346,7 +346,7 @@ func printHelp() {
 	fmt.Fprintf(os.Stderr, "TUI flags:\n")
 	fmt.Fprintf(os.Stderr, "  -v, --version         Print version\n")
 	fmt.Fprintf(os.Stderr, "  --search <query>      Start with session filter\n")
-	fmt.Fprintf(os.Stderr, "  --group <mode>        Group mode: flat|proj|tree|chain|fork\n")
+	fmt.Fprintf(os.Stderr, "  --group <mode>        Group mode: flat|proj|tree|chain|fork|repo|projects|daily\n")
 	fmt.Fprintf(os.Stderr, "  --view <mode>         Initial view: sessions|config|plugins|stats\n")
 }
 

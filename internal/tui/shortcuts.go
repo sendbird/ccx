@@ -1,6 +1,10 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 // ShortcutMap maps a key string ("1"-"9") to a command registry name.
 type ShortcutMap map[string]string
@@ -156,6 +160,33 @@ func migrateShortcuts(sc Shortcuts) {
 	}
 }
 
+// rowSupportsPreviewModes reports whether the row under the cursor can honor a
+// preview-mode shortcut.
+//
+// A date row, and a project row nested inside one, always render that scope's
+// outputs pane: updateSessionPreview() routes them to updateDayPreview /
+// updateDayProjectPreview without ever consulting sessPreviewMode. Firing a
+// preview-mode shortcut there changed hidden state and repainted nothing, so
+// the digits looked broken — and shortcutHint() advertised all ten of them
+// anyway. Only sessions have preview modes, so only sessions get the digits.
+//
+// Plain project rows in the non-daily browser are deliberately excluded from
+// this check: selectedSession() falls back to the project's most-recent session
+// there, and refs/outputs modes preview it directly, so the digits do change
+// what is on screen.
+func (a *App) rowSupportsPreviewModes() bool {
+	if a.state != viewSessions {
+		return true
+	}
+	return !a.selectedOwnsDayPane()
+}
+
+// isPreviewModeCmd reports whether a command name is one of the preview-mode
+// switches that only apply to a session row.
+func isPreviewModeCmd(name string) bool {
+	return strings.HasPrefix(name, "preview:")
+}
+
 // handleShortcutKey checks if a key press matches a shortcut for the current
 // view and focus side, and executes the corresponding command.
 // Returns (model, cmd, true) if handled, (nil, nil, false) otherwise.
@@ -186,6 +217,13 @@ func (a *App) handleShortcutKey(key string) (tea.Model, tea.Cmd, bool) {
 	cmdName, ok := sm[key]
 	if !ok {
 		return nil, nil, false
+	}
+
+	// Swallow rather than fall through: the digit is bound to a preview mode
+	// the current row cannot show, and letting it reach the list would scroll
+	// the cursor instead — a second surprise on top of the first.
+	if isPreviewModeCmd(cmdName) && !a.rowSupportsPreviewModes() {
+		return a, nil, true
 	}
 
 	entry, found := a.findCmdEntry(cmdName)
@@ -277,10 +315,16 @@ func (a *App) shortcutHint() string {
 	}
 
 	// Build hint in key order (0-9); 0 is rendered first as the quick "live" key.
+	previewOK := a.rowSupportsPreviewModes()
 	var parts []string
 	for _, i := range "0123456789" {
 		key := string(i)
 		if cmd, ok := sm[key]; ok {
+			// A hint for a key that does nothing on this row is worse than no
+			// hint: it is the footer promising a mode the row cannot render.
+			if isPreviewModeCmd(cmd) && !previewOK {
+				continue
+			}
 			// Shorten command name: "preview:conv" -> "conv"
 			short := cmd
 			if idx := len(cmd) - 1; idx > 0 {

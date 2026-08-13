@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/clauderegistry"
@@ -137,39 +139,54 @@ func HasClaudeSession(shellPID int, sessionID string) bool {
 
 // HasClaude checks if a pane's shell has a claude process anywhere in its
 // descendant tree — not just as a direct child. Claude is frequently launched
-// behind a wrapper (ccproxy, tee, sudo, a shell function), so `pgrep -P` on the
-// immediate children misses it. We first try the cheap direct-child check, then
-// fall back to walking the full process subtree. This must stay consistent with
+// behind a wrapper (ccproxy, tee, sudo, a shell function), so checking only the
+// immediate children misses it. This must stay consistent with
 // MarkLiveSessions, which attributes live claudes to panes via a PPID walk;
 // otherwise a session shows [LIVE] but its live preview capture is rejected.
+// The snapshot below makes this answer up to windowClaudesTTL stale relative to
+// MarkLiveSessions' own walk, so the disagreement window is bounded by that
+// TTL rather than being open-ended.
 func HasClaude(shellPID int) bool {
 	if shellPID == 0 {
 		return false
 	}
-	// Fast path: direct child named claude.
-	if out, err := exec.Command("pgrep", "-P", strconv.Itoa(shellPID), "-f", "claude").Output(); err == nil {
-		if len(strings.TrimSpace(string(out))) > 0 {
-			return true
-		}
+	// One `ps` snapshot answers both the direct-child and the subtree question,
+	// so there is no cheaper "fast path" to try first — spawning a pgrep per
+	// pane was the expensive part. Fall back to pgrep only if the snapshot is
+	// unavailable.
+	if tree, ok := loadProcTree(); ok {
+		return tree.hasClaudeUnder(shellPID)
 	}
-	// Fallback: any descendant process is (or is wrapping) claude.
-	return hasClaudeDescendant(shellPID)
+	if out, err := exec.Command("pgrep", "-P", strconv.Itoa(shellPID), "-f", "claude").Output(); err == nil {
+		return len(strings.TrimSpace(string(out))) > 0
+	}
+	return false
 }
 
-// hasClaudeDescendant reports whether any process in shellPID's subtree has
-// "claude" in its command line. Uses one `ps` snapshot (pid, ppid, command)
-// and a BFS down the tree, bounded against cycles.
-func hasClaudeDescendant(shellPID int) bool {
+// procTree is a snapshot of the process table: pid → command, plus the child
+// index needed to walk a subtree.
+type procTree struct {
+	cmd      map[int]string
+	children map[int][]int
+}
+
+// loadProcTree reads and parses `ps -e` once. Building this costs ~100ms on a
+// busy machine, and the old code paid it separately for every pane examined —
+// scanning a window with two Claude panes read the whole process table twice.
+// The snapshot is memoized for the same short window as the pane scan that
+// drives it, so one startup pays for one `ps`.
+func loadProcTree() (*procTree, bool) {
+	procTreeMu.Lock()
+	defer procTreeMu.Unlock()
+	if procTreeVal != nil && time.Since(procTreeAt) <= windowClaudesTTL {
+		return procTreeVal, true
+	}
+
 	out, err := exec.Command("ps", "-e", "-o", "pid=,ppid=,command=").Output()
 	if err != nil {
-		return false
+		return nil, false
 	}
-	type proc struct {
-		ppid int
-		cmd  string
-	}
-	procs := make(map[int]proc)
-	children := make(map[int][]int)
+	t := &procTree{cmd: make(map[int]string), children: make(map[int][]int)}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -184,13 +201,23 @@ func hasClaudeDescendant(shellPID int) bool {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		cmd := strings.Join(fields[2:], " ")
-		procs[pid] = proc{ppid: ppid, cmd: cmd}
-		children[ppid] = append(children[ppid], pid)
+		t.cmd[pid] = strings.Join(fields[2:], " ")
+		t.children[ppid] = append(t.children[ppid], pid)
 	}
+	procTreeVal, procTreeAt = t, time.Now()
+	return t, true
+}
 
-	// BFS from shellPID over descendants; look for "claude" in any command.
-	queue := append([]int(nil), children[shellPID]...)
+var (
+	procTreeMu  sync.Mutex
+	procTreeVal *procTree
+	procTreeAt  time.Time
+)
+
+// hasClaudeUnder reports whether any descendant of shellPID is (or wraps) a
+// claude process. BFS over the snapshot — no subprocesses.
+func (t *procTree) hasClaudeUnder(shellPID int) bool {
+	queue := append([]int(nil), t.children[shellPID]...)
 	visited := make(map[int]bool)
 	for len(queue) > 0 {
 		pid := queue[0]
@@ -199,12 +226,10 @@ func hasClaudeDescendant(shellPID int) bool {
 			continue
 		}
 		visited[pid] = true
-		if p, ok := procs[pid]; ok {
-			if strings.Contains(p.cmd, "claude") {
-				return true
-			}
+		if strings.Contains(t.cmd[pid], "claude") {
+			return true
 		}
-		queue = append(queue, children[pid]...)
+		queue = append(queue, t.children[pid]...)
 	}
 	return false
 }
@@ -431,6 +456,9 @@ func CurrentWindowClaudes() []string {
 	if !InTmux() {
 		return nil
 	}
+	if paths, ok := cachedWindowClaudes(); ok {
+		return paths
+	}
 
 	panes, err := ListPanes()
 	if err != nil {
@@ -445,7 +473,54 @@ func CurrentWindowClaudes() []string {
 		mySession, myWindow = own.Session, own.Window
 	}
 
-	return claudesInWindow(panes, mySession, myWindow)
+	paths := claudesInWindow(panes, mySession, myWindow)
+	storeWindowClaudes(paths)
+	return paths
+}
+
+// The window's Claude panes are resolved by shelling out to tmux and then
+// pgrep-ing every pane's process subtree — ~210ms on a busy window, measured.
+// Startup calls this several times (auto-select, then its filter-cleared
+// retry), and it is on the path to the first frame, so the result is memoized
+// briefly. The TTL is short because the answer is genuinely live state: a pane
+// the user opens in another window should show up on the next tick, not
+// minutes later.
+const windowClaudesTTL = 2 * time.Second
+
+var (
+	windowClaudesMu   sync.Mutex
+	windowClaudesAt   time.Time
+	windowClaudesVal  []string
+	windowClaudesOnce bool
+)
+
+func cachedWindowClaudes() ([]string, bool) {
+	windowClaudesMu.Lock()
+	defer windowClaudesMu.Unlock()
+	if !windowClaudesOnce || time.Since(windowClaudesAt) > windowClaudesTTL {
+		return nil, false
+	}
+	return windowClaudesVal, true
+}
+
+func storeWindowClaudes(paths []string) {
+	windowClaudesMu.Lock()
+	windowClaudesVal = paths
+	windowClaudesAt = time.Now()
+	windowClaudesOnce = true
+	windowClaudesMu.Unlock()
+}
+
+// InvalidateWindowClaudes drops the memoized window scan so the next call
+// re-reads live tmux state. Used by the refresh path, where the user is
+// explicitly asking for current reality.
+func InvalidateWindowClaudes() {
+	windowClaudesMu.Lock()
+	windowClaudesOnce = false
+	windowClaudesMu.Unlock()
+	procTreeMu.Lock()
+	procTreeVal = nil
+	procTreeMu.Unlock()
 }
 
 // claudesInWindow returns the absolute cwd of every pane in the named tmux

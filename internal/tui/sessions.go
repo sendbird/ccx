@@ -24,7 +24,8 @@ const (
 	groupFork           = 4
 	groupBaseProject    = 5
 	groupProjectCentric = 6 // project rows are first-class, sessions are children
-	numGroupModes       = 7
+	groupDaily          = 7 // date rows are first-class, sessions are children
+	numGroupModes       = 8
 )
 
 // buildGroupedItems returns list items for the given group mode.
@@ -33,6 +34,15 @@ const (
 // sessionItem.groupKey/groupChildren on parent rows so the renderer can show
 // a fold chevron and so handlers can find which key to toggle.
 func buildGroupedItems(sessions []session.Session, groupMode int, folded map[string]bool, worktreeDir ...string) []list.Item {
+	// The daily view is a chronological journal: splitting the current window
+	// out would emit the same date twice (once per section), and both rows
+	// would share one fold key — folding either would fold both. Days are also
+	// the one grouping where "where am I sitting right now" is not the
+	// organizing question, so the split has nothing to offer here.
+	if groupMode == groupDaily {
+		return buildDailyItems(sessions, folded)
+	}
+
 	currentSessions, rest := splitCurrentWindow(sessions)
 
 	buildForMode := func(ss []session.Session) []list.Item {
@@ -215,6 +225,45 @@ type projectItem struct {
 	bestTime      time.Time         // most-recent ModTime in this project
 	expanded      bool              // current fold state at build time
 	lifecycle     session.LifecycleState
+	// dayKey is set only in the daily view, where a project row lives under a
+	// date and its fold state must be scoped to that day (the same project
+	// appears under many dates). Empty in the project-centric view.
+	dayKey    string
+	treeDepth int  // indent level; 1 under a date row, 0 at top level
+	treeLast  bool // last project under its day (└─ vs ├─)
+}
+
+// treeConnector returns the tree prefix for a child row, plus its width in
+// cells. Depth only decides whether a connector is drawn at all — the geometry
+// is deliberately flat, matching what every group mode has always rendered.
+//
+// last picks the glyph: └─ for the last child of its parent, ├─ otherwise.
+func treeConnector(depth int, last bool) (prefix string, width int) {
+	if depth <= 0 {
+		return "", 0
+	}
+	if last {
+		return "└─ ", 3
+	}
+	return "├─ ", 3 // "├─ " is 3 cells wide
+}
+
+// truncCells truncates s to a display-cell budget.
+//
+// It replaces byte slicing (s[:maxW-3]), which measured multibyte names in
+// bytes against a cell budget and could cut mid-rune, and which panicked
+// outright for maxW < 4 — s[:1-3] is s[:-2].
+func truncCells(s string, maxW int) string {
+	if maxW <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(s) <= maxW {
+		return s
+	}
+	if maxW <= 3 {
+		return runewidth.Truncate(s, maxW, "")
+	}
+	return runewidth.Truncate(s, maxW, "...")
 }
 
 func (p projectItem) FilterValue() string {
@@ -284,10 +333,11 @@ func (d sessionDelegate) sessionCacheKey(m list.Model, index int, si sessionItem
 }
 
 func (d sessionDelegate) projectCacheKey(m list.Model, index int, pi projectItem, selected bool) string {
-	return fmt.Sprintf("p|%d|%d|%t|%s|%s|%t|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s",
+	return fmt.Sprintf("p|%d|%d|%t|%s|%s|%t|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%t",
 		m.Width(), index, selected, listFilterTerm(m), d.hiddenBadgeKey(), pi.expanded,
 		len(pi.sessions), pi.totalMsgs, pi.liveSessions, pi.bgSessions, pi.monSessions,
-		pi.inputSessions, pi.stuckCount, pi.waitCount, pi.doneCount, pi.openPRs, pi.basePath)
+		pi.inputSessions, pi.stuckCount, pi.waitCount, pi.doneCount, pi.openPRs, pi.basePath,
+		pi.dayKey, pi.treeDepth, pi.treeLast)
 }
 
 // renderProject draws a folder-style row for a project: chevron + name +
@@ -393,7 +443,15 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 		name = highlighted
 	}
 
-	line1 := fmt.Sprintf("%s%s%s %s%s  %s%s", cursor, projDot, folder, name, br, timeStr, badges)
+	// In the daily view a project row sits under a date, so it carries a tree
+	// connector like a session child does — without it the three tiers read as
+	// one flat list.
+	treePrefix, _ := treeConnector(pi.treeDepth, pi.treeLast)
+	if treePrefix != "" {
+		treePrefix = dimStyle.Render(treePrefix)
+	}
+
+	line1 := fmt.Sprintf("%s%s%s%s %s%s  %s%s", cursor, treePrefix, projDot, folder, name, br, timeStr, badges)
 	// Pad/clamp.
 	if selected {
 		bare := lipgloss.Width(line1)
@@ -403,7 +461,7 @@ func (d sessionDelegate) renderProject(w io.Writer, m list.Model, index int, pi 
 		line1 = selectedRowStyle.Render(line1)
 	}
 
-	line2 := "        " + summaryStyled
+	line2 := strings.Repeat(" ", 8+3*pi.treeDepth) + summaryStyled
 	if selected {
 		bare := lipgloss.Width(line2)
 		if bare < width {
@@ -449,6 +507,10 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		d.renderProject(w, m, index, pi)
 		return
 	}
+	if di, ok := item.(dayItem); ok {
+		d.renderDay(w, m, index, di)
+		return
+	}
 	si, ok := item.(sessionItem)
 	if !ok {
 		return
@@ -463,16 +525,11 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 	width := m.Width()
 
-	// Tree connector prefix for depth>0 teammates
-	treePrefix := ""
-	treePrefixW := 0
-	if si.treeDepth > 0 {
-		connector := "├─ "
-		if si.treeLast {
-			connector = "└─ "
-		}
-		treePrefix = dimStyle.Render(connector)
-		treePrefixW = 3 // "├─ " is 3 cells wide
+	// Tree connector prefix for depth>0 children (teammates, forks, and the
+	// sessions under a day's project row).
+	treePrefix, treePrefixW := treeConnector(si.treeDepth, si.treeLast)
+	if treePrefix != "" {
+		treePrefix = dimStyle.Render(treePrefix)
 	}
 
 	// Fold chevron for group-head rows: open when expanded, closed when collapsed.
@@ -662,9 +719,8 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	project := ""
 	if filterTerm != "" && maxProjW > 0 {
 		project = highlightSnippet(fullProj, filterTerm, maxProjW, projStyle)
-	} else if len(fullProj) > maxProjW {
-		trunc := fullProj[:maxProjW-3] + "..."
-		project = projStyle.Render(trunc)
+	} else if runewidth.StringWidth(fullProj) > maxProjW {
+		project = projStyle.Render(truncCells(fullProj, maxProjW))
 	} else {
 		project = projStyle.Render(projName)
 		if branch != "" {
@@ -681,8 +737,8 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if filterTerm != "" && maxW > 0 {
 		line2 = promptIndent + highlightSnippet(prompt, filterTerm, maxW, promptStyle)
 	} else {
-		if maxW > 0 && len(prompt) > maxW {
-			prompt = prompt[:maxW-3] + "..."
+		if maxW > 0 {
+			prompt = truncCells(prompt, maxW)
 		}
 		line2 = promptIndent + promptStyle.Render(prompt)
 	}
@@ -731,7 +787,7 @@ func newSessionList(sessions []session.Session, width, height int, groupMode int
 	// Use chain-aware filter for grouped modes so children stay visible
 	// when their parent matches (and vice versa).
 	var base list.FilterFunc
-	if groupMode == groupChain || groupMode == groupFork || groupMode == groupTree || groupMode == groupBaseProject || groupMode == groupProjectCentric {
+	if groupMode == groupChain || groupMode == groupFork || groupMode == groupTree || groupMode == groupBaseProject || groupMode == groupProjectCentric || groupMode == groupDaily {
 		base = buildChainAwareFilter(items)
 	} else {
 		base = substringFilter
@@ -759,6 +815,8 @@ func wrapPinCurrentWindow(items []list.Item, base list.FilterFunc) list.FilterFu
 			pinned[i] = true
 			lastProject = -1
 		case projectItem:
+			lastProject = i
+		case dayItem:
 			lastProject = i
 		case sessionItem:
 			if v.sess.IsCurrentWindow {
@@ -836,11 +894,19 @@ func trimEmptyHeaders(ranks []list.Rank, items []list.Item) []list.Rank {
 // semantics as substringFilter, so `is:live` (a child-only token) does NOT
 // count as a parent-identity match and won't reveal all children.
 func parentIdentityMatches(item list.Item, term string) bool {
-	pi, ok := item.(projectItem)
-	if !ok {
+	var identity string
+	switch v := item.(type) {
+	case projectItem:
+		identity = strings.Join([]string{v.displayName, v.basePath, v.branch, "is:project"}, " ")
+	case dayItem:
+		// A date row's own identity is its date, so searching "2026-08-13" or
+		// "Aug 13" reveals that whole day; `is:live` still only reveals the
+		// individually-matching sessions under it.
+		identity = strings.Join([]string{v.dayKey, v.day.Format("Mon Jan 2 2006"), "is:day"}, " ")
+	default:
 		return false
 	}
-	identity := strings.ToLower(strings.Join([]string{pi.displayName, pi.basePath, pi.branch, "is:project"}, " "))
+	identity = strings.ToLower(identity)
 	terms := strings.Fields(strings.ToLower(term))
 	if len(terms) == 0 {
 		return false
@@ -857,20 +923,39 @@ func parentIdentityMatches(item list.Item, term string) bool {
 // relationships. When a depth=0 parent matches, all its depth=1 children stay
 // visible. When a depth=1 child matches, its parent also stays visible.
 func buildChainAwareFilter(items []list.Item) list.FilterFunc {
-	// Pre-compute parent-child relationships.
+	// Pre-compute parent-child relationships. The daily view nests three tiers
+	// (day → project → session), so a project row is both a child and a parent;
+	// tracking the last row seen at each depth keeps the chain intact.
 	parentOf := make(map[int]int)     // child index → parent index
 	childrenOf := make(map[int][]int) // parent index → child indices
-	lastParent := -1
+	lastParent := -1                  // most recent top-level (depth 0) row
+	lastMid := -1                     // most recent depth-1 row (project under a day)
+	link := func(child, parent int) {
+		if parent < 0 {
+			return
+		}
+		parentOf[child] = parent
+		childrenOf[parent] = append(childrenOf[parent], child)
+	}
 	for i, item := range items {
 		switch v := item.(type) {
+		case dayItem:
+			lastParent, lastMid = i, -1
 		case projectItem:
-			lastParent = i
-		case sessionItem:
 			if v.treeDepth == 0 {
-				lastParent = i
-			} else if lastParent >= 0 {
-				parentOf[i] = lastParent
-				childrenOf[lastParent] = append(childrenOf[lastParent], i)
+				lastParent, lastMid = i, -1
+				continue
+			}
+			link(i, lastParent)
+			lastMid = i
+		case sessionItem:
+			switch {
+			case v.treeDepth == 0:
+				lastParent, lastMid = i, -1
+			case v.treeDepth >= 2 && lastMid >= 0:
+				link(i, lastMid)
+			default:
+				link(i, lastParent)
 			}
 		}
 	}
@@ -900,9 +985,14 @@ func buildChainAwareFilter(items []list.Item) list.FilterFunc {
 		expanded := make(map[int]bool)
 		for idx := range matchSet {
 			expanded[idx] = true
-			// child → parent
-			if pIdx, ok := parentOf[idx]; ok {
-				expanded[pIdx] = true
+			// child → every ancestor. The daily view nests three tiers, so a
+			// matched session must pull in its project AND that project's day —
+			// stopping at the immediate parent would orphan the row.
+			for p, ok := parentOf[idx]; ok; p, ok = parentOf[p] {
+				if expanded[p] {
+					break // this ancestor chain is already included
+				}
+				expanded[p] = true
 			}
 			// parent → all children, only if the parent matched on its identity
 			if len(childrenOf[idx]) > 0 && parentIdentityMatches(items[idx], term) {
@@ -1755,6 +1845,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{displayKey(km.Session.Select), "Multi-select"},
 			{"o / f / F", "Fold group / all / expand all"},
 			{"s", "Toggle session states shown (live/done/…)"},
+			{"D", "Daily view (dates + what each day produced)"},
 		}
 	}
 }
@@ -1763,6 +1854,15 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 // preview, specialized by the active preview mode.
 func (a *App) sessionsPreviewContextRows() []helpRow {
 	base := []helpRow{{"↑↓ / jk", "Scroll / navigate"}, {"←", "Unfocus"}, {"tab", "Cycle mode"}, {"p", "Page menu"}}
+	// A date row owns the preview regardless of the selected mode.
+	if _, ok := a.selectedDay(); ok {
+		return []helpRow{
+			{"↑↓", "Navigate the day's outputs"},
+			{"↵ / o", "Open the session that produced it"},
+			{displayKey(a.keymap.Actions.CopyPath), "Copy URL"},
+			{"←", "Unfocus"},
+		}
+	}
 	switch a.sessPreviewMode {
 	case sessPreviewRefs:
 		return []helpRow{
@@ -1770,6 +1870,13 @@ func (a *App) sessionsPreviewContextRows() []helpRow {
 			{"↵ / o", "Open ref"},
 			{displayKey(a.keymap.Session.Select), "Select"},
 			{displayKey(a.keymap.Actions.CopyPath), "Copy"},
+			{"←", "Unfocus"},
+		}
+	case sessPreviewOutputs:
+		return []helpRow{
+			{"↑↓", "Navigate outputs"},
+			{"↵ / o", "Open ref or jump to producing entry"},
+			{displayKey(a.keymap.Actions.CopyPath), "Copy URL / path"},
 			{"←", "Unfocus"},
 		}
 	case sessPreviewAgents, sessPreviewTasksPlan:

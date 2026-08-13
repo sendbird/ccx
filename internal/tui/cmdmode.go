@@ -69,6 +69,12 @@ func buildCmdRegistry() []cmdEntry {
 				a.rebuildSessionList()
 				return a, nil
 			}},
+		{name: "group:daily", aliases: []string{"g:daily", "daily", "g:day"}, desc: "daily activity view", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) {
+				a.sessGroupMode = groupDaily
+				a.rebuildSessionList()
+				return a, nil
+			}},
 
 		// Conversation detail levels
 		{name: "detail:compact", aliases: []string{"d:compact"}, desc: "text only", views: cmdConv,
@@ -101,6 +107,8 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewShells) }},
 		{name: "preview:refs", aliases: []string{"p:refs", "refs", "preview:pr", "p:pr"}, desc: "PR/Jira references preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewRefs) }},
+		{name: "preview:outputs", aliases: []string{"p:outputs", "p:out", "outputs"}, desc: "outputs digest (plans, memory, files, refs)", views: cmdSessions,
+			action: func(a *App) (tea.Model, tea.Cmd) { return a, a.setSessPreviewMode(sessPreviewOutputs) }},
 		{name: "preview:live", aliases: []string{"p:live"}, desc: "live preview", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				sess, ok := a.selectedSession()
@@ -543,8 +551,8 @@ func (a *App) updateCmdSuggestions() {
 		switch a.state {
 		case viewSessions:
 			a.cmdSuggestions = append(a.cmdSuggestions,
-				cmdEntry{name: "group:", desc: "flat proj tree chain fork repo"},
-				cmdEntry{name: "preview:", desc: "conv stats mem scratch tasks live"},
+				cmdEntry{name: "group:", desc: "flat proj tree chain fork repo projects daily"},
+				cmdEntry{name: "preview:", desc: "conv stats mem scratch tasks outputs refs live"},
 				cmdEntry{name: "share:ref", desc: "share @path to another live session"},
 				cmdEntry{name: "set:ratio", desc: "N  (15-85)"},
 				cmdEntry{name: "refresh", desc: "reload sessions"})

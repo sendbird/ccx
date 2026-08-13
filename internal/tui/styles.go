@@ -135,6 +135,10 @@ var (
 	inputBadgeStyle     = lipgloss.NewStyle().Foreground(colorFilter).Bold(true)
 	// PR reference badge (open PRs surfaced on the session row) — GitHub purple.
 	prBadgeStyle = lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
+	// Output badges for the daily view / outputs digest. Jira and artifacts get
+	// their own hues so a day's rollup is readable without reading the labels.
+	jiraBadgeStyle     = lipgloss.NewStyle().Foreground(colorUser).Bold(true)
+	artifactBadgeStyle = lipgloss.NewStyle().Foreground(colorTeal).Bold(true)
 	// Status dots that replace the LIVE/BUSY text badges: a single ● before the
 	// session ID. Green = live & idle, amber = busy/responding.
 	liveDotStyle     = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
