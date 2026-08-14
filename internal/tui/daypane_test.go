@@ -244,8 +244,14 @@ func TestDayPreviewHintsMatchTheFocusedKeys(t *testing.T) {
 	app.sessSplit.Focus = false
 	app.sessSplit.CacheKey = ""
 	_ = app.updateSessionPreview()
-	if unfocused := app.sessSplit.Preview.View(); !strings.Contains(unfocused, "folds this row") {
+	unfocused := app.sessSplit.Preview.View()
+	if !strings.Contains(unfocused, "folds this row") {
 		t.Errorf("unfocused pane should still describe the list's Enter, got:\n%s", unfocused)
+	}
+	// Same trap, the sort key: unfocused, `s` opens the state menu, so offering
+	// it here would point at a different action.
+	if strings.Contains(unfocused, "s: group by kind") {
+		t.Errorf("unfocused pane advertises the sort key it does not own:\n%s", unfocused)
 	}
 }
 
@@ -278,6 +284,253 @@ func TestDayPreviewKeysIgnoreUnrelatedKeys(t *testing.T) {
 		if _, _, handled := app.handleDayPreviewKeys(&app.sessSplit, key); handled {
 			t.Errorf("day pane swallowed %q", key)
 		}
+	}
+}
+
+// --- Produced ordering ---
+
+// timedRef builds a PR ref that first appeared at ts, which is what the day
+// pane's timeline sorts on.
+func timedRef(label string, ts time.Time) session.SessionRef {
+	return session.SessionRef{
+		Kind: session.RefPR, Label: label,
+		URL:       "https://github.com/sendbird/ccx/pull/" + label,
+		Resolved:  true,
+		FirstSeen: ts, FirstSeenUUID: "u-" + label,
+	}
+}
+
+// TestDayOutputRowsFollowFirstAppearance is the point of the timeline: rows come
+// out in the order the outputs first appeared, NOT in the order the sessions
+// happen to carry them. A session's Refs are sorted first-seen DESCENDING, so
+// without the explicit sort the pane reads backwards inside every session.
+func TestDayOutputRowsFollowFirstAppearance(t *testing.T) {
+	day := dayOf(0)
+	sessions := []session.Session{
+		// One session holding two refs — stored newest-first, as SortRefs leaves them.
+		{ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: day,
+			Refs: []session.SessionRef{
+				timedRef("late", day.Add(4*time.Hour)),
+				timedRef("early", day.Add(time.Hour)),
+			}},
+		// A second session whose output lands between the two above, so kind
+		// grouping alone could not produce the right answer either.
+		{ID: "b1", ShortID: "b1", ProjectPath: "/tmp/repo-b", ProjectName: "repo-b", ModTime: day.Add(-time.Hour),
+			Refs: []session.SessionRef{timedRef("middle", day.Add(2*time.Hour))}},
+	}
+	di := buildDailyItems(sessions, nil)[0].(dayItem)
+	rows := buildDayOutputRows(di)
+
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.out.Title)
+	}
+	want := []string{"early", "middle", "late"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("timeline order = %v, want %v", got, want)
+	}
+}
+
+// TestDayOutputTabsKeepOneChronology guards the tab split: filtering by kind
+// must not re-order anything — every tab is the same timeline, narrowed.
+func TestDayOutputTabsKeepOneChronology(t *testing.T) {
+	day := dayOf(0)
+	sessions := []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ModTime: day,
+		PlanSlugs: []string{"a-plan"},
+		Refs: []session.SessionRef{
+			timedRef("late", day.Add(4*time.Hour)),
+			timedRef("early", day.Add(time.Hour)),
+		},
+	}}
+	di := buildDailyItems(sessions, nil)[0].(dayItem)
+	rows := buildDayOutputRows(di)
+
+	prs := filterDayOutputRows(rows, dayOutputTab{label: "PRs", kind: session.OutputPR})
+	if len(prs) != 2 {
+		t.Fatalf("PR tab = %d rows, want 2", len(prs))
+	}
+	if prs[0].out.Title != "early" || prs[1].out.Title != "late" {
+		t.Errorf("PR tab = %q,%q — want the same chronology the All tab has", prs[0].out.Title, prs[1].out.Title)
+	}
+	if all := filterDayOutputRows(rows, dayOutputTabAll); len(all) != 3 {
+		t.Errorf("All tab = %d rows, want every kind (3)", len(all))
+	}
+}
+
+// TestDayOutputRowsFallBackToSessionTime covers refs extracted before FirstSeen
+// was recorded, and plan slugs, which carry no entry at all. A zero timestamp
+// would sink them to the end of the day and read as "produced last"; the
+// producing session's own time is the honest approximation.
+func TestDayOutputRowsFallBackToSessionTime(t *testing.T) {
+	day := dayOf(0)
+	untimed := session.SessionRef{
+		Kind: session.RefPR, Label: "untimed",
+		URL: "https://github.com/sendbird/ccx/pull/9", Resolved: true,
+	}
+	sessions := []session.Session{
+		{ID: "old", ShortID: "old", ProjectPath: "/tmp/repo-a", ModTime: day.Add(-5 * time.Hour),
+			Refs: []session.SessionRef{untimed}},
+		{ID: "new", ShortID: "new", ProjectPath: "/tmp/repo-b", ModTime: day,
+			Refs: []session.SessionRef{timedRef("timed", day.Add(-time.Hour))}},
+	}
+	di := buildDailyItems(sessions, nil)[0].(dayItem)
+	rows := buildDayOutputRows(di)
+
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	if rows[0].out.Title != "untimed" {
+		t.Errorf("first row = %q, want the untimed ref placed at its session's time (%s), not sunk to the bottom",
+			rows[0].out.Title, day.Add(-5*time.Hour).Format("15:04"))
+	}
+	if rows[0].when.IsZero() {
+		t.Error("untimed row kept a zero time — it has nothing to render in the timeline")
+	}
+}
+
+// TestDayPreviewTabKeySwitchesKind drives the REAL key path: tab is consumed by
+// km.Session.Preview long before the focused-preview handlers run, so the day
+// pane's kind switch has to live in that case. Driving handleDayPreviewKeys
+// directly would pass while the actual keypress does nothing.
+func TestDayPreviewTabKeySwitchesKind(t *testing.T) {
+	day := dayOf(0)
+	// Three PRs and one plan: the PR tab is LONGER than the cursor index used
+	// below, so a missing reset cannot hide behind the render's range clamp — it
+	// would leave the cursor on a real but different PR.
+	sessions := []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: day,
+		PlanSlugs: []string{"a-plan"},
+		Refs: []session.SessionRef{
+			timedRef("pr-1", day.Add(time.Hour)),
+			timedRef("pr-2", day.Add(2*time.Hour)),
+			timedRef("pr-3", day.Add(3*time.Hour)),
+		},
+	}}
+	app := dayPaneApp(t, sessions)
+
+	if app.dayOutputTabKind != "" {
+		t.Fatalf("default tab = %q, want the All timeline", app.dayOutputTabKind)
+	}
+	if len(app.dayOutputRows) != 4 {
+		t.Fatalf("All tab = %d rows, want 4", len(app.dayOutputRows))
+	}
+	if view := app.sessSplit.Preview.View(); !strings.Contains(view, "[All 4]") {
+		t.Errorf("tab bar missing the active All tab with its count:\n%s", view)
+	}
+
+	// A stale cursor across a tab switch would act on a different output than the
+	// highlighted one, so it must reset.
+	app.dayOutputsCursor = 2
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = m.(*App)
+
+	if app.dayOutputTabKind != session.OutputPR {
+		t.Fatalf("tab after one press = %q, want the PR tab", app.dayOutputTabKind)
+	}
+	if app.dayOutputsCursor != 0 {
+		t.Errorf("cursor = %d, want 0 — a stale index acts on a different PR than the one highlighted", app.dayOutputsCursor)
+	}
+	if len(app.dayOutputRows) != 3 {
+		t.Fatalf("PR tab = %d actionable rows, want 3 — the cursor indexes THIS slice", len(app.dayOutputRows))
+	}
+	for _, r := range app.dayOutputRows {
+		if r.out.Kind != session.OutputPR {
+			t.Errorf("PR tab leaked a %s row", r.out.Kind)
+		}
+	}
+	if view := app.sessSplit.Preview.View(); strings.Contains(view, "a-plan") {
+		t.Errorf("PR tab still renders the plan row:\n%s", view)
+	}
+
+	// shift+tab walks back.
+	m, _ = app.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	app = m.(*App)
+	if app.dayOutputTabKind != "" {
+		t.Errorf("tab after shift+tab = %q, want All back", app.dayOutputTabKind)
+	}
+}
+
+// TestDayPreviewTabSurvivesTheCacheKey pins the repaint path. cycleDayOutputTab
+// clears CacheKey and renders, but the very next updateSessionPreview() (any
+// navigation, any refresh tick) recomputes the key — if the tab is not part of
+// it, that call sees a "matching" key, returns early, and the pane silently
+// reverts to whatever was rendered under the old tab.
+func TestDayPreviewTabSurvivesTheCacheKey(t *testing.T) {
+	day := dayOf(0)
+	sessions := []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: day,
+		PlanSlugs: []string{"a-plan"},
+		Refs:      []session.SessionRef{timedRef("pr-1", day.Add(time.Hour))},
+	}}
+	app := dayPaneApp(t, sessions)
+
+	// Render once under All so a stale key would have All's content behind it.
+	if len(app.dayOutputRows) != 2 {
+		t.Fatalf("All tab = %d rows, want 2", len(app.dayOutputRows))
+	}
+	keyAll := app.sessSplit.CacheKey
+
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = m.(*App)
+	if app.dayOutputTabKind != session.OutputPR {
+		t.Fatalf("tab = %q, want the PR tab", app.dayOutputTabKind)
+	}
+
+	// The next preview pass must NOT think it is already up to date.
+	_ = app.updateSessionPreview()
+	if app.sessSplit.CacheKey == keyAll {
+		t.Fatalf("cache key is unchanged across a tab switch (%q) — the pane will not repaint", keyAll)
+	}
+	if len(app.dayOutputRows) != 1 {
+		t.Errorf("after the refresh the pane holds %d rows, want the PR tab's 1 — it reverted to All", len(app.dayOutputRows))
+	}
+	if view := app.sessSplit.Preview.View(); strings.Contains(view, "a-plan") {
+		t.Errorf("pane reverted to the All tab's content:\n%s", view)
+	}
+}
+
+// TestDayPreviewTabDoesNotTouchSessionPreviewMode pins the other half of that
+// interception: on a day row, tab must NOT rotate sessPreviewMode. It used to,
+// silently — the pane ignores the mode, so the rotation was invisible state
+// corruption that surfaced only after moving to a session row.
+func TestDayPreviewTabDoesNotTouchSessionPreviewMode(t *testing.T) {
+	sessions := []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a",
+		ModTime: dayOf(0),
+		Refs:    []session.SessionRef{timedRef("pr-1", dayOf(0))},
+	}}
+	app := dayPaneApp(t, sessions)
+	before := app.sessPreviewMode
+
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.(*App).sessPreviewMode; got != before {
+		t.Errorf("sessPreviewMode = %v, want it untouched at %v — a day row has no preview modes", got, before)
+	}
+}
+
+// TestDayPreviewTabStaysStickyOnEmptyKind covers walking dates under a filter:
+// a day that produced nothing of the selected kind shows an empty state under
+// that same tab. Falling back to All would break the date-to-date comparison
+// the sticky tab exists for.
+func TestDayPreviewTabStaysStickyOnEmptyKind(t *testing.T) {
+	sessions := []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a",
+		ModTime: dayOf(0), PlanSlugs: []string{"a-plan"},
+	}}
+	app := dayPaneApp(t, sessions)
+	app.dayOutputTabKind = session.OutputPR // as if carried over from another day
+	app.sessSplit.CacheKey = ""
+	_ = app.updateSessionPreview()
+
+	if app.dayOutputTabKind != session.OutputPR {
+		t.Errorf("tab = %q, want it kept so dates stay comparable", app.dayOutputTabKind)
+	}
+	if len(app.dayOutputRows) != 0 {
+		t.Errorf("expected no rows under the PR tab, got %d", len(app.dayOutputRows))
+	}
+	if view := app.sessSplit.Preview.View(); !strings.Contains(view, "nothing of this kind") {
+		t.Errorf("empty kind tab is missing its own empty state:\n%s", view)
 	}
 }
 
