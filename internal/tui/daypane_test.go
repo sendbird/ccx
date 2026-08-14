@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -708,5 +709,138 @@ func TestDayProjectPaneSurvivesResize(t *testing.T) {
 
 	if after := got.sessSplit.Preview.View(); !strings.Contains(after, "Produced") {
 		t.Errorf("resize replaced the day-project pane with a session digest:\n%s", after)
+	}
+}
+
+// timedRefOf is timedRef for a kind other than PR — the digit tests need a bar
+// with several kinds on it, which one ref kind cannot produce.
+func timedRefOf(kind session.RefKind, label string, ts time.Time) session.SessionRef {
+	return session.SessionRef{
+		Kind: kind, Label: label,
+		URL:       "https://example.test/" + label,
+		Resolved:  true,
+		FirstSeen: ts, FirstSeenUUID: "u-" + label,
+	}
+}
+
+// dayPaneTabDigitsApp builds the shape the digits were reported broken on: a day
+// whose bar reads All / PRs / Jira / Plans — no Artifacts, because the day
+// produced none. That gap is the whole point: the digits are POSITIONAL over the
+// bar as rendered, so "4" must reach Plans even though Plans is 5th in
+// dayOutputTabOrder.
+func dayPaneTabDigitsApp(t *testing.T) *App {
+	t.Helper()
+	day := dayOf(0)
+	return dayPaneApp(t, []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: day,
+		PlanSlugs: []string{"a-plan"},
+		Refs: []session.SessionRef{
+			timedRef("pr-1", day.Add(time.Hour)),
+			timedRefOf(session.RefJira, "CPLAT-1", day.Add(2*time.Hour)),
+		},
+	}})
+}
+
+// TestDayPreviewDigitsSelectTabsPositionally is the reported bug: on a day row
+// the number keys are bound to preview modes the pane cannot show, so they were
+// swallowed and 1/2/3/4 did nothing at all. They now address the tab bar.
+func TestDayPreviewDigitsSelectTabsPositionally(t *testing.T) {
+	app := dayPaneTabDigitsApp(t)
+
+	tabs := dayOutputTabsFor(app.currentDayOutputRows(), app.dayOutputTabKind)
+	var labels []string
+	for _, tb := range tabs {
+		labels = append(labels, tb.label)
+	}
+	if want := []string{"All", "PRs", "Jira", "Plans"}; !reflect.DeepEqual(labels, want) {
+		t.Fatalf("tab bar = %v, want %v — the digit mapping is defined against this bar", labels, want)
+	}
+
+	cases := []struct {
+		key  rune
+		want session.OutputKind
+		rows int
+	}{
+		{'2', session.OutputPR, 1},
+		{'3', session.OutputJira, 1},
+		{'4', session.OutputPlan, 1},
+		{'1', "", 3},
+	}
+	for _, tc := range cases {
+		m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+		app = m.(*App)
+		if app.dayOutputTabKind != tc.want {
+			t.Errorf("key %q selected kind %q, want %q", tc.key, app.dayOutputTabKind, tc.want)
+		}
+		if len(app.dayOutputRows) != tc.rows {
+			t.Errorf("key %q left %d actionable rows, want %d", tc.key, len(app.dayOutputRows), tc.rows)
+		}
+		if app.dayOutputsCursor != 0 {
+			t.Errorf("key %q left the cursor at %d — a stale index acts on a different output", tc.key, app.dayOutputsCursor)
+		}
+	}
+}
+
+// TestDayPreviewDigitsFollowTheStickyBar pins the one trap in a positional
+// mapping: the active tab stays in the bar even on a day that produced none of
+// that kind (dayOutputTabsFor), which shifts every later tab's position. The
+// digits must follow what is on screen, not a fixed kind table.
+func TestDayPreviewDigitsFollowTheStickyBar(t *testing.T) {
+	day := dayOf(0)
+	app := dayPaneApp(t, []session.Session{{
+		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: day,
+		PlanSlugs: []string{"a-plan"},
+	}})
+	// Carried over from another date: Jira has no rows here but keeps its tab,
+	// so the bar reads All / Jira / Plans and Plans sits at position 3.
+	app.dayOutputTabKind = session.OutputJira
+	app.sessSplit.CacheKey = ""
+	_ = app.updateSessionPreview()
+
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	app = m.(*App)
+	if app.dayOutputTabKind != session.OutputPlan {
+		t.Errorf("key 3 selected %q, want the Plans tab that the sticky bar puts in that slot", app.dayOutputTabKind)
+	}
+}
+
+// TestDayPreviewOutOfRangeDigitIsSwallowed keeps the original guarantee: a digit
+// with no tab behind it must not fall through to the list, where it would scroll
+// the cursor instead.
+func TestDayPreviewOutOfRangeDigitIsSwallowed(t *testing.T) {
+	app := dayPaneTabDigitsApp(t)
+	before := app.sessionList.Index()
+
+	for _, r := range []rune{'0', '9'} {
+		m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		app = m.(*App)
+		if app.dayOutputTabKind != "" {
+			t.Errorf("key %q changed the tab to %q — it addresses no tab", r, app.dayOutputTabKind)
+		}
+		if app.sessionList.Index() != before {
+			t.Errorf("key %q moved the list cursor to %d, want it left at %d", r, app.sessionList.Index(), before)
+		}
+	}
+}
+
+// TestSessionRowDigitsStillSwitchPreviewMode guards the other side of the
+// re-point: only a day-pane row loses the preview-mode digits. On a session row
+// they must still do what they always did.
+func TestSessionRowDigitsStillSwitchPreviewMode(t *testing.T) {
+	app := dayPaneTabDigitsApp(t)
+	for i := 0; i < len(app.sessionList.VisibleItems()); i++ {
+		app.sessionList.Select(i)
+		if !app.selectedOwnsDayPane() {
+			break
+		}
+	}
+	if app.selectedOwnsDayPane() {
+		t.Fatal("could not land on a session row")
+	}
+	app.sessPreviewMode = sessPreviewConversation
+
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	if got := m.(*App).sessPreviewMode; got != sessPreviewRefs {
+		t.Errorf("sessPreviewMode = %v, want the refs preview 5 is bound to", got)
 	}
 }

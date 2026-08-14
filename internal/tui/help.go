@@ -83,7 +83,7 @@ func (a *App) sessHelpLine() string {
 			if a.selectedOwnsDayPane() {
 				// Only the day pane is tabbed by kind — the per-session digest
 				// has one fixed list, so advertising it there would mislead.
-				h += " tab:kind"
+				h += " 1-9/tab:kind"
 			}
 			h += " ←:unfocus p:page"
 		case a.sessPreviewMode == sessPreviewConversation:
