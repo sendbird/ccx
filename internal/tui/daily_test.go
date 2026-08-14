@@ -534,7 +534,10 @@ func TestDayPreviewCollapsesRepeatedOutputs(t *testing.T) {
 	}
 }
 
-func TestDayPreviewOrdersResultsBeforePlans(t *testing.T) {
+// TestDayPreviewTabsCoverEveryKindProduced replaces the old kind-ordering test:
+// kinds are no longer sections in one list, they are tabs, and the bar must
+// offer exactly the kinds the scope produced (All plus those).
+func TestDayPreviewTabsCoverEveryKindProduced(t *testing.T) {
 	sessions := []session.Session{{
 		ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ModTime: dayOf(0),
 		PlanSlugs: []string{"a-plan"},
@@ -546,13 +549,26 @@ func TestDayPreviewOrdersResultsBeforePlans(t *testing.T) {
 	di := buildDailyItems(sessions, nil)[0].(dayItem)
 	rows := buildDayOutputRows(di)
 
-	want := []session.OutputKind{session.OutputPR, session.OutputArtifact, session.OutputPlan}
-	if len(rows) != len(want) {
-		t.Fatalf("expected %d rows, got %d", len(want), len(rows))
+	tabs := dayOutputTabsFor(rows, "")
+	var got []string
+	for _, tb := range tabs {
+		got = append(got, tb.label)
 	}
-	for i, k := range want {
-		if rows[i].out.Kind != k {
-			t.Fatalf("row %d: got %s, want %s", i, rows[i].out.Kind, k)
+	// All first, then the produced kinds in outputKindRank order. Jira is absent
+	// because the day produced none — a tab that can only ever be empty would
+	// make the bar say more than the day does.
+	want := []string{"All", "PRs", "Artifacts", "Plans"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("tabs = %v, want %v", got, want)
+	}
+	for _, tb := range tabs {
+		if tb.kind == "" {
+			continue
+		}
+		for _, r := range filterDayOutputRows(rows, tb) {
+			if r.out.Kind != tb.kind {
+				t.Errorf("tab %q leaked a %s row", tb.label, r.out.Kind)
+			}
 		}
 	}
 }

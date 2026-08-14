@@ -320,6 +320,7 @@ type App struct {
 	dayOutputRows          []dayOutputRow     // outputs shown in the daily view's day pane, in cursor order
 	dayOutputsCursor       int                // cursor within the day pane's output list
 	dayOutputsCacheID      string             // day key the cursor currently tracks
+	dayOutputTabKind       session.OutputKind // day pane's active kind tab ("" = the All timeline)
 	preDailyGroupMode      int                // grouping to restore when the daily view is toggled back off
 	dailyPreviewMode       sessPreview        // preview mode remembered for the daily view
 	browserPreviewMode     sessPreview        // preview mode remembered for every other grouping
@@ -2323,6 +2324,14 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			sp.Focus = false
 			return a, a.updateSessionPreview()
 		}
+		// A row that owns the day pane has no preview modes to rotate — its pane
+		// is that scope's outputs whatever sessPreviewMode says (the same reason
+		// rowSupportsPreviewModes blocks the digits there). Tab switches the
+		// pane's KIND instead, which is the only axis it actually has.
+		if a.selectedOwnsDayPane() {
+			a.cycleDayOutputTab(+1)
+			return a, nil
+		}
 		a.cycleSessionPreviewMode()
 		return a, a.updateSessionPreview()
 	case km.Session.PreviewBack:
@@ -2330,6 +2339,10 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			sp.Show = true
 			sp.Focus = false
 			return a, a.updateSessionPreview()
+		}
+		if a.selectedOwnsDayPane() {
+			a.cycleDayOutputTab(-1)
+			return a, nil
 		}
 		a.cycleSessionPreviewModeReverse()
 		return a, a.updateSessionPreview()
@@ -5391,9 +5404,9 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		// produced — rather than an arbitrary child's detail. Drilling into a
 		// child session is what opens the per-session Outputs digest.
 		// The pane is the day's outputs regardless of preview mode, so the mode
-		// is not part of the key; the cursor and focus are, so moving the
-		// highlight re-renders.
-		cacheKey := fmt.Sprintf("day:%s:%d:%d:%t", di.dayKey, len(di.sessions), a.dayOutputsCursor, a.sessSplit.Focus)
+		// is not part of the key; the cursor, focus and KIND TAB are, so moving
+		// the highlight or switching tabs re-renders.
+		cacheKey := fmt.Sprintf("day:%s:%d:%d:%t:%s", di.dayKey, len(di.sessions), a.dayOutputsCursor, a.sessSplit.Focus, a.dayOutputTabKind)
 		if cacheKey == a.sessSplit.CacheKey {
 			return nil
 		}
@@ -5407,8 +5420,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		// day's work in one project, so its pane is that slice's outputs — not a
 		// representative session's, and not the generic project summary.
 		if pi.dayKey != "" {
-			cacheKey := fmt.Sprintf("dayproj:%s:%s:%d:%d:%t", pi.dayKey, pi.basePath,
-				len(pi.sessions), a.dayOutputsCursor, a.sessSplit.Focus)
+			cacheKey := fmt.Sprintf("dayproj:%s:%s:%d:%d:%t:%s", pi.dayKey, pi.basePath,
+				len(pi.sessions), a.dayOutputsCursor, a.sessSplit.Focus, a.dayOutputTabKind)
 			if cacheKey == a.sessSplit.CacheKey {
 				return nil
 			}

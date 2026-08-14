@@ -79,7 +79,13 @@ func (a *App) sessHelpLine() string {
 		switch {
 		case a.outputsPreviewActionsActive():
 			// Both digests: the row under the cursor is what the keys act on.
-			h = "↑↓:nav ↵:jump o:open " + fmtKey(sk.Actions, "actions") + " ←:unfocus p:page"
+			h = "↑↓:nav ↵:jump o:open " + fmtKey(sk.Actions, "actions")
+			if a.selectedOwnsDayPane() {
+				// Only the day pane is tabbed by kind — the per-session digest
+				// has one fixed list, so advertising it there would mislead.
+				h += " tab:kind"
+			}
+			h += " ←:unfocus p:page"
 		case a.sessPreviewMode == sessPreviewConversation:
 			h = "↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
 		case a.sessPreviewMode == sessPreviewAgents:
