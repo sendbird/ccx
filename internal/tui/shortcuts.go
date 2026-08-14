@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -166,9 +167,10 @@ func migrateShortcuts(sc Shortcuts) {
 // A date row, and a project row nested inside one, always render that scope's
 // outputs pane: updateSessionPreview() routes them to updateDayPreview /
 // updateDayProjectPreview without ever consulting sessPreviewMode. Firing a
-// preview-mode shortcut there changed hidden state and repainted nothing, so
-// the digits looked broken — and shortcutHint() advertised all ten of them
-// anyway. Only sessions have preview modes, so only sessions get the digits.
+// preview-mode shortcut there changes hidden state and repaints nothing, so the
+// digits would look broken. Only sessions have preview modes, so only sessions
+// get the preview-mode digits — on a day row handleShortcutKey re-points them
+// at that pane's own axis, its kind tabs.
 //
 // Plain project rows in the non-daily browser are deliberately excluded from
 // this check: selectedSession() falls back to the project's most-recent session
@@ -219,10 +221,20 @@ func (a *App) handleShortcutKey(key string) (tea.Model, tea.Cmd, bool) {
 		return nil, nil, false
 	}
 
-	// Swallow rather than fall through: the digit is bound to a preview mode
-	// the current row cannot show, and letting it reach the list would scroll
-	// the cursor instead — a second surprise on top of the first.
+	// The digit is bound to a preview mode the current row cannot show. On a
+	// row that owns the day pane the digits get re-pointed at that pane's own
+	// tab bar — the axis it actually has — so 1 lands on All, 2 on the next tab,
+	// positionally as the bar reads.
+	//
+	// Anything that does not address a tab is swallowed rather than falling
+	// through: letting the digit reach the list would scroll the cursor instead,
+	// a second surprise on top of the first.
 	if isPreviewModeCmd(cmdName) && !a.rowSupportsPreviewModes() {
+		if a.sessSplit.Show {
+			if n, err := strconv.Atoi(key); err == nil && a.selectDayOutputTab(n) {
+				return a, nil, true
+			}
+		}
 		return a, nil, true
 	}
 
@@ -316,6 +328,13 @@ func (a *App) shortcutHint() string {
 
 	// Build hint in key order (0-9); 0 is rendered first as the quick "live" key.
 	previewOK := a.rowSupportsPreviewModes()
+	// On a day-pane row the preview-mode digits are re-pointed at that pane's
+	// kind tabs, so the hint has to name the tabs — listing the preview modes
+	// would promise modes the row cannot render, and skipping them all would
+	// leave the digits looking unbound when they do work.
+	if !previewOK && a.sessSplit.Show {
+		return a.dayOutputTabHint()
+	}
 	var parts []string
 	for _, i := range "0123456789" {
 		key := string(i)

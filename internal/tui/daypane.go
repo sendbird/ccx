@@ -360,9 +360,9 @@ func (a *App) renderOutputsPane(title, subtitle, summary string, day time.Time, 
 	// belongs to the list (it folds the row); focused, the keys are this pane's,
 	// and saying otherwise sent people to the wrong action.
 	if a.sessSplit.Focus {
-		sb.WriteString(dimStyle.Render("↵ jumps to where it first appeared  •  o opens it  •  y copies  •  x lists every action for the row  •  tab switches kind  •  ↑↓ moves between outputs"))
+		sb.WriteString(dimStyle.Render("↵ jumps to where it first appeared  •  o opens it  •  y copies  •  x lists every action for the row  •  1-9/tab switch kind  •  ↑↓ moves between outputs"))
 	} else {
-		sb.WriteString(dimStyle.Render("↵/o folds this row  •  tab switches kind  •  → focuses this pane"))
+		sb.WriteString(dimStyle.Render("↵/o folds this row  •  1-9/tab switch kind  •  → focuses this pane"))
 	}
 	return sb.String()
 }
@@ -501,11 +501,53 @@ func (a *App) cycleDayOutputTab(delta int) {
 		return
 	}
 	idx := dayOutputTabIndex(tabs, a.dayOutputTabKind)
-	a.dayOutputTabKind = tabs[(idx+delta+len(tabs))%len(tabs)].kind
+	a.setDayOutputTabKind(tabs[(idx+delta+len(tabs))%len(tabs)].kind)
+}
+
+// selectDayOutputTab jumps straight to the n-th tab in the bar, 1-based and
+// POSITIONAL: "1" is whatever sits leftmost (always All), "2" the next one, and
+// so on, exactly as the bar reads on screen. The tabs are built per scope
+// (dayOutputTabsFor drops kinds the day produced none of), so a fixed
+// digit→kind table would point the digits at labels that are not there.
+//
+// Reports whether n addressed a tab; out of range is the caller's to swallow.
+func (a *App) selectDayOutputTab(n int) bool {
+	tabs := dayOutputTabsFor(a.currentDayOutputRows(), a.dayOutputTabKind)
+	if n < 1 || n > len(tabs) {
+		return false
+	}
+	a.setDayOutputTabKind(tabs[n-1].kind)
+	return true
+}
+
+// setDayOutputTabKind applies a tab switch: repaint the pane under the new
+// filter and put the cursor back on its first row. Re-selecting the active tab
+// keeps the cursor where it is — nothing about the list changed, so moving it
+// would be a switch the user did not ask for.
+func (a *App) setDayOutputTabKind(kind session.OutputKind) {
+	if kind == a.dayOutputTabKind {
+		return
+	}
+	a.dayOutputTabKind = kind
 	a.dayOutputsCursor = 0
 	a.sessSplit.CacheKey = ""
 	a.renderOwningDayScope()
 	a.sessSplit.Preview.GotoTop()
+}
+
+// dayOutputTabHint lists the digit → tab bindings for the help overlay, in the
+// bar's own order, so the hint matches what the pane is showing rather than the
+// preview modes the digits carry on a session row.
+func (a *App) dayOutputTabHint() string {
+	tabs := dayOutputTabsFor(a.currentDayOutputRows(), a.dayOutputTabKind)
+	parts := make([]string, 0, len(tabs))
+	for i, t := range tabs {
+		if i >= 9 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%d:%s", i+1, strings.ToLower(t.label)))
+	}
+	return strings.Join(parts, " ")
 }
 
 // currentDayOutputRows rebuilds the UNFILTERED rows for whichever scope owns the
