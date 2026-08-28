@@ -189,11 +189,27 @@ Search inside conversation content across all sessions (`Ctrl+S` or `:search`).
 - `tool:ToolName` — Only search specific tool calls
 
 **Features:**
-- Searches text, tool inputs/outputs, thinking blocks
-- Results stream in real-time as they're found
+- Searches text, tool inputs, thinking blocks, and system tags
+- Results are ordered newest session first
 - Matched terms are highlighted in snippets
 - Press `Enter` to jump directly to the matching message
 - Press `/` to edit the query
+
+**Index:**
+
+Search is backed by a SQLite FTS5 index at `~/.claude/.ccx-index.db` (~400 MB for
+a 2.5 GB transcript corpus), which makes a typical query take tens of
+milliseconds instead of seconds.
+
+- The index refreshes when you search: only transcripts whose size or mtime
+  changed are re-read, so results are always current. The first build takes
+  about a minute; after that a refresh is milliseconds.
+- **Tool output (`tool_result`) is not indexed.** It is half the corpus and
+  mostly file dumps, so including it would roughly double the index for little
+  search value. The modal says `tool output not indexed` when this applies.
+- Queries with a term shorter than 3 characters fall back to a full scan
+  automatically — a trigram index cannot match them.
+- The index is a cache: deleting it is safe, and a corrupt one is rebuilt.
 
 **Example queries:**
 ```
