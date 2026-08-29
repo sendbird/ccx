@@ -44,6 +44,9 @@ func (a *App) enterSearchMode() {
 	a.searchQuery = ""
 	a.searchResults = nil
 	a.searchLoading = false
+	// Drop any highlight carried over from a previous jump; the next result
+	// picked from this session sets its own.
+	a.convHighlightTerms = nil
 
 	ti := textinput.New()
 	ti.Placeholder = "Search all sessions..."
@@ -174,11 +177,23 @@ func (a *App) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) openSearchResult(result session.SearchResult) {
+	// The query's text terms, kept so the match the user picked stays visible in
+	// the conversation they land on.
+	parsed := session.ParseSearchQuery(a.searchQuery)
+	terms := append(append([]string(nil), parsed.Terms...), parsed.Phrases...)
+
 	for i, sess := range a.sessions {
 		if sess.ID == result.Session.ID {
 			a.sessionList.Select(i)
 			a.currentSess = sess
 			a.openConversation(sess)
+
+			// Set after openConversation, which clears the highlight so that the
+			// other entry points cannot inherit a stale query.
+			a.convHighlightTerms = terms
+			if a.conv.split.Folds != nil {
+				a.conv.split.Folds.ExtraHighlight = terms
+			}
 
 			// Jump to the message containing the search result. Selection indices
 			// are always in the list's visible coordinate space.

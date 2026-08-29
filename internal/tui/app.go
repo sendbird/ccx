@@ -576,6 +576,12 @@ type App struct {
 	searchCancel     context.CancelFunc
 	searchMode       session.SearchMode
 
+	// convHighlightTerms are the plain-text terms of the query that led here via
+	// a cross-session search result. They keep the match visible in the
+	// conversation the jump lands in, and are cleared when the conversation is
+	// left or another search runs.
+	convHighlightTerms []string
+
 	// contentIndex is the FTS index backing cross-session search. It is opened
 	// lazily on the first search and owned by the main loop; search commands
 	// only read it.

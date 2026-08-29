@@ -253,6 +253,12 @@ func renderConversationPreview(msgs []mergedMsg, width, cursor int, expanded map
 			text := entryFullText(e)
 			if text != "" {
 				wrapped := wrapText(text, textW)
+				// The one-line preview above is highlighted via highlightSnippet,
+				// but that only covers the summary. Expanding is exactly when the
+				// user is looking for the term in the body, so paint it here too.
+				if filterTerm != "" {
+					wrapped = highlightSearchTerms(wrapped, highlightableTerms(filterTerm), -1)
+				}
 				for _, line := range strings.Split(wrapped, "\n") {
 					row.WriteString("    " + line + "\n")
 				}
