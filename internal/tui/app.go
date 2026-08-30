@@ -317,6 +317,9 @@ type App struct {
 	sessOutputsCollected   string             // dataKey of the collection in sessOutputs ("" = not collected yet)
 	sessOutputsCursor      int                // cursor within the Outputs digest list
 	outputsInFlight        map[string]bool    // session IDs with a collection currently running
+	convPreviewInFlight    map[string]bool    // session IDs with a preview transcript read currently running
+	statsPreviewInFlight   map[string]bool    // session IDs with a stats scan currently running
+	convLiveInFlight       map[string]bool    // live session IDs with a tick-driven transcript re-read running
 	dayOutputRows          []dayOutputRow     // outputs shown in the daily view's day pane, in cursor order
 	dayOutputsCursor       int                // cursor within the day pane's output list
 	dayOutputsCacheID      string             // day key the cursor currently tracks
@@ -329,6 +332,7 @@ type App struct {
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
 	sessConvCursor      int             // current message cursor
+	sessConvCursorToEnd bool            // place the cursor at the last entry once the pending async load lands
 	sessConvCacheID     string          // session ID for which convEntries are loaded
 	sessConvExpanded    map[int]bool    // which messages are expanded
 	sessConvSearching   bool            // typing in preview search
@@ -1180,6 +1184,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil // stale: a newer navigation happened
 		}
 		return a, a.runDebouncedPreview()
+
+	case convPreviewLoadedMsg:
+		a.applyConvPreviewLoad(msg)
+		return a, nil
+
+	case statsPreviewLoadedMsg:
+		a.applyStatsPreviewLoad(msg)
+		return a, nil
+
+	case convLiveReloadedMsg:
+		a.applyConvLiveReload(msg)
+		return a, nil
 
 	case tickMsg:
 		cmd := a.handleTick()
@@ -2903,7 +2919,16 @@ func (a *App) rebuildTasksPreviewContent() {
 
 // sessPreviewBoundaryCross moves to the next/prev session when the preview
 // cursor hits the boundary, and reloads the preview for the new session.
-func (a *App) sessPreviewBoundaryCross(dir string) {
+//
+// Returns the load command: the conversation read is async, so a caller must
+// dispatch it. "up" cannot position the cursor against the new session's
+// entries here — they arrive with the load — so it defers via
+// sessConvCursorToEnd, which applyConvPreviewLoad honors.
+//
+// Currently unreferenced; kept because the preview-boundary behavior it
+// implements is still reachable design-wise and removing it is out of scope
+// for the freeze fix.
+func (a *App) sessPreviewBoundaryCross(dir string) tea.Cmd {
 	idx := a.sessionList.Index()
 	n := len(a.sessionList.Items())
 	switch dir {
@@ -2911,22 +2936,21 @@ func (a *App) sessPreviewBoundaryCross(dir string) {
 		if idx < n-1 {
 			a.sessionList.Select(idx + 1)
 			a.sessSplit.CacheKey = ""
-			a.updateSessionPreview()
+			a.sessConvCursorToEnd = false
 			// Position cursor at first item in new preview
 			a.sessConvCursor = 0
+			return a.updateSessionPreview()
 		}
 	case "up":
 		if idx > 0 {
 			a.sessionList.Select(idx - 1)
 			a.sessSplit.CacheKey = ""
-			a.updateSessionPreview()
-			// Position cursor at last item in new preview
-			visible := a.convVisibleEntries()
-			if len(visible) > 0 {
-				a.sessConvCursor = len(visible) - 1
-			}
+			// Position cursor at last item once the new preview has loaded.
+			a.sessConvCursorToEnd = true
+			return a.updateSessionPreview()
 		}
 	}
+	return nil
 }
 
 // handleConvPreviewKeys handles keys for the conversation preview navigation.
@@ -4931,10 +4955,13 @@ func (a *App) refreshRespondingState() {
 
 func (a *App) handleTick() tea.Cmd {
 	// Always refresh conversation preview for live sessions (regardless of liveUpdate)
+	var convCmd tea.Cmd
 	if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewConversation {
 		if sess, ok := a.selectedSession(); ok && sess.IsLive {
-			a.sessSplit.CacheKey = ""    // invalidate to force re-fetch
-			_ = a.updateSessionPreview() // conversation mode returns nil cmd
+			a.sessSplit.CacheKey = "" // invalidate to force re-fetch
+			// The read is async now, so its command has to be propagated —
+			// discarding it would silently stop live previews from updating.
+			convCmd = a.updateSessionPreview()
 		}
 	}
 	// Always re-check IsResponding for live sessions (cheap os.Stat check).
@@ -4956,9 +4983,9 @@ func (a *App) handleTick() tea.Cmd {
 	refsCmd := a.resolveVisibleRefsCmd()
 
 	if !a.liveUpdate {
-		return tea.Batch(pollCmd, refsCmd)
+		return tea.Batch(convCmd, pollCmd, refsCmd)
 	}
-	return tea.Batch(pollCmd, refsCmd, a.doRefresh())
+	return tea.Batch(convCmd, pollCmd, refsCmd, a.doRefresh())
 }
 
 // invalidateOpenPreviewCaches clears the cache keys of whichever session
@@ -5107,8 +5134,9 @@ func (a *App) doRefresh() tea.Cmd {
 		// Detect notable lifecycle transitions across the fleet and queue them.
 		a.collectNotifications()
 
-		// Refresh preview for live sessions (auto-scroll to bottom)
-		a.refreshSessionPreviewLive()
+		// Refresh preview for live sessions (auto-scroll to bottom). The reads are
+		// async now, so the command has to reach the runtime.
+		livePreviewCmd := a.refreshSessionPreviewLive()
 
 		// Prune stale selectedSet entries
 		if a.hasMultiSelection() {
@@ -5128,7 +5156,7 @@ func (a *App) doRefresh() tea.Cmd {
 		// every HasRefs session's refs via `gh pr view` (~1.6s each) — hundreds of
 		// subprocesses that spiked CPU and froze the UI for minutes on large
 		// session dirs, while resolving statuses the user never looked at.
-		return nil
+		return livePreviewCmd
 	}
 
 	return nil
@@ -5238,6 +5266,17 @@ func previewDispatchesCmd(mode sessPreview) bool {
 	return mode == sessPreviewLive || mode == sessPreviewRefs || mode == sessPreviewOutputs
 }
 
+// previewDispatchesFromView reports whether View() must skip driving this
+// preview mode because its update returns a command View cannot dispatch.
+//
+// This is a superset of previewDispatchesCmd: conversation also loads
+// asynchronously now, but unlike refs/outputs a project row must still fall
+// through to the project-summary preview rather than being re-routed to a
+// representative session — so the two predicates are deliberately not merged.
+func previewDispatchesFromView(mode sessPreview) bool {
+	return previewDispatchesCmd(mode) || mode == sessPreviewConversation
+}
+
 func (a *App) renderSessionSplit() string {
 	if a.sessionList.Width() == 0 {
 		return ""
@@ -5263,7 +5302,7 @@ func (a *App) renderSessionSplit() string {
 	// dispatched from Update paths (setSessPreviewMode, the navigation debounce,
 	// resizeAll). View only re-renders their already-populated content (the
 	// resize block below).
-	if !previewDispatchesCmd(a.sessPreviewMode) {
+	if !previewDispatchesFromView(a.sessPreviewMode) {
 		_ = a.updateSessionPreview()
 	}
 
@@ -5297,6 +5336,12 @@ func (a *App) renderSessionSplit() string {
 			} else {
 				a.sessSplit.CacheKey = "" // let the next Update redraw the day pane
 			}
+		} else if a.sessPreviewMode == sessPreviewConversation && len(a.sessConvEntries) > 0 {
+			// Resize must not re-dispatch the async transcript read: View cannot
+			// dispatch the returned command, so the pane would stick on
+			// "(loading…)". The entries are already in memory — just re-wrap them
+			// at the new width.
+			a.refreshConvPreview()
 		} else if a.sessPreviewMode != sessPreviewLive && !isRemoteSetup {
 			a.sessSplit.CacheKey = ""
 			_ = a.updateSessionPreview()
@@ -5486,7 +5531,7 @@ func (a *App) updateSessionPreview() tea.Cmd {
 
 	switch previewMode {
 	case sessPreviewStats:
-		a.updateSessionStatsPreview(sess)
+		return a.updateSessionStatsPreview(sess)
 	case sessPreviewMemory:
 		a.updateSessionMemoryPreview(sess)
 	case sessPreviewScratchpad:
@@ -5525,7 +5570,7 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		}
 		a.sessSplit.Preview.SetContent(content)
 	default:
-		a.updateSessionConvPreview(sess)
+		return a.updateSessionConvPreview(sess)
 	}
 	return nil
 }
@@ -5565,10 +5610,63 @@ func (a *App) prependConvHeaders(sess session.Session, content string, previewW 
 	return content
 }
 
-func (a *App) updateSessionConvPreview(sess session.Session) {
-	const previewHead, previewTail = 50, 50
-	head, tail, total, err := session.LoadMessagesSummary(sess.FilePath, previewHead, previewTail)
-	if err != nil || total == 0 {
+// convPreviewLoadedMsg carries the result of an off-loop transcript read for
+// the session-browser conversation preview.
+type convPreviewLoadedMsg struct {
+	sessID string
+	head   []session.Entry
+	tail   []session.Entry
+	total  int
+	err    error
+}
+
+// updateSessionConvPreview dispatches the transcript read for the conversation
+// preview off the UI loop.
+//
+// The read used to run inline here. LoadMessagesSummary keeps a ring buffer for
+// the tail, so it scans the whole file even though only the first 50 messages
+// are needed — 465ms on a 180 MB transcript, measured. Since it ran inside
+// Update, the whole event loop stalled for that long and navigation froze
+// whenever the cursor landed on a large session. The 30ms navigation debounce
+// does not help: it only delays the stall until the cursor stops.
+func (a *App) updateSessionConvPreview(sess session.Session) tea.Cmd {
+	if a.sessConvCacheID != sess.ID {
+		a.sessConvEntries = nil
+		a.sessConvFiltered = nil
+		a.sessConvFilterTerm = ""
+	}
+	if a.convPreviewInFlight[sess.ID] {
+		return nil // already loading; its completion will render
+	}
+
+	a.sessSplit.Preview.SetContent(dimStyle.Render("(loading…)"))
+
+	if a.convPreviewInFlight == nil {
+		a.convPreviewInFlight = make(map[string]bool)
+	}
+	a.convPreviewInFlight[sess.ID] = true
+
+	sessID, path := sess.ID, sess.FilePath
+	return func() tea.Msg {
+		const previewHead, previewTail = 50, 50
+		head, tail, total, err := session.LoadMessagesSummary(path, previewHead, previewTail)
+		return convPreviewLoadedMsg{sessID: sessID, head: head, tail: tail, total: total, err: err}
+	}
+}
+
+// applyConvPreviewLoad renders a completed transcript read. Merging and
+// rendering are cheap relative to the read, so they stay on the UI loop.
+func (a *App) applyConvPreviewLoad(msg convPreviewLoadedMsg) {
+	delete(a.convPreviewInFlight, msg.sessID)
+
+	// The cursor may have moved on while the read was in flight; a stale result
+	// must not overwrite the pane the user is looking at now.
+	sess, ok := a.selectedSession()
+	if !ok || sess.ID != msg.sessID {
+		return
+	}
+
+	if msg.err != nil || msg.total == 0 {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(no messages)"))
 		a.sessConvEntries = nil
 		a.sessConvFiltered = nil
@@ -5577,14 +5675,14 @@ func (a *App) updateSessionConvPreview(sess session.Session) {
 	}
 
 	// Merge head and tail separately, join with gap indicator
-	headMerged := mergeConversationTurns(head)
+	headMerged := mergeConversationTurns(msg.head)
 	var merged []mergedMsg
-	if len(tail) == 0 {
+	if len(msg.tail) == 0 {
 		merged = headMerged
 	} else {
-		tailMerged := mergeConversationTurns(tail)
+		tailMerged := mergeConversationTurns(msg.tail)
 		// Adjust tail startIdx/endIdx to reflect position in full file
-		tailOffset := total - len(tail)
+		tailOffset := msg.total - len(msg.tail)
 		for i := range tailMerged {
 			tailMerged[i].startIdx += tailOffset
 			tailMerged[i].endIdx += tailOffset
@@ -5610,9 +5708,15 @@ func (a *App) updateSessionConvPreview(sess session.Session) {
 	a.sessConvSearching = false
 
 	visible := a.sessConvEntries
-	if sess.IsLive {
+	switch {
+	case a.sessConvCursorToEnd:
+		// Deferred from sessPreviewBoundaryCross("up"): the user crossed the top
+		// boundary, so land on the last entry of the session they moved into.
 		a.sessConvCursor = len(visible) - 1
-	} else {
+		a.sessConvCursorToEnd = false
+	case sess.IsLive:
+		a.sessConvCursor = len(visible) - 1
+	default:
 		a.sessConvCursor = 0
 	}
 
@@ -6007,21 +6111,63 @@ func (a *App) jumpToSessionEntry(sessID, uuid string) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-func (a *App) updateSessionStatsPreview(sess session.Session) {
-	// Use cached stats if available for this session
-	if a.sessStatsCacheKey != sess.ID || a.sessStatsCache == nil {
-		stats, err := session.ScanSessionStats(sess.FilePath)
-		if err != nil {
-			a.sessSplit.Preview.SetContent(dimStyle.Render("(stats error)"))
-			return
-		}
-		a.sessStatsCache = &stats
-		a.sessStatsCacheKey = sess.ID
+// statsPreviewLoadedMsg carries an off-loop stats scan result.
+type statsPreviewLoadedMsg struct {
+	sessID string
+	stats  session.SessionStats
+	err    error
+}
+
+// updateSessionStatsPreview dispatches the stats scan off the UI loop for the
+// same reason as the conversation preview: ScanSessionStats walks the whole
+// transcript (790ms on a 180 MB session, measured), and running it inside
+// Update froze navigation.
+func (a *App) updateSessionStatsPreview(sess session.Session) tea.Cmd {
+	// Cached stats render immediately — no dispatch, no flicker.
+	if a.sessStatsCacheKey == sess.ID && a.sessStatsCache != nil {
+		a.renderSessionStatsPreview(*a.sessStatsCache)
+		return nil
+	}
+	if a.statsPreviewInFlight[sess.ID] {
+		return nil
 	}
 
+	a.sessSplit.Preview.SetContent(dimStyle.Render("(loading…)"))
+
+	if a.statsPreviewInFlight == nil {
+		a.statsPreviewInFlight = make(map[string]bool)
+	}
+	a.statsPreviewInFlight[sess.ID] = true
+
+	sessID, path := sess.ID, sess.FilePath
+	return func() tea.Msg {
+		stats, err := session.ScanSessionStats(path)
+		return statsPreviewLoadedMsg{sessID: sessID, stats: stats, err: err}
+	}
+}
+
+// applyStatsPreviewLoad renders a completed stats scan, ignoring results whose
+// session is no longer selected.
+func (a *App) applyStatsPreviewLoad(msg statsPreviewLoadedMsg) {
+	delete(a.statsPreviewInFlight, msg.sessID)
+
+	sess, ok := a.selectedSession()
+	if !ok || sess.ID != msg.sessID {
+		return
+	}
+	if msg.err != nil {
+		a.sessSplit.Preview.SetContent(dimStyle.Render("(stats error)"))
+		return
+	}
+	a.sessStatsCache = &msg.stats
+	a.sessStatsCacheKey = msg.sessID
+	a.renderSessionStatsPreview(msg.stats)
+}
+
+func (a *App) renderSessionStatsPreview(stats session.SessionStats) {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
-	content := renderSessionStats(*a.sessStatsCache, previewW)
+	content := renderSessionStats(stats, previewW)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(content)
 }
@@ -7577,14 +7723,16 @@ func (a *App) sessPreviewAtBottom() bool {
 
 // refreshSessionPreviewLive reloads and re-renders the session preview for a live session.
 // Auto-scrolls to bottom unless the user has pinned (scrolled up).
-func (a *App) refreshSessionPreviewLive() {
+func (a *App) refreshSessionPreviewLive() tea.Cmd {
 	if !a.sessSplit.Show {
-		return
+		return nil
 	}
 	sess, ok := a.selectedSession()
 	if !ok || !sess.IsLive {
-		return
+		return nil
 	}
+	// Collects async preview work (stats) so the caller can dispatch it.
+	var previewCmd tea.Cmd
 
 	if a.sessPreviewMode != sessPreviewConversation {
 		// Re-render non-message preview for live session. Only modes whose
@@ -7597,7 +7745,7 @@ func (a *App) refreshSessionPreviewLive() {
 			a.sessSplit.CacheKey = ""
 			a.sessStatsCache = nil
 			a.sessStatsCacheKey = ""
-			a.updateSessionStatsPreview(sess)
+			previewCmd = a.updateSessionStatsPreview(sess)
 		case sessPreviewTasksPlan:
 			a.sessSplit.CacheKey = ""
 			a.sessTasksCacheKey = ""
@@ -7617,15 +7765,53 @@ func (a *App) refreshSessionPreviewLive() {
 		}
 		// sessPreviewLive, sessPreviewRemote, sessPreviewAgents, sessPreviewShells,
 		// sessPreviewContexts: leave as-is.
-		return
+		return previewCmd
 	}
 
-	// Reload entries (head+tail) and refresh conversation preview for live session
-	const liveHead, liveTail = 50, 50
-	head, tail, total, err := session.LoadMessagesSummary(sess.FilePath, liveHead, liveTail)
-	if err != nil || total == 0 {
+	// Reload entries (head+tail) and refresh the conversation preview off the UI
+	// loop. This runs on every tick while a live session is selected, so an
+	// inline read here stalls the loop exactly like the navigation path did.
+	if a.convLiveInFlight[sess.ID] {
+		return previewCmd
+	}
+	if a.convLiveInFlight == nil {
+		a.convLiveInFlight = make(map[string]bool)
+	}
+	a.convLiveInFlight[sess.ID] = true
+	liveID, livePath := sess.ID, sess.FilePath
+	return tea.Batch(previewCmd, func() tea.Msg {
+		const liveHead, liveTail = 50, 50
+		head, tail, total, err := session.LoadMessagesSummary(livePath, liveHead, liveTail)
+		return convLiveReloadedMsg{sessID: liveID, head: head, tail: tail, total: total, err: err}
+	})
+}
+
+// convLiveReloadedMsg carries an off-loop re-read of a live session's transcript.
+type convLiveReloadedMsg struct {
+	sessID string
+	head   []session.Entry
+	tail   []session.Entry
+	total  int
+	err    error
+}
+
+// applyConvLiveReload merges a live session's re-read into the open preview,
+// preserving the incremental behavior the tick path relies on (keep the cursor
+// pinned unless new messages arrived, expand only the new entries).
+func (a *App) applyConvLiveReload(msg convLiveReloadedMsg) {
+	delete(a.convLiveInFlight, msg.sessID)
+
+	sess, ok := a.selectedSession()
+	if !ok || sess.ID != msg.sessID || !sess.IsLive {
 		return
 	}
+	if a.sessPreviewMode != sessPreviewConversation || !a.sessSplit.Show {
+		return
+	}
+	if msg.err != nil || msg.total == 0 {
+		return
+	}
+	head, tail, total := msg.head, msg.tail, msg.total
 	headMerged := mergeConversationTurns(head)
 	var newConv []mergedMsg
 	if len(tail) == 0 {
