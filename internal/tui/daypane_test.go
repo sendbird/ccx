@@ -347,14 +347,14 @@ func TestDayOutputTabsKeepOneChronology(t *testing.T) {
 	di := buildDailyItems(sessions, nil)[0].(dayItem)
 	rows := buildDayOutputRows(di)
 
-	prs := filterDayOutputRows(rows, dayOutputTab{label: "PRs", kind: session.OutputPR})
+	prs := filterDayOutputRows(rows, dayOutputTab{label: "PRs", kind: session.OutputPR}, "")
 	if len(prs) != 2 {
 		t.Fatalf("PR tab = %d rows, want 2", len(prs))
 	}
 	if prs[0].out.Title != "early" || prs[1].out.Title != "late" {
 		t.Errorf("PR tab = %q,%q — want the same chronology the All tab has", prs[0].out.Title, prs[1].out.Title)
 	}
-	if all := filterDayOutputRows(rows, dayOutputTabAll); len(all) != 3 {
+	if all := filterDayOutputRows(rows, dayOutputTabAll, ""); len(all) != 3 {
 		t.Errorf("All tab = %d rows, want every kind (3)", len(all))
 	}
 }

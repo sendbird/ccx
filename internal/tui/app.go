@@ -324,10 +324,17 @@ type App struct {
 	dayOutputsCursor       int                // cursor within the day pane's output list
 	dayOutputsCacheID      string             // day key the cursor currently tracks
 	dayOutputTabKind       session.OutputKind // day pane's active kind tab ("" = the All timeline)
-	preDailyGroupMode      int                // grouping to restore when the daily view is toggled back off
-	dailyPreviewMode       sessPreview        // preview mode remembered for the daily view
-	browserPreviewMode     sessPreview        // preview mode remembered for every other grouping
-	openURL                func(string) error // opens a URL in the browser; overridable in tests (defaults to `open`)
+	// The day pane searches independently of the session list: the two answer
+	// different questions ("which sessions" vs "which outputs"), and a day with
+	// hundreds of outputs needs narrowing even when the session list does not.
+	dayOutputSearching   bool               // typing in the day pane's search input
+	dayOutputSearchTI    textinput.Model    // day pane search input
+	dayOutputQuery       string             // applied day pane query ("" = no filter)
+	dayOutputQueryBefore string             // query as of the input opening, restored on Esc
+	preDailyGroupMode    int                // grouping to restore when the daily view is toggled back off
+	dailyPreviewMode     sessPreview        // preview mode remembered for the daily view
+	browserPreviewMode   sessPreview        // preview mode remembered for every other grouping
+	openURL              func(string) error // opens a URL in the browser; overridable in tests (defaults to `open`)
 
 	// Conversation preview state
 	sessConvEntries     []mergedMsg     // merged conversation messages
@@ -1558,6 +1565,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// The day pane's own query unwinds the same way: while that pane is
+		// focused, Esc drops its filter before it means anything else, so the
+		// narrowing you can see is the thing Esc undoes.
+		if msg.String() == "esc" && a.state == viewSessions && a.sessSplit.Focus &&
+			a.selectedOwnsDayPane() && a.dayOutputQuery != "" {
+			a.clearDayOutputSearch()
+			return a, nil
+		}
+
 		// Esc clears an applied search filter before doing normal navigation.
 		// In the session list we only clear via esc while the "/" search input
 		// is active (isFiltering, handled above) — an applied filter (e.g. the
@@ -2037,6 +2053,11 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// While conv search is active, route all keys to it
 	if a.sessConvSearching {
 		return a.handleConvSearch(msg)
+	}
+
+	// Same for the day pane's own output search.
+	if a.dayOutputSearching {
+		return a.handleDayOutputSearch(msg)
 	}
 
 	// Move mode: text input for new project path
@@ -5470,7 +5491,7 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		// The pane is the day's outputs regardless of preview mode, so the mode
 		// is not part of the key; the cursor, focus and KIND TAB are, so moving
 		// the highlight or switching tabs re-renders.
-		cacheKey := fmt.Sprintf("day:%s:%d:%d:%t:%s", di.dayKey, len(di.sessions), a.dayOutputsCursor, a.sessSplit.Focus, a.dayOutputTabKind)
+		cacheKey := fmt.Sprintf("day:%s:%d:%d:%t:%s:%s", di.dayKey, len(di.sessions), a.dayOutputsCursor, a.sessSplit.Focus, a.dayOutputTabKind, a.dayOutputQuery)
 		if cacheKey == a.sessSplit.CacheKey {
 			return nil
 		}
@@ -5484,8 +5505,8 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		// day's work in one project, so its pane is that slice's outputs — not a
 		// representative session's, and not the generic project summary.
 		if pi.dayKey != "" {
-			cacheKey := fmt.Sprintf("dayproj:%s:%s:%d:%d:%t:%s", pi.dayKey, pi.basePath,
-				len(pi.sessions), a.dayOutputsCursor, a.sessSplit.Focus, a.dayOutputTabKind)
+			cacheKey := fmt.Sprintf("dayproj:%s:%s:%d:%d:%t:%s:%s", pi.dayKey, pi.basePath,
+				len(pi.sessions), a.dayOutputsCursor, a.sessSplit.Focus, a.dayOutputTabKind, a.dayOutputQuery)
 			if cacheKey == a.sessSplit.CacheKey {
 				return nil
 			}

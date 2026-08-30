@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -89,19 +90,49 @@ func dayOutputTabsFor(rows []dayOutputRow, active session.OutputKind) []dayOutpu
 	return tabs
 }
 
-// filterDayOutputRows narrows rows to one tab's kind. All returns rows
-// unchanged. The result is what the pane both renders AND indexes with
+// dayOutputRowMatches reports whether a row matches every term in the query.
+// Terms are AND-ed and matched case-insensitively against everything visible on
+// the row plus its target, so "cplat argocd" narrows the way a reader expects
+// without needing to know which field holds which part.
+func dayOutputRowMatches(r dayOutputRow, terms []string) bool {
+	if len(terms) == 0 {
+		return true
+	}
+	hay := strings.ToLower(strings.Join([]string{
+		r.out.Title, r.out.Detail, r.out.Path, r.out.URL,
+		string(r.out.Kind), r.project, r.shortID,
+	}, "\x00"))
+	for _, t := range terms {
+		if !strings.Contains(hay, t) {
+			return false
+		}
+	}
+	return true
+}
+
+// filterDayOutputRows narrows rows to one tab's kind and the pane's own search
+// query. The result is what the pane both renders AND indexes with
 // dayOutputsCursor — filtering at render time only would leave Enter/o/y/x
 // acting on a different output than the highlighted one.
-func filterDayOutputRows(rows []dayOutputRow, tab dayOutputTab) []dayOutputRow {
-	if tab.kind == "" {
+//
+// The query is the day pane's own, independent of the session list's filter:
+// the two panes answer different questions ("which sessions" vs "which
+// outputs"), and a day with 682 outputs needs narrowing even when the session
+// list does not.
+func filterDayOutputRows(rows []dayOutputRow, tab dayOutputTab, query string) []dayOutputRow {
+	terms := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	if tab.kind == "" && len(terms) == 0 {
 		return rows
 	}
 	out := make([]dayOutputRow, 0, len(rows))
 	for _, r := range rows {
-		if r.out.Kind == tab.kind {
-			out = append(out, r)
+		if tab.kind != "" && r.out.Kind != tab.kind {
+			continue
 		}
+		if !dayOutputRowMatches(r, terms) {
+			continue
+		}
+		out = append(out, r)
 	}
 	return out
 }
@@ -238,6 +269,11 @@ func (a *App) updateDayPreview(di dayItem) {
 	if a.dayOutputsCacheID != di.dayKey {
 		a.dayOutputsCursor = 0
 		a.dayOutputsCacheID = di.dayKey
+		// The query is dropped on a scope change, unlike the TAB. A kind filter
+		// is a lens you carry across dates; a text query is about one day's
+		// specific rows, and carrying it would silently hide the new day's
+		// outputs behind a filter the user is no longer thinking about.
+		a.dayOutputQuery = ""
 	}
 	all := buildDayOutputRows(di)
 
@@ -266,6 +302,7 @@ func (a *App) updateDayProjectPreview(pi projectItem) {
 	if a.dayOutputsCacheID != cacheID {
 		a.dayOutputsCursor = 0
 		a.dayOutputsCacheID = cacheID
+		a.dayOutputQuery = "" // see updateDayPreview: queries do not travel
 	}
 	all := buildDayOutputRows(dayItem{sessions: pi.sessions})
 
@@ -308,7 +345,7 @@ func (a *App) renderOutputsPane(title, subtitle, summary string, day time.Time, 
 
 	tabs := dayOutputTabsFor(all, a.dayOutputTabKind)
 	active := tabs[dayOutputTabIndex(tabs, a.dayOutputTabKind)]
-	rows := filterDayOutputRows(all, active)
+	rows := filterDayOutputRows(all, active, a.dayOutputQuery)
 	if a.dayOutputsCursor >= len(rows) {
 		a.dayOutputsCursor = 0
 	}
@@ -325,12 +362,19 @@ func (a *App) renderOutputsPane(title, subtitle, summary string, day time.Time, 
 	sb.WriteString(a.renderDayOutputTabs(tabs, active, all) + "\n")
 
 	heading := fmt.Sprintf("Produced (%d)", len(rows))
+	if a.dayOutputQuery != "" {
+		// Say the count is filtered and by what. Without this a narrowed list
+		// reads as "this day produced 3 things", which is a different claim.
+		heading += fmt.Sprintf(" of %d  /%s", len(all), a.dayOutputQuery)
+	}
 	if len(rows) > 0 && a.sessSplit.Focus {
-		heading += "  ↵:jump to first mention  o:open  y:copy  x:actions"
+		heading += "  ↵:jump to first mention  o:open  y:copy  x:actions  /:search"
 	}
 	sb.WriteString(section.Render(heading) + "\n")
 
 	switch {
+	case len(rows) == 0 && a.dayOutputQuery != "":
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("  nothing matching %q", a.dayOutputQuery)) + "\n\n")
 	case len(rows) == 0 && active.kind != "":
 		// The tab is sticky across dates on purpose, so an empty day under a
 		// kind filter is a real answer ("this day produced no PRs"), not a
@@ -463,8 +507,12 @@ func (a *App) handleDayPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cm
 	case a.keymap.Actions.CopyPath, "y":
 		return a.copySelectedDayOutput()
 	case "/":
-		sp.Focus = false
-		return a, startListSearch(&a.sessionList), true
+		// Search the pane you are in. Focus stays here: the day pane has its own
+		// query because "which outputs" and "which sessions" are different
+		// questions, and a day with hundreds of rows needs narrowing on its own
+		// terms.
+		a.startDayOutputSearch()
+		return a, nil, true
 	}
 	switch HandleFlatCursorNav(&a.dayOutputsCursor, len(a.dayOutputRows), key) {
 	case NavCursorMoved:
@@ -656,4 +704,61 @@ func chronological(sessions []session.Session) []session.Session {
 	copy(out, sessions)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ModTime.Before(out[j].ModTime) })
 	return out
+}
+
+// startDayOutputSearch opens the day pane's own search input, pre-filled with
+// the applied query so refining is editing rather than retyping.
+func (a *App) startDayOutputSearch() {
+	a.dayOutputSearching = true
+	// Remember what was applied when the input opened. Typing applies live, so
+	// by the time Esc arrives dayOutputQuery already holds the edited value and
+	// is no longer what "cancel" should restore.
+	a.dayOutputQueryBefore = a.dayOutputQuery
+	ti := textinput.New()
+	ti.Prompt = "Search outputs: "
+	ti.SetValue(a.dayOutputQuery)
+	ti.CursorEnd()
+	ti.Focus()
+	a.dayOutputSearchTI = ti
+}
+
+// handleDayOutputSearch processes keys while the day pane's search is active.
+// The query applies as you type so the row count reacts immediately; Esc
+// restores whatever was applied when the input opened.
+func (a *App) handleDayOutputSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		a.dayOutputSearching = false
+		a.applyDayOutputQuery(a.dayOutputSearchTI.Value())
+		return a, nil
+	case "esc":
+		a.dayOutputSearching = false
+		// Esc cancels the edit, not the filter: it restores what was applied when
+		// the input opened, so an abandoned edit does not silently become the
+		// filter and an accidental keypress does not lose the narrowing.
+		a.applyDayOutputQuery(a.dayOutputQueryBefore)
+		return a, nil
+	}
+	var cmd tea.Cmd
+	a.dayOutputSearchTI, cmd = a.dayOutputSearchTI.Update(msg)
+	a.applyDayOutputQuery(a.dayOutputSearchTI.Value())
+	return a, cmd
+}
+
+// applyDayOutputQuery sets the pane's query and re-renders. The cursor goes back
+// to the top for the same reason a tab switch resets it: every row action
+// resolves through dayOutputsCursor into the FILTERED slice, so an index kept
+// across a filter change would point at a different output than the highlighted
+// one.
+func (a *App) applyDayOutputQuery(q string) {
+	a.dayOutputQuery = q
+	a.dayOutputsCursor = 0
+	a.sessSplit.CacheKey = ""
+	a.renderOwningDayScope()
+}
+
+// clearDayOutputSearch drops the pane's query entirely.
+func (a *App) clearDayOutputSearch() {
+	a.dayOutputSearching = false
+	a.applyDayOutputQuery("")
 }
