@@ -14,6 +14,11 @@ import (
 
 type searchResultItem struct {
 	result session.SearchResult
+	// live is resolved from the session store at render time, not taken from
+	// result.Session — the latter is a snapshot from when the search ran, and a
+	// session can start or stop while the results are on screen.
+	live bool
+	here bool
 }
 
 func (i searchResultItem) FilterValue() string {
@@ -22,7 +27,17 @@ func (i searchResultItem) FilterValue() string {
 
 func (i searchResultItem) Title() string {
 	sess := i.result.Session
-	return fmt.Sprintf("%s • %s", sess.ProjectName, timeAgo(sess.ModTime))
+	var badges string
+	if i.here {
+		badges += hereBadge.Render("[HERE]")
+	}
+	if i.live {
+		badges += liveBadge.Render("[LIVE]")
+	}
+	if badges != "" {
+		badges += " "
+	}
+	return fmt.Sprintf("%s%s • %s", badges, sess.ProjectName, timeAgo(sess.ModTime))
 }
 
 func (i searchResultItem) Description() string {
@@ -155,6 +170,27 @@ func (a *App) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k", "up":
 		a.searchResultList, _ = a.searchResultList.Update(msg)
 		return a, nil
+
+	case a.keymap.Actions.Resume:
+		// Take the hit straight into a working session: attach to the live pane
+		// if one exists, otherwise resume the transcript in a tmux window.
+		// resumeSession already branches on live vs not, so searching and then
+		// resuming is the same action the session list offers.
+		item, ok := a.searchResultList.SelectedItem().(searchResultItem)
+		if !ok || item.result.Session == nil {
+			return a, nil
+		}
+		sess, ok := a.sessionByIDFromStore(item.result.Session.ID)
+		if !ok {
+			// The session left the store (deleted or moved) since the search ran.
+			sess = *item.result.Session
+		}
+		if sess.IsRemote {
+			a.copiedMsg = "Use Enter to attach to remote session"
+			return a, nil
+		}
+		a.exitSearchMode()
+		return a.resumeSession(sess)
 	}
 
 	return a, nil
@@ -255,7 +291,7 @@ func (a *App) renderSearchModal(bg string) string {
 	case a.searchInput.Focused():
 		help = "enter:search  esc:close"
 	case len(a.searchResults) > 0:
-		help = "↑↓/jk:nav  enter:open  /:edit  esc:close"
+		help = fmt.Sprintf("↑↓/jk:nav  enter:open  %s:resume/attach  /:edit  esc:close", a.keymap.Actions.Resume)
 	default:
 		help = "esc:close"
 	}
@@ -280,10 +316,28 @@ func (a *App) renderSearchModal(bg string) string {
 func (a *App) updateSearchResults(results []session.SearchResult) {
 	a.searchResults = results
 	a.searchLoading = false
+	a.rebuildSearchResultItems()
+}
 
-	items := make([]list.Item, len(results))
-	for i, r := range results {
-		items[i] = searchResultItem{result: r}
+// rebuildSearchResultItems re-renders the result rows against the current
+// session store. Live state is read here rather than carried on the search
+// result: a search snapshot goes stale the moment a session starts or exits,
+// and the badge is what the user decides "jump or resume" from.
+func (a *App) rebuildSearchResultItems() {
+	items := make([]list.Item, len(a.searchResults))
+	for i, r := range a.searchResults {
+		item := searchResultItem{result: r}
+		if r.Session != nil {
+			if fresh, ok := a.sessionByIDFromStore(r.Session.ID); ok {
+				item.live = fresh.IsLive
+				item.here = fresh.IsCurrentWindow
+			}
+		}
+		items[i] = item
 	}
+	idx := a.searchResultList.Index()
 	a.searchResultList.SetItems(items)
+	if idx > 0 && idx < len(items) {
+		a.searchResultList.Select(idx)
+	}
 }

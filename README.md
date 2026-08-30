@@ -192,7 +192,11 @@ Search inside conversation content across all sessions (`Ctrl+S` or `:search`).
 - Searches text, tool inputs/outputs, thinking blocks
 - Results stream in real-time as they're found
 - Matched terms are highlighted in snippets
-- Press `Enter` to jump directly to the matching message
+- `[LIVE]` / `[HERE]` badges show which hits belong to a running session, updated
+  while the results are open
+- Press `Enter` to jump to the matching message
+- Press `r` to go straight back to work in that session: attach to its tmux pane
+  if it is live, otherwise resume the transcript in a tmux window
 - Press `/` to edit the query
 
 **Example queries:**
@@ -379,7 +383,7 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `x` | Actions menu (delete, move, resume, fork, URLs, files, ...) — on a focused outputs pane, the row's own actions |
 | `v` | Views menu (stats/config/plugins) |
 | `:` | Command mode |
-| `Ctrl+S` | Cross-session search |
+| `Ctrl+S` | Cross-session search (in results: `enter` jumps, `r` attaches/resumes) |
 | `L` | Live preview (tmux) |
 | `I` | Send input to live session |
 | `J` | Jump to tmux pane |
