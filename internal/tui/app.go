@@ -4982,6 +4982,13 @@ func (a *App) handleTick() tea.Cmd {
 		a.refreshRespondingState()
 	}
 
+	// The search modal's LIVE badges are what the user decides "jump or revive"
+	// from, so they have to track sessions starting and exiting while the
+	// results are on screen — not stay frozen at search time.
+	if a.searchActive && len(a.searchResults) > 0 {
+		a.rebuildSearchResultItems()
+	}
+
 	// Poll remote pod phases at most every 30s. Off the main goroutine.
 	var pollCmd tea.Cmd
 	if time.Since(a.remoteLastPoll) >= 30*time.Second {
