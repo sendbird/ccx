@@ -133,6 +133,10 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	sp := a.activeSplitPane()
 	scrolledPreview := sp != nil && sp.Show && (sp.PreviewOnly || msg.X > sp.ListWidth(a.width, a.splitRatio))
 
+	// previewCmd carries async preview work (the conversation transcript read)
+	// out to the runtime; dropping it would leave the pane on "(loading…)".
+	var previewCmd tea.Cmd
+
 	switch a.state {
 	case viewSessions:
 		// Live preview: no local scroll, use J/enter to jump to pane for scrollback
@@ -143,7 +147,7 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if scrolledPreview {
 			a.sessPreviewPinned = !a.sessPreviewAtBottom()
 		} else {
-			a.updateSessionPreview()
+			previewCmd = a.updateSessionPreview()
 		}
 
 	case viewConversation:
@@ -201,10 +205,10 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	// Re-render fold preview after scroll moved the block cursor
 	if scrolledPreview && sp != nil && sp.Folds != nil && sp.Focus {
-		return a, a.refreshActivePreview()
+		return a, tea.Batch(previewCmd, a.refreshActivePreview())
 	}
 
-	return a, nil
+	return a, previewCmd
 }
 
 func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
