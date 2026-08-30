@@ -133,3 +133,30 @@ func countVisibleBlocks(vis []bool) int {
 	}
 	return n
 }
+
+// highlightableTerms extracts the plain-text terms of a filter expression —
+// the ones that match against block *content* and are therefore worth
+// highlighting in the rendered output.
+//
+// Structured tokens (is:tool, tool:Name) select whole blocks rather than text
+// inside them, so highlighting them would paint the literal string "is:tool"
+// wherever it happened to appear. Negated terms mark what must be *absent*, so
+// by definition there is nothing to highlight.
+func highlightableTerms(filter string) []string {
+	filter = strings.TrimSpace(filter)
+	if filter == "" {
+		return nil
+	}
+	var out []string
+	for _, term := range strings.Fields(filter) {
+		if strings.HasPrefix(term, "!") {
+			continue
+		}
+		lower := strings.ToLower(term)
+		if strings.HasPrefix(lower, "is:") || strings.HasPrefix(lower, "tool:") {
+			continue
+		}
+		out = append(out, term)
+	}
+	return out
+}

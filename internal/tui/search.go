@@ -44,6 +44,9 @@ func (a *App) enterSearchMode() {
 	a.searchQuery = ""
 	a.searchResults = nil
 	a.searchLoading = false
+	// Drop any highlight carried over from a previous jump; the next result
+	// picked from this session sets its own.
+	a.convHighlightTerms = nil
 
 	ti := textinput.New()
 	ti.Placeholder = "Search all sessions..."
@@ -88,29 +91,42 @@ func (a *App) executeSearch() tea.Cmd {
 
 	parsed := session.ParseSearchQuery(query)
 
+	// Open the index on the main loop, not inside the command: the command runs
+	// on its own goroutine and must not mutate App state.
+	if a.contentIndex == nil {
+		if ix, err := session.OpenIndex(a.config.ClaudeDir); err == nil {
+			a.contentIndex = ix
+		}
+	}
+	ix := a.contentIndex
+
 	return func() tea.Msg {
-		results := session.SearchSessions(sessions, parsed, ctx)
-
-		go func() {
-			for result := range results {
-				// Send each result as a message (will be batched by tea runtime)
-				// This is a simplified approach - in production you'd batch these
-				_ = result
+		// Bring the index up to date first: only transcripts whose mtime or
+		// size moved are re-read, so the steady-state cost is a stat per
+		// session. A failure here is not fatal — SearchWithIndex falls back to
+		// the full scan when the index is nil or unusable.
+		if ix != nil {
+			if _, err := ix.Sync(ctx, sessions, nil); err != nil && ctx.Err() != nil {
+				return searchBatchMsg{}
 			}
-		}()
-
-		// Collect all results synchronously for simplicity
-		var allResults []session.SearchResult
-		for result := range results {
-			allResults = append(allResults, result)
 		}
 
-		return searchBatchMsg{results: allResults}
+		results, mode, err := session.SearchWithIndex(ctx, ix, sessions, parsed, searchResultLimit)
+		if err != nil {
+			return searchBatchMsg{}
+		}
+		return searchBatchMsg{results: results, mode: mode}
 	}
 }
 
+// searchResultLimit caps how many hits are hydrated and shown. A broad query
+// can match tens of thousands of blocks; past the first few hundred the list is
+// no longer something a person scrolls, and building them all costs real time.
+const searchResultLimit = 500
+
 type searchBatchMsg struct {
 	results []session.SearchResult
+	mode    session.SearchMode
 }
 
 func (a *App) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -161,11 +177,23 @@ func (a *App) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) openSearchResult(result session.SearchResult) {
+	// The query's text terms, kept so the match the user picked stays visible in
+	// the conversation they land on.
+	parsed := session.ParseSearchQuery(a.searchQuery)
+	terms := append(append([]string(nil), parsed.Terms...), parsed.Phrases...)
+
 	for i, sess := range a.sessions {
 		if sess.ID == result.Session.ID {
 			a.sessionList.Select(i)
 			a.currentSess = sess
 			a.openConversation(sess)
+
+			// Set after openConversation, which clears the highlight so that the
+			// other entry points cannot inherit a stale query.
+			a.convHighlightTerms = terms
+			if a.conv.split.Folds != nil {
+				a.conv.split.Folds.ExtraHighlight = terms
+			}
 
 			// Jump to the message containing the search result. Selection indices
 			// are always in the list's visible coordinate space.
@@ -230,7 +258,16 @@ func (a *App) renderSearchModal(bg string) string {
 	case a.searchQuery != "" && len(a.searchResults) == 0:
 		sb.WriteString(dimStyle.Render("No results found"))
 	case len(a.searchResults) > 0:
-		sb.WriteString(dimStyle.Render(fmt.Sprintf("%d results", len(a.searchResults))) + "\n")
+		// Say what was actually searched. The index does not cover tool_result
+		// content, so a silent "N results" would overstate the coverage.
+		count := fmt.Sprintf("%d results", len(a.searchResults))
+		if len(a.searchResults) >= searchResultLimit {
+			count = fmt.Sprintf("first %d results", searchResultLimit)
+		}
+		if a.searchMode == session.SearchModeIndexPartial {
+			count += dimStyle.Render("  ·  tool output not indexed")
+		}
+		sb.WriteString(dimStyle.Render(count) + "\n")
 		// Reserve rows already used (title + input box(3) + count + help) so the
 		// list fits inside the modal without overflowing.
 		listH := max(min(len(a.searchResults), bodyMaxH-6), 3)
@@ -277,8 +314,9 @@ func (a *App) renderSearchModal(bg string) string {
 	return overlayCenter(bg, modalStyle.Render(body), screenW, screenH)
 }
 
-func (a *App) updateSearchResults(results []session.SearchResult) {
+func (a *App) updateSearchResults(results []session.SearchResult, mode session.SearchMode) {
 	a.searchResults = results
+	a.searchMode = mode
 	a.searchLoading = false
 
 	items := make([]list.Item, len(results))

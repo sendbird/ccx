@@ -53,6 +53,14 @@ func (a *App) openConversation(sess session.Session) tea.Cmd {
 	a.conv.toolUseToAgent = buildToolUseToAgentMap(entries)
 	a.conv.inspector = conversationInspector{Scope: session.ScopeNode}
 	a.conv.split.PreviewOnly = false
+	// Opening a conversation clears any carried-over search highlight by
+	// default; the cross-session search path re-applies its terms right after
+	// this call. Defaulting to off here means the seven non-search entry points
+	// cannot leak a stale query into an unrelated session.
+	a.convHighlightTerms = nil
+	if a.conv.split.Folds != nil {
+		a.conv.split.Folds.ExtraHighlight = nil
+	}
 
 	// File-backed tasks provide durable metadata; transcript events provide the
 	// latest state and IDs for current TaskCreate/TaskUpdate calls.
@@ -1425,6 +1433,11 @@ func (a *App) setConvPreviewText(content string) {
 
 func (a *App) setConvPreviewTextKey(content, cacheKey string) {
 	sp := &a.conv.split
+	// Every preview and details render funnels through here, so this is the one
+	// place that keeps a cross-session search match visible after the jump.
+	if len(a.convHighlightTerms) > 0 {
+		content = highlightSearchTerms(content, a.convHighlightTerms, -1)
+	}
 	oldOffset := sp.Preview.YOffset
 	sameKey := sp.CacheKey == cacheKey
 	sp.CacheKey = cacheKey

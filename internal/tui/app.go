@@ -574,6 +574,18 @@ type App struct {
 	searchResultList list.Model
 	searchLoading    bool
 	searchCancel     context.CancelFunc
+	searchMode       session.SearchMode
+
+	// convHighlightTerms are the plain-text terms of the query that led here via
+	// a cross-session search result. They keep the match visible in the
+	// conversation the jump lands in, and are cleared when the conversation is
+	// left or another search runs.
+	convHighlightTerms []string
+
+	// contentIndex is the FTS index backing cross-session search. It is opened
+	// lazily on the first search and owned by the main loop; search commands
+	// only read it.
+	contentIndex *session.Index
 }
 
 // selectedSession returns the currently selected session from the session list.
@@ -1342,7 +1354,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case searchBatchMsg:
-		a.updateSearchResults(msg.results)
+		a.updateSearchResults(msg.results, msg.mode)
 		return a, nil
 
 	case refsExtractedMsg:

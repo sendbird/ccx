@@ -58,6 +58,10 @@ type FoldState struct {
 	BlockStarts    []int
 	BlockVisible   []bool  // nil = all visible; non-nil = per-block visibility
 	BlockFilter    string  // current filter expression (empty = no filter)
+	// ExtraHighlight are terms to paint that did not come from BlockFilter —
+	// currently the cross-session search query the jump into this conversation
+	// came from. Kept separate so clearing the block filter does not drop them.
+	ExtraHighlight []string
 	HideHooks      bool    // true = suppress hook badges/details in render
 	Selected       foldSet // block indices selected for copy
 	BlockSourceIdx []int   // parallel to Entry.Content; -1 = unknown source
@@ -562,6 +566,12 @@ func (sp *SplitPane) RefreshFoldPreview(totalW, splitRatio int) {
 	}
 
 	content := rp.content
+	// Paint the filter's text terms. The filter already decided which blocks are
+	// on screen; without this the user still has to hunt for the word inside
+	// them. Block-selecting tokens (is:/tool:) are skipped by highlightableTerms.
+	if terms := append(highlightableTerms(sp.Folds.BlockFilter), sp.Folds.ExtraHighlight...); len(terms) > 0 {
+		content = highlightSearchTerms(content, terms, -1)
+	}
 	padLines := 0
 	if sp.BottomAlign && rp.lineCount < sp.Preview.Height {
 		padLines = sp.Preview.Height - rp.lineCount

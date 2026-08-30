@@ -33,14 +33,30 @@ func highlightSearchMatches(content, term string, currentLine int) string {
 	if term == "" {
 		return content
 	}
-	lowerTerm := strings.ToLower(term)
+	return highlightSearchTerms(content, []string{term}, currentLine)
+}
+
+// highlightSearchTerms is highlightSearchMatches for several terms at once.
+// Filter expressions are AND-ed sets of words, so every one of them is a reason
+// the block is on screen and all of them get painted.
+//
+// Terms are applied one after another over the already-highlighted line. That
+// is safe because highlightLine walks visible characters and copies ANSI
+// sequences through untouched, so an earlier term's escapes neither shift the
+// match positions of a later term nor get matched themselves.
+func highlightSearchTerms(content string, terms []string, currentLine int) string {
+	if len(terms) == 0 {
+		return content
+	}
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		plain := stripANSI(line)
-		if !strings.Contains(strings.ToLower(plain), lowerTerm) {
-			continue
+		plain := strings.ToLower(stripANSI(line))
+		for _, term := range terms {
+			if term == "" || !strings.Contains(plain, strings.ToLower(term)) {
+				continue
+			}
+			lines[i] = highlightLine(lines[i], term, i == currentLine)
 		}
-		lines[i] = highlightLine(line, term, i == currentLine)
 	}
 	return strings.Join(lines, "\n")
 }
