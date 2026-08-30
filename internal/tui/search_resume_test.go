@@ -14,7 +14,7 @@ func searchApp(t *testing.T, sessions []session.Session, results []session.Searc
 	a.enterSearchMode()
 	a.searchInput.Blur() // focus the result list, not the query box
 	a.searchQuery = "q"
-	a.updateSearchResults(results)
+	a.updateSearchResults(results, session.SearchModeScan)
 	return a
 }
 
@@ -64,7 +64,7 @@ func TestSearchResultLiveStateComesFromStore(t *testing.T) {
 	a := newTestApp([]session.Session{{ID: "s1", ShortID: "s1", ProjectName: "proj", IsLive: true}})
 	a.enterSearchMode()
 	a.searchInput.Blur()
-	a.updateSearchResults([]session.SearchResult{{Session: &snapshot, Snippet: "hit"}})
+	a.updateSearchResults([]session.SearchResult{{Session: &snapshot, Snippet: "hit"}}, session.SearchModeScan)
 
 	item := a.searchResultList.Items()[0].(searchResultItem)
 	if !item.live {
@@ -76,7 +76,7 @@ func TestSearchResultLiveStateComesFromStore(t *testing.T) {
 	b := newTestApp([]session.Session{{ID: "s2", ShortID: "s2", ProjectName: "proj2", IsLive: false}})
 	b.enterSearchMode()
 	b.searchInput.Blur()
-	b.updateSearchResults([]session.SearchResult{{Session: &staleLive, Snippet: "hit"}})
+	b.updateSearchResults([]session.SearchResult{{Session: &staleLive, Snippet: "hit"}}, session.SearchModeScan)
 
 	if b.searchResultList.Items()[0].(searchResultItem).live {
 		t.Error("stale snapshot won over the store — an exited session is still shown live")
