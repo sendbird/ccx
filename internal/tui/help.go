@@ -61,6 +61,9 @@ func (a *App) sessHelpLine() string {
 	if a.sessConvSearching {
 		return "  " + a.sessConvSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
 	}
+	if a.dayOutputSearching {
+		return "  " + a.dayOutputSearchTI.View() + helpStyle.Render("  enter:apply esc:cancel")
+	}
 
 	// Pane proxy (live preview)
 	if a.sessSplit.Focus && a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive {

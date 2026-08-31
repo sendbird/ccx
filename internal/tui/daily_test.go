@@ -565,7 +565,7 @@ func TestDayPreviewTabsCoverEveryKindProduced(t *testing.T) {
 		if tb.kind == "" {
 			continue
 		}
-		for _, r := range filterDayOutputRows(rows, tb) {
+		for _, r := range filterDayOutputRows(rows, tb, "") {
 			if r.out.Kind != tb.kind {
 				t.Errorf("tab %q leaked a %s row", tb.label, r.out.Kind)
 			}
