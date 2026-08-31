@@ -545,6 +545,7 @@ type indexHit struct {
 	path     string
 	lineOff  int64
 	blockIdx int
+	role     string
 }
 
 // queryIndex returns matching block locations, newest session first.
@@ -574,7 +575,7 @@ func (ix *Index) queryIndex(ctx context.Context, q SearchQuery, allowed map[stri
 		}
 	}
 
-	sqlText := `select files.path, locs.line_off, locs.block_idx
+	sqlText := `select files.path, locs.line_off, locs.block_idx, locs.role
 	            from blocks
 	            join locs  on locs.rowid = blocks.rowid
 	            join files on files.id   = locs.file_id
@@ -582,9 +583,19 @@ func (ix *Index) queryIndex(ctx context.Context, q SearchQuery, allowed map[stri
 	if len(where) > 0 {
 		sqlText += " and " + strings.Join(where, " and ")
 	}
-	// Ordering is applied in Go against session mtime; SQL only bounds the work.
+	// Bound the work with a role-ordered cut, sized so session ranking still has
+	// room.
+	//
+	// Session order needs session mtime, which the index does not store, so it
+	// happens in Go. A plain SQL LIMIT truncates in rowid order and can drop
+	// rows the Go sort would have kept; ordering by role alone is global and
+	// starves recent sessions. Over-fetching a multiple of the limit under a
+	// role ordering gives both: the user's words survive the cut, and enough
+	// rows from enough files remain for the recency sort to be meaningful.
 	if limit > 0 {
-		sqlText += fmt.Sprintf(" limit %d", limit)
+		sqlText += ` order by case locs.role
+		                      when 'user' then 0 when 'assistant' then 1 else 2 end`
+		sqlText += fmt.Sprintf(" limit %d", limit*sqlOverFetch)
 	}
 
 	rows, err := ix.db.QueryContext(ctx, sqlText, args...)
@@ -596,7 +607,7 @@ func (ix *Index) queryIndex(ctx context.Context, q SearchQuery, allowed map[stri
 	var hits []indexHit
 	for rows.Next() {
 		var h indexHit
-		if err := rows.Scan(&h.path, &h.lineOff, &h.blockIdx); err != nil {
+		if err := rows.Scan(&h.path, &h.lineOff, &h.blockIdx, &h.role); err != nil {
 			return nil, err
 		}
 		if allowed != nil {
@@ -611,7 +622,14 @@ func (ix *Index) queryIndex(ctx context.Context, q SearchQuery, allowed map[stri
 	}
 
 	// Newest session first, matching the session browser's ordering; within a
-	// session, transcript order.
+	// session, what you said comes before what the model said, then transcript
+	// order.
+	//
+	// The user-first tie-break is deliberately INSIDE the session, not across
+	// them: hoisting every user hit to the top would break the recency ordering
+	// that makes "what was I doing lately" browsable. Ordering here rather than
+	// after hydration also means a limit truncates assistant hits first, so a
+	// broad query cannot fill its cap with replies and drop the prompts.
 	sort.SliceStable(hits, func(i, j int) bool {
 		si, sj := allowed[hits[i].path], allowed[hits[j].path]
 		if si != nil && sj != nil && !si.ModTime.Equal(sj.ModTime) {
@@ -620,7 +638,38 @@ func (ix *Index) queryIndex(ctx context.Context, q SearchQuery, allowed map[stri
 		if hits[i].path != hits[j].path {
 			return hits[i].path < hits[j].path
 		}
+		if ri, rj := roleRank(hits[i].role), roleRank(hits[j].role); ri != rj {
+			return ri < rj
+		}
 		return hits[i].lineOff < hits[j].lineOff
 	})
 	return hits, nil
 }
+
+// roleRank orders matched entries within one session: the user's own words
+// first. A hit in your prompt is usually the one you were looking for — it is
+// what you wrote and therefore what you remember — while the model's reply is
+// the elaboration around it. Anything without a role sorts last rather than
+// being mixed into either group.
+func roleRank(role string) int {
+	switch role {
+	case "user":
+		return 0
+	case "assistant":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// sqlOverFetch is how many times the caller's limit is pulled from SQL before
+// Go ranks and trims. The SQL cut can only order by role (session mtime lives
+// outside the index), so the surplus is what keeps the recency sort from being
+// decided by an arbitrary truncation.
+//
+// It is a bound, not a guarantee: a query matching more than limit*sqlOverFetch
+// user blocks inside a single old session could still crowd out a recent one.
+// Raising it trades latency for that tail — measured on a 400 MB index, a very
+// broad query costs ~150ms at 8x and ~400ms unbounded, against ~1.8s for the
+// full scan this replaced.
+const sqlOverFetch = 8

@@ -45,7 +45,31 @@ func (i searchResultItem) Description() string {
 	if len(snippet) > 100 {
 		snippet = snippet[:97] + "..."
 	}
+	// Lead with who said it. A hit in your own prompt and a hit in the model's
+	// reply answer different questions ("what did I ask for" vs "what did it
+	// say"), and the snippet alone rarely makes that obvious.
+	if chip := searchResultRoleChip(i.result); chip != "" {
+		return chip + " " + snippet
+	}
 	return snippet
+}
+
+// searchResultRoleChip renders the role of the matched entry using the app-wide
+// role chip, so a search hit reads the same way a conversation row does.
+// Returns "" for an entry with no role (meta/system rows), which the caller
+// renders without a prefix rather than inventing a label.
+func searchResultRoleChip(r session.SearchResult) string {
+	if r.Entry == nil {
+		return ""
+	}
+	switch r.Entry.Role {
+	case "user":
+		return userLabelStyle.Render(roleChip("user"))
+	case "assistant":
+		return assistantLabelStyle.Render(roleChip("assistant"))
+	default:
+		return ""
+	}
 }
 
 type searchResultsMsg struct {

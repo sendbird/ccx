@@ -205,3 +205,53 @@ func TestSearchBadgeRefreshPreservesCursor(t *testing.T) {
 		t.Errorf("cursor moved on refresh: index = %d, want 2", got)
 	}
 }
+
+// A search hit must say whose words matched: a hit in your own prompt and a hit
+// in the model's reply answer different questions.
+func TestSearchResultShowsMatchedRole(t *testing.T) {
+	sess := session.Session{ID: "s1", ShortID: "s1", ProjectName: "proj"}
+	userEntry := session.Entry{Role: "user"}
+	asstEntry := session.Entry{Role: "assistant"}
+	snapU, snapA := sess, sess
+
+	a := searchApp(t, []session.Session{sess}, []session.SearchResult{
+		{Session: &snapU, Entry: &userEntry, Snippet: "asked about worktrees"},
+		{Session: &snapA, Entry: &asstEntry, Snippet: "explained worktrees"},
+	})
+
+	items := a.searchResultList.Items()
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	uDesc := stripANSI(items[0].(searchResultItem).Description())
+	aDesc := stripANSI(items[1].(searchResultItem).Description())
+
+	if !strings.Contains(uDesc, "usr") {
+		t.Errorf("user hit does not show its role: %q", uDesc)
+	}
+	if !strings.Contains(aDesc, "ast") {
+		t.Errorf("assistant hit does not show its role: %q", aDesc)
+	}
+	if uDesc == aDesc {
+		t.Error("user and assistant hits render identically")
+	}
+	// The snippet itself must survive the prefix.
+	if !strings.Contains(uDesc, "asked about worktrees") {
+		t.Errorf("snippet lost: %q", uDesc)
+	}
+}
+
+// An entry with no role gets no invented label.
+func TestSearchResultWithoutRoleHasNoChip(t *testing.T) {
+	sess := session.Session{ID: "s1", ShortID: "s1", ProjectName: "proj"}
+	snap := sess
+	entry := session.Entry{} // no role
+
+	a := searchApp(t, []session.Session{sess}, []session.SearchResult{
+		{Session: &snap, Entry: &entry, Snippet: "plain text"},
+	})
+	desc := stripANSI(a.searchResultList.Items()[0].(searchResultItem).Description())
+	if desc != "plain text" {
+		t.Errorf("roleless entry rendered a chip: %q", desc)
+	}
+}
