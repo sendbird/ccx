@@ -190,7 +190,11 @@ Search inside conversation content across all sessions (`Ctrl+S` or `:search`).
 
 **Features:**
 - Searches text, tool inputs, thinking blocks, and system tags
-- Results are ordered newest session first
+- Each hit is prefixed with the role that matched (` usr` / ` ast`), so a hit in
+  your own prompt is distinguishable from one in the model's reply
+- Results are ordered newest session first, and **within a session the user's own
+  words come first** — a hit in your prompt is usually the one you were looking
+  for. Session recency still wins across sessions, so the list stays browsable
 - Matched terms are highlighted in snippets
 - `[LIVE]` / `[HERE]` badges show which hits belong to a running session, updated
   while the results are open

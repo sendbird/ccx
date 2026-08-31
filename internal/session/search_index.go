@@ -51,14 +51,12 @@ func SearchWithIndex(ctx context.Context, ix *Index, sessions []*Session, q Sear
 		}
 	}
 
-	// Over-fetch: post-filtering (exclusions, tool prefix) drops some hits, and
-	// a limit applied in SQL would otherwise silently truncate good results.
-	sqlLimit := 0
-	if limit > 0 {
-		sqlLimit = limit * 4
-	}
-
-	hits, err := ix.queryIndex(ctx, q, bySession, sqlLimit)
+	// The limit is applied per FILE inside queryIndex, not globally: session
+	// ranking happens here in Go (it needs session mtime), so a global cut would
+	// discard rows the ranking would have kept. Every file contributing its own
+	// best `limit` rows is enough for any ordering this function can produce,
+	// while keeping a broad query from dragging back tens of thousands of rows.
+	hits, err := ix.queryIndex(ctx, q, bySession, limit)
 	if err != nil {
 		// An index failure is not a search failure — degrade to the scan.
 		return collectScan(ctx, sessions, q, limit), SearchModeScan, nil
@@ -206,15 +204,31 @@ func collectScan(ctx context.Context, sessions []*Session, q SearchQuery, limit 
 		}
 	}
 
+	// Same order as the indexed path: newest session first, and within one
+	// session the user's own words before the model's (see queryIndex).
 	sort.SliceStable(out, func(i, j int) bool {
 		si, sj := out[i].Session, out[j].Session
 		if si == nil || sj == nil {
 			return false
 		}
-		return si.ModTime.After(sj.ModTime)
+		if !si.ModTime.Equal(sj.ModTime) {
+			return si.ModTime.After(sj.ModTime)
+		}
+		if si.ID != sj.ID {
+			return si.ID < sj.ID
+		}
+		return resultRoleRank(out[i]) < resultRoleRank(out[j])
 	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
 	return out
+}
+
+// resultRoleRank is roleRank for a hydrated result.
+func resultRoleRank(r SearchResult) int {
+	if r.Entry == nil {
+		return 2
+	}
+	return roleRank(r.Entry.Role)
 }
