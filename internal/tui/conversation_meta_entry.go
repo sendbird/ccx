@@ -1233,7 +1233,13 @@ func (a *App) metaScratchpadEntries() []metaEntry {
 // scratchpadFileRow renders one scratchpad file as a selectable row: name, size,
 // and mtime. Binary files are marked.
 func scratchpadFileRow(f session.ScratchpadFile) string {
+	if f.Name == session.ScratchpadTruncatedMarker {
+		return dimStyle.Render(f.Name + "  " + f.Body)
+	}
 	row := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(f.Name)
+	if f.IsRepo {
+		return row + dimStyle.Render("  (git repository)")
+	}
 	row += dimStyle.Render(fmt.Sprintf("  %s  %s", humanSize(f.Size), scratchpadMtime(f.ModTime)))
 	if !f.IsText {
 		row += dimStyle.Render("  (binary)")

@@ -245,7 +245,23 @@ func collectScratchpadOutputs(sess Session) []SessionOutput {
 	files := LoadScratchpadFiles(sess.ProjectPath, sess.ID)
 	outs := make([]SessionOutput, 0, len(files))
 	for _, f := range files {
+		// The truncation note is a property of the listing, not an output.
+		if f.Name == ScratchpadTruncatedMarker {
+			continue
+		}
 		mt := time.Unix(f.ModTime, 0)
+		if f.IsRepo {
+			outs = append(outs, SessionOutput{
+				Kind:   OutputScratchpad,
+				Title:  f.Name,
+				Detail: "git repository",
+				Path:   f.Path,
+				First:  mt,
+				Last:   mt,
+				Count:  1,
+			})
+			continue
+		}
 		outs = append(outs, SessionOutput{
 			Kind:   OutputScratchpad,
 			Title:  f.Name,
