@@ -7610,6 +7610,14 @@ func (a *App) buildScratchpadContent(sess session.Session) string {
 func (a *App) renderScratchpadFile(f session.ScratchpadFile, width int) string {
 	var sb strings.Builder
 
+	// A repo row and the truncation note have no size/mtime worth showing —
+	// they describe the listing, not a file the session wrote.
+	if f.IsRepo || f.Name == session.ScratchpadTruncatedMarker {
+		sb.WriteString(dimStyle.Render("── ") + lipgloss.NewStyle().Foreground(colorAccent).Render(f.Name) + "\n")
+		sb.WriteString(dimStyle.Render("  "+f.Body) + "\n\n")
+		return sb.String()
+	}
+
 	size := humanSize(f.Size)
 	mtime := time.Unix(f.ModTime, 0).Format("2006-01-02 15:04")
 	header := dimStyle.Render("── ") + lipgloss.NewStyle().Foreground(colorAccent).Render(f.Name) +

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -149,8 +150,11 @@ func ExtractSessionRefsFromFile(filePath string) []SessionRef {
 			// tool_result says "Published <path> at <url>". A URL merely quoted
 			// in text (often a link to another session's artifact) is not a ref
 			// this session produced, so skip it.
-			if ref.Kind == RefArtifact && !bytes.Contains(line, []byte("Published")) {
-				continue
+			if ref.Kind == RefArtifact {
+				if !bytes.Contains(line, []byte("Published")) {
+					continue
+				}
+				ref.Title = artifactTitleFromPublish(string(line), u)
 			}
 			if !tsParsed {
 				ts = lineTimestamp(line)
@@ -236,8 +240,11 @@ func ExtractSessionRefs(entries []Entry) []SessionRef {
 					}
 					// Artifacts: only from publish-marker text (Artifact
 					// tool_result "Published … at <url>"), not text mentions.
-					if ref.Kind == RefArtifact && !strings.Contains(text, "Published") {
-						continue
+					if ref.Kind == RefArtifact {
+						if !strings.Contains(text, "Published") {
+							continue
+						}
+						ref.Title = artifactTitleFromPublish(text, u)
 					}
 					seen[ref.Label] = true
 					ref.FirstSeen = ts
@@ -306,6 +313,31 @@ func classifyRef(u string) (SessionRef, bool) {
 		return SessionRef{Kind: RefArtifact, URL: u, Label: "artifact:" + id}, true
 	}
 	return SessionRef{}, false
+}
+
+// artifactPublishRegex captures the source file path out of the Artifact tool's
+// result line, "Published <path> at <url>". The path is the only human-readable
+// name the transcript carries for a published page: the UUID label identifies
+// nothing, so without this an artifact row reads "artifact:6c6ced7d" and the
+// reader has to open the URL to find out what it is.
+var artifactPublishRegex = regexp.MustCompile(`Published\s+(\S+)\s+at\s+(\S+)`)
+
+// artifactTitleFromPublish returns the base filename of the page published at
+// url, given the text of the tool result that announced it. Returns "" when the
+// text announces a different artifact — a single line can carry several
+// publishes, and pairing the wrong name to a URL is worse than no name.
+func artifactTitleFromPublish(text, url string) string {
+	for _, m := range artifactPublishRegex.FindAllStringSubmatch(text, -1) {
+		if cleanRefURL(m[2]) != url {
+			continue
+		}
+		name := path.Base(m[1])
+		if name == "." || name == "/" {
+			return ""
+		}
+		return name
+	}
+	return ""
 }
 
 // artifactURLRegex captures the UUID at the end of a claude.ai artifact URL.
