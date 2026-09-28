@@ -34,6 +34,7 @@ type KeymapsConfig struct {
 	Actions      ActionsKeymap    `yaml:"actions,omitempty"`
 	Views        ViewsKeymap      `yaml:"views,omitempty"`
 	Conversation ConvKeymap       `yaml:"conversation,omitempty"`
+	Preview      PreviewKeymap    `yaml:"preview,omitempty"`
 	Navigation   NavigationKeymap `yaml:"navigation,omitempty"`
 }
 
@@ -67,17 +68,24 @@ type CCXConfig struct {
 //
 // Current migrations (CPLAT-10985 session-list shortcut rebind):
 //   - Session.Edit "e" → "" (moved into the actions menu as x→e)
-//   - Session.Views "v" → "V"
 //   - Session.Live "L" → "" (removed; live via page menu p→l)
 //   - Session.Switch "s" → "" (removed)
 //   - Actions.Edit "" → "e" (new field)
+//
+// CJK reachability rebind: every binding below was an uppercase letter a user
+// cannot produce while a Korean input source is active, so the action was dead
+// for them (and, where a lowercase action shared the letter, that one silently
+// won). See cjkReachableUpper in keymap.go.
+//   - Session.Views "V" → "v"
+//   - Actions.ImportMem "M" → "a", RemoveMem "X" → "z", Fork "F" → "b"
+//   - Conversation.ExecutionContexts "A" → "a", RegionUp "K" → "ctrl+p",
+//     RegionDown "J" → "ctrl+n", LiveToggle "L" → "ctrl+l", Input "I" → "w"
+//   - Preview.ExpandAll "F" → "u"
+//   - Session.DailyView "D" → "d"
 func migrateKeymapDefaults(cfg *CCXConfig) {
 	s := &cfg.Keymaps.Session
 	if s.Edit == "e" {
 		s.Edit = ""
-	}
-	if s.Views == "v" {
-		s.Views = "V"
 	}
 	if s.Live == "L" {
 		s.Live = ""
@@ -87,6 +95,30 @@ func migrateKeymapDefaults(cfg *CCXConfig) {
 	}
 	if cfg.Keymaps.Actions.Edit == "" {
 		cfg.Keymaps.Actions.Edit = "e"
+	}
+
+	// Old default → new default. Only exact old-default matches are rewritten,
+	// so a user who deliberately chose some other key keeps it.
+	for _, m := range []struct {
+		field *string
+		old   string
+		new   string
+	}{
+		{&s.Views, "V", "v"},
+		{&cfg.Keymaps.Actions.ImportMem, "M", "a"},
+		{&cfg.Keymaps.Actions.RemoveMem, "X", "z"},
+		{&cfg.Keymaps.Actions.Fork, "F", "b"},
+		{&cfg.Keymaps.Conversation.ExecutionContexts, "A", "a"},
+		{&cfg.Keymaps.Conversation.RegionUp, "K", "ctrl+p"},
+		{&cfg.Keymaps.Conversation.RegionDown, "J", "ctrl+n"},
+		{&cfg.Keymaps.Conversation.LiveToggle, "L", "ctrl+l"},
+		{&cfg.Keymaps.Conversation.Input, "I", "w"},
+		{&cfg.Keymaps.Preview.ExpandAll, "F", "u"},
+		{&s.DailyView, "D", "d"},
+	} {
+		if *m.field == m.old {
+			*m.field = m.new
+		}
 	}
 }
 
@@ -125,6 +157,7 @@ func LoadCCXConfig(path string) (*Keymap, Preferences, Shortcuts, remote.Config,
 		Actions:      cfg.Keymaps.Actions,
 		Views:        cfg.Keymaps.Views,
 		Conversation: cfg.Keymaps.Conversation,
+		Preview:      cfg.Keymaps.Preview,
 		Navigation:   cfg.Keymaps.Navigation,
 	}
 	mergeKeymap(&km, override)
@@ -275,6 +308,24 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if s.Pick == "" {
 		s.Pick = d.Session.Pick
 	}
+	if s.FoldAll == "" {
+		s.FoldAll = d.Session.FoldAll
+	}
+	if s.ExpandAll == "" {
+		s.ExpandAll = d.Session.ExpandAll
+	}
+	if s.FoldGroup == "" {
+		s.FoldGroup = d.Session.FoldGroup
+	}
+	if s.StateMenu == "" {
+		s.StateMenu = d.Session.StateMenu
+	}
+	if s.DailyView == "" {
+		s.DailyView = d.Session.DailyView
+	}
+	if s.PageMenu == "" {
+		s.PageMenu = d.Session.PageMenu
+	}
 
 	a := &cfg.Keymaps.Actions
 	if a.Delete == "" {
@@ -325,6 +376,15 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if a.Edit == "" {
 		a.Edit = d.Actions.Edit
 	}
+	if a.Changes == "" {
+		a.Changes = d.Actions.Changes
+	}
+	if a.Copy == "" {
+		a.Copy = d.Actions.Copy
+	}
+	if a.Tags == "" {
+		a.Tags = d.Actions.Tags
+	}
 
 	c := &cfg.Keymaps.Conversation
 	if c.JumpToTree == "" {
@@ -364,6 +424,23 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	}
 	if v.Plugins == "" {
 		v.Plugins = d.Views.Plugins
+	}
+
+	p := &cfg.Keymaps.Preview
+	if p.FoldAll == "" {
+		p.FoldAll = d.Preview.FoldAll
+	}
+	if p.ExpandAll == "" {
+		p.ExpandAll = d.Preview.ExpandAll
+	}
+	if p.Filter == "" {
+		p.Filter = d.Preview.Filter
+	}
+	if p.CopyMode == "" {
+		p.CopyMode = d.Preview.CopyMode
+	}
+	if p.CopyAll == "" {
+		p.CopyAll = d.Preview.CopyAll
 	}
 }
 

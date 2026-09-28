@@ -146,7 +146,8 @@ func TestBootstrapConfigIncludesConversationKeymap(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{"conversation:", "execution_contexts: A"} {
+	wantExec := "execution_contexts: " + DefaultKeymap().Conversation.ExecutionContexts
+	for _, want := range []string{"conversation:", wantExec} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("bootstrapped config missing %q:\n%s", want, text)
 		}

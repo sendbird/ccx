@@ -2397,22 +2397,22 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.updateSessionPreview()
 	}
 
-	// Fold/unfold groups: only available when the list (not the preview)
-	// is focused, so the same keys can still be used as text input
-	// elsewhere. `o` toggles the group at the cursor; `f`/`F` fold/expand
-	// everything.
+	// Fold/unfold groups and the state menu: only while the list (not the
+	// preview) has focus, so the same letters stay available as text input
+	// elsewhere. FoldGroup toggles the group at the cursor; FoldAll/ExpandAll
+	// act on every group.
 	if !sp.Focus {
 		switch key {
-		case "o":
+		case km.Session.FoldGroup:
 			a.toggleSessGroupFoldAtCursor()
 			return a, nil
-		case "f":
+		case km.Session.FoldAll:
 			a.setAllSessGroupsFolded(true)
 			return a, nil
-		case "F":
+		case km.Session.ExpandAll:
 			a.setAllSessGroupsFolded(false)
 			return a, nil
-		case "s":
+		case km.Session.StateMenu:
 			a.stateMenu = true
 			return a, nil
 		}
@@ -2424,7 +2424,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// the list uses is independent of which pane has the cursor. Returning to
 	// the previous grouping restores whatever the user was in (persisted across
 	// restarts), not a hardcoded default.
-	if key == "D" {
+	if key == km.Session.DailyView {
 		return a, a.toggleDailyView()
 	}
 
@@ -2493,7 +2493,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Suppressed on rows that have no preview modes at all — see
 	// rowSupportsPreviewModes, which the number keys already honor. Two
 	// mechanisms for one thing must not disagree.
-	if key == "p" {
+	if key == km.Session.PageMenu {
 		if !a.rowSupportsPreviewModes() {
 			a.copiedMsg = "This row always shows what it produced"
 			return a, nil
@@ -3077,11 +3077,11 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 			sp.Focus = false
 		}
 		return a, nil, true
-	case "f":
+	case a.keymap.Session.FoldAll:
 		a.sessConvExpanded = nil
 		a.refreshConvPreview()
 		return a, nil, true
-	case "F":
+	case a.keymap.Session.ExpandAll:
 		a.sessConvExpanded = make(map[int]bool)
 		for i := range visible {
 			a.sessConvExpanded[i] = true
@@ -8737,7 +8737,7 @@ func (a *App) toggleSessGroupFoldAtCursor() {
 }
 
 // setAllSessGroupsFolded sets the fold flag for every visible group head.
-// Used by `f` (fold all) and `F` (expand all).
+// Used by Session.FoldAll (fold all) and Session.ExpandAll (expand all).
 func (a *App) setAllSessGroupsFolded(folded bool) {
 	if a.sessFolded == nil {
 		a.sessFolded = make(map[string]bool)

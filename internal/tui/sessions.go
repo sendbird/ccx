@@ -1841,11 +1841,11 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{displayKey(km.Session.Search), "Search / filter"},
 			{displayKey(km.Session.Views), "Views (stats/config/plugins)"},
 			{displayKey(km.Session.Refresh), "Refresh"},
-			{"p → l", "Live preview (page menu → live)"},
+			{displayKey(km.Session.PageMenu) + " → l", "Live preview (page menu → live)"},
 			{displayKey(km.Session.Select), "Multi-select"},
-			{"o / f / F", "Fold group / all / expand all"},
-			{"s", "Toggle session states shown (live/done/…)"},
-			{"D", "Daily view (dates + what each day produced)"},
+			{displayKey(km.Session.FoldGroup) + " / " + displayKey(km.Session.FoldAll) + " / " + displayKey(km.Session.ExpandAll), "Fold group / all / expand all"},
+			{displayKey(km.Session.StateMenu), "Toggle session states shown (live/done/…)"},
+			{displayKey(km.Session.DailyView), "Daily view (dates + what each day produced)"},
 		}
 	}
 }
@@ -1853,7 +1853,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 // sessionsPreviewContextRows returns the key rows for the focused sessions
 // preview, specialized by the active preview mode.
 func (a *App) sessionsPreviewContextRows() []helpRow {
-	base := []helpRow{{"↑↓ / jk", "Scroll / navigate"}, {"←", "Unfocus"}, {"tab", "Cycle mode"}, {"p", "Page menu"}}
+	base := []helpRow{{"↑↓ / jk", "Scroll / navigate"}, {"←", "Unfocus"}, {"tab", "Cycle mode"}, {displayKey(a.keymap.Session.PageMenu), "Page menu"}}
 	// A date row owns the preview regardless of the selected mode.
 	if _, ok := a.selectedDay(); ok {
 		return []helpRow{
@@ -1984,7 +1984,7 @@ func (a *App) renderHelpModal(bg string, screenW, screenH int) string {
 			{"is:bg", "Background work in flight"},
 			{"is:wait", "Idle, waiting for user"},
 			{"is:done", "All work completed"},
-			{"D", "Toggle completed-only"},
+			{"d", "Toggle completed-only"},
 			{"is:stuck", "Stale, unfinished"},
 			{"is:wt", "Worktree sessions"},
 			{"is:team", "Team sessions"},

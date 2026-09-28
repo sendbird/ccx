@@ -31,6 +31,12 @@ type SessionKeymap struct {
 	ResizeGrow   string `yaml:"resize_grow"`
 	Command      string `yaml:"command"`
 	Pick         string `yaml:"pick"` // pick mode only (ccx pick session)
+	FoldAll      string `yaml:"fold_all"`
+	ExpandAll    string `yaml:"expand_all"`
+	FoldGroup    string `yaml:"fold_group"` // toggle the group at the cursor
+	StateMenu    string `yaml:"state_menu"` // which session states the list shows
+	DailyView    string `yaml:"daily_view"` // flip the list to date-first grouping
+	PageMenu     string `yaml:"page_menu"`  // pick what the preview pane shows
 }
 
 // ActionsKeymap defines configurable keybindings for the actions menu.
@@ -112,12 +118,14 @@ type Keymap struct {
 func DefaultKeymap() Keymap {
 	return Keymap{
 		Session: SessionKeymap{
-			Quit:         "q",
-			Escape:       "esc",
-			Open:         "enter",
-			Edit:         "",
-			Actions:      "x",
-			Views:        "V",
+			Quit:    "q",
+			Escape:  "esc",
+			Open:    "enter",
+			Edit:    "",
+			Actions: "x",
+			// Lowercase: "V" was unreachable under a 2-set Korean input source
+			// (see cjkReachableUpper). Nothing else claims "v" in the session list.
+			Views:        "v",
 			Refresh:      "R",
 			Group:        "",
 			Help:         "?",
@@ -134,24 +142,40 @@ func DefaultKeymap() Keymap {
 			ResizeGrow:   "]",
 			Command:      ":",
 			Pick:         "P",
+			// FoldAll/ExpandAll deliberately avoid a Shift-case pair: under a
+			// 2-set Korean input source most letters emit the same rune with and
+			// without Shift, so "f"/"F" collapsed into one key and expand-all
+			// could never fire. See cjkReachableUpper.
+			FoldAll:   "f",
+			ExpandAll: "u",
+			FoldGroup: "o",
+			StateMenu: "s",
+			// "d", not "D": uppercase is unreachable under a Korean input source
+			// and nothing else claims "d" at the session-list top level.
+			DailyView: "d",
+			PageMenu:  "p",
 		},
 		Actions: ActionsKeymap{
-			Delete:    "d",
-			Move:      "m",
-			Resume:    "r",
-			CopyPath:  "y",
-			Worktree:  "w",
-			Kill:      "k",
-			Input:     "i",
-			Jump:      "j",
-			URLs:      "u",
-			Files:     "f",
-			Changes:   "g",
-			Copy:      "c",
-			Tags:      "t",
-			ImportMem: "M",
-			RemoveMem: "X",
-			Fork:      "F",
+			Delete:   "d",
+			Move:     "m",
+			Resume:   "r",
+			CopyPath: "y",
+			Worktree: "w",
+			Kill:     "k",
+			Input:    "i",
+			Jump:     "j",
+			URLs:     "u",
+			Files:    "f",
+			Changes:  "g",
+			Copy:     "c",
+			Tags:     "t",
+			// Lowercase because "M"/"X"/"F" were unreachable under a 2-set Korean
+			// input source, and each also collided with the lowercase action
+			// listed earlier in the switch (Move/Actions-menu/Files), which won.
+			// a = add memory, z = zap memory, b = branch off.
+			ImportMem: "a",
+			RemoveMem: "z",
+			Fork:      "b",
 			New:       "n",
 			Remote:    "R",
 			Edit:      "e",
@@ -162,19 +186,25 @@ func DefaultKeymap() Keymap {
 			Plugins: "p",
 		},
 		Conversation: ConvKeymap{
-			JumpToTree:        "o",
-			SwitchRegion:      "P",
-			ExecutionContexts: "A",
-			RegionUp:          "K",
-			RegionDown:        "J",
-			LiveToggle:        "L",
+			JumpToTree:   "o",
+			SwitchRegion: "P",
+			// The rest were uppercase and so unreachable under a 2-set Korean
+			// input source (see cjkReachableUpper). Region nav uses ctrl+p/ctrl+n
+			// rather than ctrl+k/ctrl+j because ctrl+j is LF and terminals may
+			// deliver it as Enter; the others take a free lowercase key.
+			ExecutionContexts: "a",
+			RegionUp:          "ctrl+p",
+			RegionDown:        "ctrl+n",
+			LiveToggle:        "ctrl+l",
 			Edit:              "e",
 			Actions:           "x",
-			Input:             "I",
+			Input:             "w",
 		},
 		Preview: PreviewKeymap{
-			FoldAll:   "f",
-			ExpandAll: "F",
+			FoldAll: "f",
+			// "u" (not "F") for the same reason as Session.ExpandAll, and to
+			// match it — block-level and group-level expand share one key.
+			ExpandAll: "u",
 			Filter:    "/",
 			CopyMode:  "v",
 			CopyAll:   "y",
@@ -190,6 +220,28 @@ func DefaultKeymap() Keymap {
 			End:      []string{"G"},
 		},
 	}
+}
+
+// cjkReachableUpper returns the uppercase ASCII letters a user can actually
+// produce while a CJK input source is active.
+//
+// Under a 2-set Korean layout, Shift only yields a distinct character on the
+// keys carrying a doubled consonant or ㅒ/ㅖ (q/w/e/r/t/o/p). Every other key
+// emits the same jamo with and without Shift, and this bubbletea version's
+// tea.Key has no Shift field, so the distinction is genuinely lost before it
+// reaches us — a shortcut bound to, say, "F" can never fire. Binding two
+// actions to a case pair ("f"/"F") is therefore a latent bug: under a Korean
+// IME both presses land on whichever case the switch tests first.
+//
+// Derived from the langmap rather than hardcoded so the two cannot drift.
+func cjkReachableUpper() map[string]bool {
+	out := make(map[string]bool)
+	for _, latin := range defaultHangulToLatin() {
+		if len(latin) == 1 && latin[0] >= 'A' && latin[0] <= 'Z' {
+			out[latin] = true
+		}
+	}
+	return out
 }
 
 // LoadKeymap reads a YAML config file and merges it over defaults.
@@ -282,6 +334,24 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	if src.Session.Pick != "" {
 		dst.Session.Pick = src.Session.Pick
 	}
+	if src.Session.FoldAll != "" {
+		dst.Session.FoldAll = src.Session.FoldAll
+	}
+	if src.Session.ExpandAll != "" {
+		dst.Session.ExpandAll = src.Session.ExpandAll
+	}
+	if src.Session.FoldGroup != "" {
+		dst.Session.FoldGroup = src.Session.FoldGroup
+	}
+	if src.Session.StateMenu != "" {
+		dst.Session.StateMenu = src.Session.StateMenu
+	}
+	if src.Session.DailyView != "" {
+		dst.Session.DailyView = src.Session.DailyView
+	}
+	if src.Session.PageMenu != "" {
+		dst.Session.PageMenu = src.Session.PageMenu
+	}
 
 	// Actions
 	if src.Actions.Delete != "" {
@@ -334,6 +404,12 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Actions.Remote != "" {
 		dst.Actions.Remote = src.Actions.Remote
+	}
+	if src.Actions.Tags != "" {
+		dst.Actions.Tags = src.Actions.Tags
+	}
+	if src.Actions.Edit != "" {
+		dst.Actions.Edit = src.Actions.Edit
 	}
 
 	// Views

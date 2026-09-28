@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -173,59 +174,47 @@ func (a *App) openConfigExplorer() (tea.Model, tea.Cmd) {
 }
 
 // keymapConfigItems creates synthetic config items for current keybindings.
+//
+// Walks the Keymap struct rather than listing fields by hand: the hand-written
+// list had drifted, omitting 15 bindings (most of the actions menu — fork,
+// edit, tags, copy — so the KEYMAPS page claimed keys did not exist that the
+// menu answered to). Reflection means a new field shows up here for free.
+// Section and entry labels come from the yaml tags, which are also what a
+// config.yaml override must spell, so the page doubles as the key reference.
 func (a *App) keymapConfigItems() []session.ConfigItem {
-	km := a.keymap
-	type kv struct{ key, val string }
-	sections := []struct {
-		name  string
-		binds []kv
-	}{
-		{"session", []kv{
-			{"quit", km.Session.Quit}, {"open", km.Session.Open}, {"edit", km.Session.Edit},
-			{"actions", km.Session.Actions}, {"views", km.Session.Views}, {"refresh", km.Session.Refresh},
-			{"search", km.Session.Search}, {"global_search", km.Session.GlobalSearch},
-			{"live", km.Session.Live}, {"select", km.Session.Select},
-			{"preview", km.Session.Preview}, {"preview_back", km.Session.PreviewBack},
-			{"command", km.Session.Command}, {"help", km.Session.Help},
-		}},
-		{"actions", []kv{
-			{"delete", km.Actions.Delete}, {"move", km.Actions.Move}, {"resume", km.Actions.Resume},
-			{"copy_path", km.Actions.CopyPath}, {"worktree", km.Actions.Worktree},
-			{"kill", km.Actions.Kill}, {"input", km.Actions.Input}, {"jump", km.Actions.Jump},
-			{"urls", km.Actions.URLs}, {"files", km.Actions.Files},
-			{"import_mem", km.Actions.ImportMem}, {"remove_mem", km.Actions.RemoveMem},
-		}},
-		{"views", []kv{
-			{"stats", km.Views.Stats}, {"config", km.Views.Config}, {"plugins", km.Views.Plugins},
-		}},
-		{"conversation", []kv{
-			{"jump_to_tree", km.Conversation.JumpToTree}, {"switch_region", km.Conversation.SwitchRegion},
-			{"execution_contexts", km.Conversation.ExecutionContexts},
-			{"region_up", km.Conversation.RegionUp}, {"region_down", km.Conversation.RegionDown},
-			{"live_toggle", km.Conversation.LiveToggle}, {"edit", km.Conversation.Edit},
-			{"actions", km.Conversation.Actions}, {"input", km.Conversation.Input},
-		}},
-		{"preview", []kv{
-			{"fold_all", km.Preview.FoldAll}, {"expand_all", km.Preview.ExpandAll},
-			{"filter", km.Preview.Filter}, {"copy_mode", km.Preview.CopyMode},
-			{"copy_all", km.Preview.CopyAll},
-		}},
-	}
 	var items []session.ConfigItem
-	for _, sec := range sections {
-		for _, b := range sec.binds {
-			if b.val == "" {
+	v := reflect.ValueOf(a.keymap)
+	t := v.Type()
+	for i := range t.NumField() {
+		section := yamlName(t.Field(i))
+		sv := v.Field(i)
+		if sv.Kind() != reflect.Struct {
+			continue
+		}
+		for j := range sv.NumField() {
+			f := sv.Field(j)
+			// Navigation holds []string alias lists, not single bindings.
+			if f.Kind() != reflect.String || f.String() == "" {
 				continue
 			}
 			items = append(items, session.ConfigItem{
 				Category:    session.ConfigKeymap,
-				Name:        b.key + " = " + b.val,
-				Description: sec.name + " keymap",
-				Group:       sec.name,
+				Name:        yamlName(sv.Type().Field(j)) + " = " + f.String(),
+				Description: section + " keymap",
+				Group:       section,
 			})
 		}
 	}
 	return items
+}
+
+// yamlName returns the field's yaml key, falling back to the Go field name.
+func yamlName(f reflect.StructField) string {
+	tag := f.Tag.Get("yaml")
+	if name, _, _ := strings.Cut(tag, ","); name != "" && name != "-" {
+		return name
+	}
+	return f.Name
 }
 
 // shortcutConfigItems creates synthetic config items for number shortcuts.
@@ -396,7 +385,9 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.updateConfigPreview()
 		}
 		return a, nil
-	case "N":
+	// "b" (back), not "N": a Korean input source cannot produce "N", which left
+	// reverse match navigation unreachable. See cjkReachableUpper.
+	case "b":
 		if a.cfgSearchTerm != "" {
 			a.prevCfgMatch()
 			sp.CacheKey = "" // force preview refresh with highlights
@@ -1259,7 +1250,7 @@ func (a *App) rebuildCfgList() {
 	a.cfgList = newConfigList(items, listW, contentH)
 	a.applyCfgDelegate()
 
-	// Build match indices for n/N navigation
+	// Build match indices for n/b navigation
 	a.cfgSearchMatch = nil
 	a.cfgSearchIdx = 0
 	if a.cfgSearchTerm != "" {
@@ -1310,7 +1301,7 @@ func (a *App) enterCfgSkillBrowser(ci cfgItem) (tea.Model, tea.Cmd) {
 
 // rebuildSkillBrowserList rebuilds the skill file list from cfgSkillDir, filtered
 // by the current search term. Called via rebuildCfgList while in browser mode so
-// `/`/n/N/clearCfgSearch work without swapping back to the main config tree.
+// `/`/n/b/clearCfgSearch work without swapping back to the main config tree.
 func (a *App) rebuildSkillBrowserList() {
 	items := buildSkillFileItems(a.cfgSkillDir, a.cfgSkillName, a.cfgSearchTerm)
 	contentH := ContentHeight(a.height)

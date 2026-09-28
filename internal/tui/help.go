@@ -193,7 +193,7 @@ func (a *App) configHelpLine() string {
 			if len(a.cfgSearchMatch) == 0 {
 				badge = "[0/0]"
 			}
-			return "  " + filterBadge.Render(badge) + formatHelp(" n/N:next/prev esc:clear-search")
+			return "  " + filterBadge.Render(badge) + formatHelp(" n/b:next/prev esc:clear-search")
 		}
 		if a.cfgSplit.Show && a.cfgSplit.Focus {
 			h = "↑↓:scroll esc:unfocus"
@@ -210,7 +210,7 @@ func (a *App) configHelpLine() string {
 		if len(a.cfgSearchMatch) == 0 {
 			badge = "[0/0]"
 		}
-		return "  " + filterBadge.Render(badge) + formatHelp(" n/N:next/prev esc:clear")
+		return "  " + filterBadge.Render(badge) + formatHelp(" n/b:next/prev esc:clear")
 	}
 
 	h := "↵:open x:actions []:page " + a.keymap.Session.Search + ":search " + a.keymap.Session.Views + ":views"
@@ -246,7 +246,7 @@ func (a *App) pluginsHelpLine() string {
 		return "  " + a.plgSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
 	}
 	if a.plgSearchTerm != "" {
-		return "  " + filterBadge.Render(a.plgSearchTerm) + formatHelp(" n/N:next/prev esc:clear")
+		return "  " + filterBadge.Render(a.plgSearchTerm) + formatHelp(" n/b:next/prev esc:clear")
 	}
 	h := "↵:open →:preview x:actions []:page " + a.keymap.Session.Search + ":search"
 	if a.plgSplit.Show && a.plgSplit.Focus {

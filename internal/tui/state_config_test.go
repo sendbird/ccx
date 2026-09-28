@@ -37,18 +37,21 @@ func TestLoadCCXConfigLoadsOpenCommandTemplate(t *testing.T) {
 
 // TestLoadCCXConfigResolvesJumpTreeRegionCollision verifies a stale config that
 // maps jump_to_tree onto the region-down key is repaired at load: jump_to_tree
-// snaps back to its default ("o") so region navigation (K/J) keeps its keys.
+// snaps back to its default ("o") so region navigation keeps its keys.
 func TestLoadCCXConfigResolvesJumpTreeRegionCollision(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	cfg := "keymaps:\n  conversation:\n    jump_to_tree: J\n    region_up: K\n    region_down: J\n"
+	def := DefaultKeymap().Conversation
+	cfg := "keymaps:\n  conversation:\n    jump_to_tree: " + def.RegionDown +
+		"\n    region_up: " + def.RegionUp +
+		"\n    region_down: " + def.RegionDown + "\n"
 	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	km, _, _, _, _, _, _ := LoadCCXConfig(path)
-	if km.Conversation.RegionDown != "J" {
-		t.Fatalf("RegionDown = %q, want J", km.Conversation.RegionDown)
+	if km.Conversation.RegionDown != def.RegionDown {
+		t.Fatalf("RegionDown = %q, want %q", km.Conversation.RegionDown, def.RegionDown)
 	}
 	want := DefaultKeymap().Conversation.JumpToTree
 	if km.Conversation.JumpToTree != want {

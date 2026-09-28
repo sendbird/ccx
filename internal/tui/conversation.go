@@ -627,6 +627,26 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 		}
+		// Fold-all / expand-all for the focused preview's blocks. Dispatched
+		// here rather than inside FoldState.HandleKey so the binding comes from
+		// the keymap — FoldState has no access to it, which is why these were
+		// stuck on the hardcoded "f"/"F" pair that a Korean input source
+		// collapses into one key (see cjkReachableUpper).
+		if sp.Folds != nil && sp.Folds.Collapsed != nil {
+			switch key {
+			case a.keymap.Preview.FoldAll, a.keymap.Preview.ExpandAll:
+				if key == a.keymap.Preview.FoldAll {
+					sp.Folds.FoldAll()
+				} else {
+					sp.Folds.ExpandAll()
+				}
+				sp.SyncTypePrefs(true)
+				sp.ScrollToBlock()
+				sp.RefreshFoldPreview(a.width, a.splitRatio)
+				return a, nil
+			}
+		}
+
 		result = sp.HandleFocusedKeys(key)
 		switch result {
 		case splitKeySearchFromPreview:

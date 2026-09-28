@@ -189,6 +189,12 @@ func pressKey(app *App, key string) *App {
 		msg = tea.KeyMsg{Type: tea.KeyEnd}
 	case "esc":
 		msg = tea.KeyMsg{Type: tea.KeyEscape}
+	case "ctrl+p":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlP}
+	case "ctrl+n":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlN}
+	case "ctrl+l":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlL}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
