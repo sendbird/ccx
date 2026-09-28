@@ -661,16 +661,16 @@ func TestDailyViewTogglesWithSingleKey(t *testing.T) {
 	app.preDailyGroupMode = groupProjectCentric
 	app.rebuildSessionList()
 
-	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(app.keymap.Session.DailyView)})
 	app = m.(*App)
 	if app.sessGroupMode != groupDaily {
-		t.Fatalf("expected D to enter the daily view, got mode %d", app.sessGroupMode)
+		t.Fatalf("expected the daily-view key to enter the daily view, got mode %d", app.sessGroupMode)
 	}
 	if _, ok := app.sessionList.VisibleItems()[0].(dayItem); !ok {
 		t.Fatal("expected a date row after toggling into the daily view")
 	}
 
-	m, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	m, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(app.keymap.Session.DailyView)})
 	app = m.(*App)
 	if app.sessGroupMode != groupProjectCentric {
 		t.Fatalf("expected D to restore the previous grouping, got mode %d", app.sessGroupMode)
@@ -825,10 +825,10 @@ func TestDailyToggleWorksWithPreviewFocused(t *testing.T) {
 	app.sessSplit.Show = true
 	app.sessSplit.Focus = true
 
-	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(app.keymap.Session.DailyView)})
 	app = m.(*App)
 	if app.sessGroupMode != groupDaily {
-		t.Fatalf("expected D to work with the preview focused, got mode %d", app.sessGroupMode)
+		t.Fatalf("expected the daily-view key to work with the preview focused, got mode %d", app.sessGroupMode)
 	}
 }
 

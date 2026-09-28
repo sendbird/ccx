@@ -3,6 +3,9 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,8 +48,8 @@ func TestDefaultKeymap(t *testing.T) {
 	if km.Actions.Edit != "e" {
 		t.Errorf("Actions.Edit = %q, want e (actions-menu edit)", km.Actions.Edit)
 	}
-	if km.Session.Views != "V" {
-		t.Errorf("Session.Views = %q, want V", km.Session.Views)
+	if km.Session.Views != "v" {
+		t.Errorf("Session.Views = %q, want v", km.Session.Views)
 	}
 
 	// Verify actions keys
@@ -62,8 +65,8 @@ func TestDefaultKeymap(t *testing.T) {
 	if km.Conversation.SwitchRegion != "P" {
 		t.Errorf("DefaultKeymap().Conversation.SwitchRegion=%q, want P", km.Conversation.SwitchRegion)
 	}
-	if km.Conversation.ExecutionContexts != "A" {
-		t.Errorf("DefaultKeymap().Conversation.ExecutionContexts=%q, want A", km.Conversation.ExecutionContexts)
+	if km.Conversation.ExecutionContexts != "a" {
+		t.Errorf("DefaultKeymap().Conversation.ExecutionContexts=%q, want a", km.Conversation.ExecutionContexts)
 	}
 }
 
@@ -386,18 +389,34 @@ func TestLoadKeymap_WithNavigation(t *testing.T) {
 func TestMigrateKeymapDefaults(t *testing.T) {
 	cfg := &CCXConfig{}
 	cfg.Keymaps.Session.Edit = "e"
-	cfg.Keymaps.Session.Views = "v"
+	cfg.Keymaps.Session.Views = "V"
 	cfg.Keymaps.Session.Live = "L"
 	cfg.Keymaps.Session.Switch = "s"
 	cfg.Keymaps.Session.Refresh = "R" // unchanged default
 	cfg.Keymaps.Session.Help = "H"    // user-customized, must survive
+	cfg.Keymaps.Actions.Fork = "F"
+	cfg.Keymaps.Conversation.RegionUp = "K"
+	cfg.Keymaps.Preview.ExpandAll = "F"
+	cfg.Keymaps.Session.DailyView = "D"
 	migrateKeymapDefaults(cfg)
 
 	if cfg.Keymaps.Session.Edit != "" {
 		t.Errorf("Edit = %q, want empty (moved to actions menu)", cfg.Keymaps.Session.Edit)
 	}
-	if cfg.Keymaps.Session.Views != "V" {
-		t.Errorf("Views = %q, want V", cfg.Keymaps.Session.Views)
+	if cfg.Keymaps.Session.Views != "v" {
+		t.Errorf("Views = %q, want v (CJK-reachable rebind)", cfg.Keymaps.Session.Views)
+	}
+	if cfg.Keymaps.Actions.Fork != "b" {
+		t.Errorf("Actions.Fork = %q, want b", cfg.Keymaps.Actions.Fork)
+	}
+	if cfg.Keymaps.Conversation.RegionUp != "ctrl+p" {
+		t.Errorf("Conversation.RegionUp = %q, want ctrl+p", cfg.Keymaps.Conversation.RegionUp)
+	}
+	if cfg.Keymaps.Preview.ExpandAll != "u" {
+		t.Errorf("Preview.ExpandAll = %q, want u", cfg.Keymaps.Preview.ExpandAll)
+	}
+	if cfg.Keymaps.Session.DailyView != "d" {
+		t.Errorf("Session.DailyView = %q, want d", cfg.Keymaps.Session.DailyView)
 	}
 	if cfg.Keymaps.Session.Live != "" {
 		t.Errorf("Live = %q, want empty (removed)", cfg.Keymaps.Session.Live)
@@ -410,5 +429,208 @@ func TestMigrateKeymapDefaults(t *testing.T) {
 	}
 	if cfg.Keymaps.Session.Help != "H" {
 		t.Errorf("Help = %q, want H preserved (user override)", cfg.Keymaps.Session.Help)
+	}
+}
+
+// TestDefaultKeymapIsReachableUnderCJK is the guard for a whole bug class: a
+// default bound to an uppercase letter that a 2-set Korean layout cannot
+// produce is dead for anyone typing under that input source, and when a
+// lowercase action shares the letter (Files "f" vs Fork "F", Move "m" vs
+// ImportMem "M") the switch silently resolves every press to whichever case it
+// tests first. Reflection over the whole struct means a newly added field is
+// covered without anyone remembering to extend this list.
+func TestDefaultKeymapIsReachableUnderCJK(t *testing.T) {
+	reachable := cjkReachableUpper()
+	km := DefaultKeymap()
+	v := reflect.ValueOf(km)
+	for i := 0; i < v.NumField(); i++ {
+		sec, secName := v.Field(i), v.Type().Field(i).Name
+		if sec.Kind() != reflect.Struct {
+			continue
+		}
+		for j := 0; j < sec.NumField(); j++ {
+			f := sec.Field(j)
+			if f.Kind() != reflect.String {
+				continue
+			}
+			key := f.String()
+			// Only bare single letters are at risk; "ctrl+…"/"shift+tab"/"enter"
+			// and friends carry a modifier or name that survives the IME.
+			if len(key) != 1 || key[0] < 'A' || key[0] > 'Z' {
+				continue
+			}
+			if !reachable[key] {
+				t.Errorf("%s.%s = %q is unreachable under a 2-set Korean input source; "+
+					"use a lowercase or ctrl+ binding (reachable uppercase: %v)",
+					secName, sec.Type().Field(j).Name, key, reachable)
+			}
+		}
+	}
+}
+
+// TestActionsMenuKeysAreUnique guards the other half of the same failure: two
+// actions in one menu answering to the same key, where only the first case in
+// the switch can ever run.
+func TestActionsMenuKeysAreUnique(t *testing.T) {
+	akm := DefaultKeymap().Actions
+	v := reflect.ValueOf(akm)
+	seen := map[string]string{}
+	for i := 0; i < v.NumField(); i++ {
+		key := v.Field(i).String()
+		name := v.Type().Field(i).Name
+		if key == "" {
+			continue
+		}
+		if prev, dup := seen[key]; dup {
+			t.Errorf("Actions.%s and Actions.%s both bind %q; the later case is dead", prev, name, key)
+		}
+		seen[key] = name
+	}
+}
+
+// TestSessionTopLevelKeysAreUnique does the same for the session list. Only the
+// bindings that dispatch from its one top-level switch are listed — Left/Right
+// and the preview keys are handled in separate, mutually exclusive branches, so
+// sharing a key with them is not a conflict.
+func TestSessionTopLevelKeysAreUnique(t *testing.T) {
+	km := DefaultKeymap().Session
+	seen := map[string]string{}
+	for _, b := range []struct{ name, key string }{
+		{"Quit", km.Quit}, {"Escape", km.Escape}, {"Open", km.Open},
+		{"Actions", km.Actions}, {"Views", km.Views}, {"Refresh", km.Refresh},
+		{"Help", km.Help}, {"Search", km.Search}, {"GlobalSearch", km.GlobalSearch},
+		{"Select", km.Select}, {"Preview", km.Preview}, {"PreviewBack", km.PreviewBack},
+		{"ResizeShrink", km.ResizeShrink}, {"ResizeGrow", km.ResizeGrow},
+		{"Command", km.Command}, {"Pick", km.Pick},
+		{"FoldAll", km.FoldAll}, {"ExpandAll", km.ExpandAll}, {"FoldGroup", km.FoldGroup},
+		{"StateMenu", km.StateMenu}, {"DailyView", km.DailyView}, {"PageMenu", km.PageMenu},
+	} {
+		if b.key == "" {
+			continue
+		}
+		if prev, dup := seen[b.key]; dup {
+			t.Errorf("Session.%s and Session.%s both bind %q; the later case is dead", prev, b.name, b.key)
+		}
+		seen[b.key] = b.name
+	}
+}
+
+// TestNoHardcodedUnreachableKeyLiterals scans the package source for key
+// dispatch on a bare uppercase letter that a 2-set Korean layout cannot
+// produce. The reflection guard above only sees the Keymap struct, so a
+// literal like `key == "D"` sitting directly in a handler is invisible to it —
+// which is exactly how the daily-view toggle stayed unreachable. Matching on
+// source is blunt, but it covers the gap the struct walk cannot.
+func TestNoHardcodedUnreachableKeyLiterals(t *testing.T) {
+	reachable := cjkReachableUpper()
+	// Only dispatch sites: `case "X":` / `case "X",` and comparisons against a
+	// key variable. Deliberately NOT bare `== "X"`, which also matches config
+	// migrations comparing an old default (`s.Live == "L"`).
+	pat := regexp.MustCompile(`case\s+"([A-Z])"\s*[:,]|(?:key|String\(\))\s*==\s*"([A-Z])"`)
+	multiCharKey := regexp.MustCompile(`"[a-z]{2,}"`)
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			m := pat.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			key := m[1]
+			if key == "" {
+				key = m[2]
+			}
+			if reachable[key] {
+				continue
+			}
+			// An adjacent lowercase alternative (`"y" || "Y"`) or a named key
+			// (`case "G", "end":`) keeps the action reachable anyway.
+			if strings.Contains(line, `"`+strings.ToLower(key)+`"`) || multiCharKey.MatchString(line) {
+				continue
+			}
+			t.Errorf("%s:%d dispatches on %q, which is unreachable under a 2-set "+
+				"Korean input source. Move it into the Keymap (so the reflection "+
+				"guard covers it) and pick a lowercase or ctrl+ binding.\n\t%s",
+				name, i+1, key, strings.TrimSpace(line))
+		}
+	}
+}
+
+// TestKeymapConfigItemsCoverEveryBinding pins the KEYMAPS config page to the
+// Keymap struct. The page used to list fields by hand and had drifted, omitting
+// 15 bindings — most of the actions menu — so it reported keys as nonexistent
+// that the menu answered to. Reflection closed that gap; this keeps it closed.
+func TestKeymapConfigItemsCoverEveryBinding(t *testing.T) {
+	app := &App{keymap: DefaultKeymap()}
+	listed := map[string]bool{}
+	for _, it := range app.keymapConfigItems() {
+		name, _, _ := strings.Cut(it.Name, " = ")
+		listed[it.Group+"."+name] = true
+	}
+
+	km := reflect.ValueOf(DefaultKeymap())
+	kt := km.Type()
+	for i := range kt.NumField() {
+		section := yamlName(kt.Field(i))
+		sv := km.Field(i)
+		if sv.Kind() != reflect.Struct {
+			continue
+		}
+		for j := range sv.NumField() {
+			f := sv.Field(j)
+			// Empty defaults are intentionally unbound, and Navigation holds
+			// []string alias lists rather than single bindings.
+			if f.Kind() != reflect.String || f.String() == "" {
+				continue
+			}
+			want := section + "." + yamlName(sv.Type().Field(j))
+			if !listed[want] {
+				t.Errorf("KEYMAPS config page omits %q; it is bound by default but invisible there", want)
+			}
+		}
+	}
+}
+
+// TestFillKeymapDefaultsCoversEveryField guards the config round-trip: a field
+// fillKeymapDefaults forgets is written to config.yaml empty, so a user editing
+// the file sees a blank where a binding should be. Actions.Changes/Copy/Tags
+// were missing exactly this way.
+func TestFillKeymapDefaultsCoversEveryField(t *testing.T) {
+	d := DefaultKeymap()
+	cfg := &CCXConfig{}
+	fillKeymapDefaults(cfg, d)
+
+	filled := reflect.ValueOf(cfg.Keymaps)
+	want := reflect.ValueOf(d)
+	wantType := want.Type()
+	for i := range wantType.NumField() {
+		section := wantType.Field(i).Name
+		fs := filled.FieldByName(section)
+		if !fs.IsValid() || fs.Kind() != reflect.Struct {
+			continue // Navigation, or a section KeymapsConfig does not carry
+		}
+		ws := want.Field(i)
+		for j := range ws.NumField() {
+			wf := ws.Field(j)
+			if wf.Kind() != reflect.String || wf.String() == "" {
+				continue
+			}
+			name := ws.Type().Field(j).Name
+			if got := fs.FieldByName(name); got.IsValid() && got.String() == "" {
+				t.Errorf("fillKeymapDefaults left %s.%s empty; it would round-trip "+
+					"to config.yaml as a blank binding", section, name)
+			}
+		}
 	}
 }

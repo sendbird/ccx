@@ -63,7 +63,7 @@ func TestExecutionRowShowsLifecycleStatusAndTimes(t *testing.T) {
 
 func TestExecutionContextMenuJumpsToSpawnOrigin(t *testing.T) {
 	app, sess, _ := setupConversationStateFixture(t)
-	app = pressKey(app, "A")
+	app = pressKey(app, app.keymap.Conversation.ExecutionContexts)
 	app = pressKey(app, "down") // cursor → parent agent context
 	if got := app.cursorExecutionContext().Agent.ID; got != "parent1111111111" {
 		t.Fatalf("rail cursor = %q, want parent agent", got)
@@ -110,7 +110,7 @@ func TestExecutionRailAndMenuSuppressGlobalShortcuts(t *testing.T) {
 	if app.isInOverlay() {
 		t.Fatal("precondition: overlay active before focusing rail")
 	}
-	app = pressKey(app, "A")
+	app = pressKey(app, app.keymap.Conversation.ExecutionContexts)
 	if !app.conv.execution.Focused || !app.isInOverlay() {
 		t.Fatalf("rail focus must count as overlay: focus=%t overlay=%t", app.conv.execution.Focused, app.isInOverlay())
 	}
@@ -137,7 +137,7 @@ func TestExecutionRailAndMenuSuppressGlobalShortcuts(t *testing.T) {
 
 func TestExecutionContextMenuMainHasNoOrigin(t *testing.T) {
 	app, _, _ := setupConversationStateFixture(t)
-	app = pressKey(app, "A") // cursor starts on main
+	app = pressKey(app, app.keymap.Conversation.ExecutionContexts) // cursor starts on main
 	if app.cursorExecutionContext().Agent.ID != "" {
 		t.Fatal("expected main context at rail cursor")
 	}
@@ -162,7 +162,7 @@ func TestExecutionRailSwitchesContextsAndRestoresSelection(t *testing.T) {
 
 	app.selectConvBody(2)
 	mainSelection := app.selectedConversationItemID()
-	app = pressKey(app, "A")
+	app = pressKey(app, app.keymap.Conversation.ExecutionContexts)
 	if !app.conv.execution.Focused {
 		t.Fatal("A did not focus execution rail")
 	}
@@ -180,7 +180,7 @@ func TestExecutionRailSwitchesContextsAndRestoresSelection(t *testing.T) {
 
 	app.selectConvBody(len(app.convList.VisibleItems()) - 1)
 	agentSelection := app.selectedConversationItemID()
-	app = pressKey(app, "A")
+	app = pressKey(app, app.keymap.Conversation.ExecutionContexts)
 	app = pressKey(app, "home")
 	app = pressKey(app, "enter")
 	if app.conv.execution.ActiveKey != executionContextKey(sess.FilePath) {
@@ -190,7 +190,7 @@ func TestExecutionRailSwitchesContextsAndRestoresSelection(t *testing.T) {
 		t.Fatalf("main selection = %q, want %q", got, mainSelection)
 	}
 
-	app = pressKey(app, "A")
+	app = pressKey(app, app.keymap.Conversation.ExecutionContexts)
 	app = pressKey(app, "down")
 	app = pressKey(app, "enter")
 	if got := app.selectedConversationItemID(); got != agentSelection {
@@ -222,13 +222,13 @@ func TestExecutionRailPreservesInlineDrillStack(t *testing.T) {
 
 	// Re-selecting the current context through the rail must not destroy the
 	// parent route, even though activateExecutionContext is a no-op.
-	app = pressKey(app, "A")
+	app = pressKey(app, app.keymap.Conversation.ExecutionContexts)
 	app = pressKey(app, "enter")
 	if len(app.navStack) != 1 {
 		t.Fatalf("rail re-selection cleared inline drill stack: %d", len(app.navStack))
 	}
 
-	app = pressKey(app, "A")
+	app = pressKey(app, app.keymap.Conversation.ExecutionContexts)
 	app = pressKey(app, "home")
 	app = pressKey(app, "enter")
 	if !app.hasFilterApplied() || app.convList.FilterInput.Value() != "parent" {
@@ -572,29 +572,29 @@ func TestRegionNavigationCyclesWithJK(t *testing.T) {
 	}
 
 	// J descends: pinned → timeline → execution, then stops.
-	app = pressKey(app, "J")
+	app = pressKey(app, app.keymap.Conversation.RegionDown)
 	if got := app.currentConversationRegion(); got != conversationRegionTimeline {
 		t.Fatalf("after J region = %v, want timeline", got)
 	}
-	app = pressKey(app, "J")
+	app = pressKey(app, app.keymap.Conversation.RegionDown)
 	if got := app.currentConversationRegion(); got != conversationRegionExecution {
 		t.Fatalf("after JJ region = %v, want execution", got)
 	}
-	app = pressKey(app, "J")
+	app = pressKey(app, app.keymap.Conversation.RegionDown)
 	if got := app.currentConversationRegion(); got != conversationRegionExecution {
 		t.Fatalf("J past bottom region = %v, want execution (clamped)", got)
 	}
 
 	// K ascends back to the top and stops.
-	app = pressKey(app, "K")
+	app = pressKey(app, app.keymap.Conversation.RegionUp)
 	if got := app.currentConversationRegion(); got != conversationRegionTimeline {
 		t.Fatalf("after K region = %v, want timeline", got)
 	}
-	app = pressKey(app, "K")
+	app = pressKey(app, app.keymap.Conversation.RegionUp)
 	if got := app.currentConversationRegion(); got != conversationRegionPinned {
 		t.Fatalf("after KK region = %v, want pinned", got)
 	}
-	app = pressKey(app, "K")
+	app = pressKey(app, app.keymap.Conversation.RegionUp)
 	if got := app.currentConversationRegion(); got != conversationRegionPinned {
 		t.Fatalf("K past top region = %v, want pinned (clamped)", got)
 	}
@@ -617,7 +617,7 @@ func TestRegionNavAndJumpDeferToOpenModals(t *testing.T) {
 	if !app.convActionsMenu {
 		t.Fatal("x did not open the actions menu")
 	}
-	app = pressKey(app, "J")
+	app = pressKey(app, app.keymap.Conversation.RegionDown)
 	if app.currentConversationRegion() != conversationRegionPinned {
 		t.Fatal("J moved the region while the actions menu was open")
 	}
@@ -638,10 +638,10 @@ func TestJumpTreeCollisionBreaksThenResolvesRegionNav(t *testing.T) {
 	}
 
 	// Simulate the stale collision: jump_to_tree bound to the region-down key.
-	app.keymap.Conversation.JumpToTree = app.keymap.Conversation.RegionDown // "J"
+	app.keymap.Conversation.JumpToTree = app.keymap.Conversation.RegionDown
 	app.focusConversationRegion(conversationRegionTimeline)
 	before := app.currentConversationRegion()
-	app = pressKey(app, "J")
+	app = pressKey(app, app.keymap.Conversation.RegionDown)
 	if app.currentConversationRegion() != before {
 		t.Fatalf("precondition: with the collision, J should be swallowed by jump, region moved to %v", app.currentConversationRegion())
 	}
@@ -652,7 +652,7 @@ func TestJumpTreeCollisionBreaksThenResolvesRegionNav(t *testing.T) {
 		t.Fatal("resolveConversationConflicts did not clear the collision")
 	}
 	app.focusConversationRegion(conversationRegionTimeline)
-	app = pressKey(app, "J")
+	app = pressKey(app, app.keymap.Conversation.RegionDown)
 	if got := app.currentConversationRegion(); got != conversationRegionExecution {
 		t.Fatalf("after resolving, J region = %v, want execution", got)
 	}

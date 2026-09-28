@@ -112,14 +112,14 @@ Browse all Claude Code sessions across projects, sorted by recency.
 
 - **Status badges** — at-a-glance session state (see [Session Badges](#session-badges))
 - **Search** (`/`) — filter by project, branch, prompt, window name, or tags
-- **Group modes** (`G` or `:group:*`):
+- **Group modes** (`:group:*`, or bind a key to `session.group` in config):
   - **Flat** — simple list sorted by time
   - **Project** — clustered by project path
   - **Tree** — team hierarchy with leader/teammate nesting
   - **Chain** — resume-chain grouping (parent → child)
   - **Fork** — agent-fork grouping
-  - **Daily** (`D`) — day → project → session tree (newest day first), previewing what each level produced
-- **Directory filter** (`g`) — scope to a single project directory
+  - **Daily** (`d`) — day → project → session tree (newest day first), previewing what each level produced
+- **Project filter** — `/proj:<name>` scopes the list to one project
 - **Preview pane** (`Tab` to cycle): conversation, stats, memory, tasks/plan, workflows, outputs, references, live
 - **Fleet notifications** — when a live session transitions into an attention state (→ `WAIT`/`DONE`/`STUCK`), a `(!)N` indicator appears in the status bar; press `n` to jump to the most recently notified session
 - **Multi-select** (`Space`) — bulk delete, copy paths, send input
@@ -237,19 +237,19 @@ Drill into any session to see one chronological spine containing conversation tu
 - **Session facet picker** (`p`) — jump directly to session-wide URLs, images, changes/files, or contexts
 - **Zoom** (`z`, or `Enter` on a conversation turn) — render the same inspector full-width; `Esc` returns without changing selection or fold state
 - **Three conversation detail levels** — Compact (text), Standard (text + artifacts), and Verbose (tools, results, hooks); use `detail:text|tool|hook` in command mode
-- **Block navigation and folding** (`↑`/`↓`, `←`/`→`, `f`/`F`) — navigate and disclose content in both split and zoomed inspectors
+- **Block navigation and folding** (`↑`/`↓`, `←`/`→`, `f`/`u`) — navigate and disclose content in both split and zoomed inspectors
 - **Block filter** (`/`) — filter by `is:tool`, `is:hook`, `is:error`, `is:skill`, `is:mcp`, `tool:Name`, or `tool:Prefix*`
 - **Copy mode** (`v`) — line selection works in the same inspector, including zoomed structured/verbose content
-- **Exact provenance jump** (`J`) — lifecycle and artifact rows jump to their owning conversation turn
+- **Exact provenance jump** (`o`) — lifecycle and artifact rows jump to their owning conversation turn
 - **Recursive subagent drill-down** (`Enter` on agent) — opens the agent transcript with a back-stack while preserving inspector state
 - **Kitty image preview** — inline, aspect-ratio-preserving rendering for Kitty-compatible terminals (kitty, WezTerm, ghostty), including images owned by subagent transcripts
-- **Live controls** — `L` toggles live tail, `I` sends input, and `J` switches to the tmux pane when a conversation turn is selected
+- **Live controls** — `Ctrl+L` toggles live tail, `w` sends input, and `o` switches to the tmux pane when a conversation turn is selected
 
 ![Kitty image preview](docs/gifs/08-kitty-image-preview.png)
 
-#### Daily Activity View (`D`, or `:group:daily`)
+#### Daily Activity View (`d`, or `:group:daily`)
 
-A date-first view for reviewing what got done rather than which project it happened in. Press `D` to flip into it from any grouping and `D` again to return — it is an axis you toggle while reading, not a mode you commit to. `D` works whether the list or the preview has focus, keeps the cursor on the same session across the swap, and remembers the grouping it returns to across restarts (so starting in the daily view still takes you back to *your* view, not the default). Each view keeps its own preview mode — the daily view opens on outputs, the project browser on the conversation — so a swap never lands you on the wrong pane.
+A date-first view for reviewing what got done rather than which project it happened in. Press `d` to flip into it from any grouping and `d` again to return — it is an axis you toggle while reading, not a mode you commit to. `d` works whether the list or the preview has focus, keeps the cursor on the same session across the swap, and remembers the grouping it returns to across restarts (so starting in the daily view still takes you back to *your* view, not the default). Each view keeps its own preview mode — the daily view opens on outputs, the project browser on the conversation — so a swap never lands you on the wrong pane.
 
 The list nests three tiers — **day → project → session** — each folding with `Enter`/`o` and aggregating exactly what its level needs: a date row rolls up the whole day, a project row rolls up that day's work in one repo, and sessions sit underneath. A busy day really can hold 250+ sessions across 30 projects, and the project tier is what keeps that readable.
 
@@ -392,8 +392,11 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 |-----|--------|
 | `Enter` | Open conversation view |
 | `/` | Search/filter sessions |
-| `g` | Filter by project directory |
-| `G` | Cycle group mode |
+| `g` / `G` | Jump to top / bottom of the list (`gg` also works) |
+| `o` | Fold/unfold the group at the cursor |
+| `f` / `u` | Fold all groups / expand all groups |
+| `s` | Session-state filter menu (live/done/…) |
+| `d` | Daily view (dates + what each day produced) |
 | `Tab` | Cycle preview mode |
 | `Shift+Tab` | Reverse cycle preview |
 | `→` | Open/focus preview |
@@ -406,11 +409,11 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `v` | Views menu (stats/config/plugins) |
 | `:` | Command mode |
 | `Ctrl+S` | Cross-session search (in results: `enter` jumps, `r` attaches/resumes) |
-| `L` | Live preview (tmux) |
-| `I` | Send input to live session |
-| `J` | Jump to tmux pane |
+| `p` → `l` | Live preview (tmux) |
+| `x` → `i` | Send input to live session |
+| `x` → `j` | Jump to tmux pane |
 | `R` | Refresh |
-| `S` | Global stats |
+| `v` → `s` | Global stats |
 | `?` | Help |
 | `q` | Quit |
 
@@ -423,7 +426,7 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `Tab` | Switch focus between flow spine and inspector |
 | `↑` / `↓` | Navigate only within the active region or inspector blocks |
 | `←` / `→` | Fold/unfold node or block |
-| `f` / `F` | Fold/unfold all blocks |
+| `f` / `u` | Fold/unfold all blocks |
 | `[` / `]` | Previous/next non-empty inspector facet |
 | `s` | Scope: Node → Subtree → Session |
 | `z` | Toggle the same inspector full-width |
@@ -432,9 +435,11 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `v` | Copy mode in the focused conversation inspector |
 | `x` | Inspector actions (refs, changes/files, copy) |
 | `e` | Edit menu (session/agent JSONL, text export) |
-| `L` | Toggle live tail |
-| `I` | Send input to a live session |
-| `J` | Jump lifecycle/artifact row to its exact origin; on a turn, jump to tmux pane |
+| `Ctrl+L` | Toggle live tail |
+| `w` | Send input to a live session |
+| `o` | Jump lifecycle/artifact row to its exact origin; on a turn, jump to tmux pane |
+| `Ctrl+P` / `Ctrl+N` | Move between stacked regions (resources / conversation / execution) |
+| `a` | Execution-contexts rail |
 | `R` | Refresh |
 | `Esc` | Exit zoom, close inspector, pop drill-down, or return to sessions |
 
@@ -633,12 +638,35 @@ The actions menu (`x` key) provides session-specific operations:
 | `w` | Create git worktree | Always |
 | `u` | Extract URLs | Always |
 | `f` | Extract file paths | Always |
-| `F` | Fork session | Always |
-| `X` | Remove memory files | Has memory |
-| `M` | Import memory from worktree | Is worktree |
+| `b` | Fork session (branch off) | Always |
+| `z` | Remove memory files | Has memory |
+| `a` | Import memory from worktree | Is worktree |
+| `c` | Copy session | Always |
+| `t` | Tags/badges | Always |
+| `e` | Edit menu (session files) | Always |
+| `g` | Extract changes | Always |
+| `n` | New session | Always |
 | `k` | Kill live session | Live + tmux |
 | `i` | Send input | Live + tmux |
 | `j` | Jump to tmux pane | Live + tmux |
+
+### Keybindings and CJK input sources
+
+Defaults avoid binding an action to a bare uppercase letter. Under a 2-set
+Korean layout, Shift only produces a distinct character on the keys carrying a
+doubled consonant or ㅒ/ㅖ (`q w e r t o p`); every other key sends the same
+jamo with and without Shift, and the terminal gives us no separate Shift flag.
+A shortcut on, say, `F` is therefore dead for anyone typing under that input
+source — and if a lowercase action shares the letter, that one silently
+swallows both presses.
+
+Use a lowercase key, or a `ctrl+` combination (modifiers survive the IME), and
+pick distinct letters rather than a case pair. `TestDefaultKeymapIsReachableUnderCJK`
+enforces this over the whole keymap, so a new binding is covered automatically.
+
+Single-letter shortcuts still work while a Korean IME is active: ccx maps the
+jamo back to the Latin key at the same physical position (`langmap` in
+`config.yaml` overrides or extends this for other layouts).
 
 ## Development
 

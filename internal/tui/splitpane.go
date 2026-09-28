@@ -51,13 +51,13 @@ type SplitPane struct {
 // FoldState holds fold/unfold and block cursor state for previews
 // that render structured content blocks.
 type FoldState struct {
-	Collapsed      foldSet
-	Formatted      foldSet
-	Entry          session.Entry
-	BlockCursor    int
-	BlockStarts    []int
-	BlockVisible   []bool  // nil = all visible; non-nil = per-block visibility
-	BlockFilter    string  // current filter expression (empty = no filter)
+	Collapsed    foldSet
+	Formatted    foldSet
+	Entry        session.Entry
+	BlockCursor  int
+	BlockStarts  []int
+	BlockVisible []bool // nil = all visible; non-nil = per-block visibility
+	BlockFilter  string // current filter expression (empty = no filter)
 	// ExtraHighlight are terms to paint that did not come from BlockFilter —
 	// currently the cross-session search query the jump into this conversation
 	// came from. Kept separate so clearing the block filter does not drop them.
@@ -647,7 +647,7 @@ func foldHash(collapsed, formatted foldSet) uint64 {
 // Pass false for "left" key actions — left progressively collapses
 // (unformat → fold → switch-to-list), and the intermediate unformat
 // step should NOT clear the persistent format preference. Pass true
-// for "right" (explicit format toggle) and "f"/"F" (reset all folds).
+// for "right" (explicit format toggle) and fold-all/expand-all.
 func (sp *SplitPane) SyncTypePrefs(syncFmt bool) {
 	if sp.Folds == nil || len(sp.Folds.Entry.Content) == 0 {
 		return
@@ -800,16 +800,21 @@ func (fs *FoldState) HandleKey(key string) foldResult {
 			fs.BlockCursor = next
 		}
 		return foldHandled
-	case "f":
-		fs.Collapsed = defaultFolds(fs.Entry)
-		fs.Formatted = nil
-		return foldHandled
-	case "F":
-		fs.Collapsed = make(foldSet)
-		fs.Formatted = nil
-		return foldHandled
 	}
 	return foldUnhandled
+}
+
+// FoldAll collapses every block back to the per-type defaults; ExpandAll opens
+// them all. Callers own the key binding (Preview.FoldAll/ExpandAll) because
+// FoldState has no access to the keymap — see handleConversationKeys.
+func (fs *FoldState) FoldAll() {
+	fs.Collapsed = defaultFolds(fs.Entry)
+	fs.Formatted = nil
+}
+
+func (fs *FoldState) ExpandAll() {
+	fs.Collapsed = make(foldSet)
+	fs.Formatted = nil
 }
 
 // isBlockVisible returns whether block i is visible under the current filter.
