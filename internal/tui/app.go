@@ -1553,7 +1553,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if a.isFiltering() {
+			wasSessions := a.state == viewSessions
 			m, cmd := a.updateActiveList(msg)
+			// Esc while editing drops the filter (bubbles resetFiltering). The
+			// startup/auto query lives separately in config.SearchQuery, and
+			// rebuildSessionList re-applies it whenever no filter is active — so
+			// without clearing it here the live tick puts the filter straight
+			// back a second later, which reads as "the state filter keeps
+			// turning itself on".
+			if wasSessions && !a.isFiltering() && a.sessionList.FilterState() == list.Unfiltered {
+				a.config.SearchQuery = ""
+				a.autoStateFilter = false
+			}
 			a.syncAllFilterVisibility()
 			return m, cmd
 		}
@@ -8634,16 +8645,36 @@ func (a *App) rebuildSessionList() {
 	// path) so the live tick minting a newer session can't move the anchor.
 	anchor := a.sessionListAnchor()
 
-	// Preserve active filter
+	// Preserve active filter. The mid-edit case is captured too: a rebuild can
+	// land while the user is typing (remote-liveness refresh, a :command, a
+	// fold toggle), and building a fresh list would otherwise close the search
+	// box and discard what they had typed. Most tick/refresh callers guard on
+	// !isFiltering(), but not all do — handling it here means no caller can get
+	// it wrong.
+	prevFilterState := a.sessionList.FilterState()
+	editingFilter := prevFilterState == list.Filtering
 	var filterTerm string
-	if a.sessionList.FilterState() == list.FilterApplied {
+	if prevFilterState == list.FilterApplied || editingFilter {
 		filterTerm = a.sessionList.FilterInput.Value()
 	}
+	prevFilterCursor := a.sessionList.FilterInput.Position()
 
 	contentH := max(a.height-3, 1)
 	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
 	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 	a.sessSplit.CacheKey = ""
+
+	switch {
+	case editingFilter:
+		// Put the in-progress query back verbatim and leave the box open. None
+		// of the startup/auto-filter handling below applies while the user is
+		// typing — it would fight their input. SetFilterState re-focuses and
+		// jumps to the end, so the caret is restored after it.
+		if filterTerm != "" {
+			applyListFilter(&a.sessionList, filterTerm)
+		}
+		a.sessionList.SetFilterState(list.Filtering)
+		a.sessionList.FilterInput.SetCursor(prevFilterCursor)
 
 	// Reapply filter. The auto-applied active-state default goes through the
 	// blank-guard (applyStartupFilter) so a background rebuild that finds nothing
@@ -8653,17 +8684,15 @@ func (a *App) rebuildSessionList() {
 	// When there are active remote sessions, skip ALL filter re-application so
 	// the remote session's project header and row are visible without being
 	// hidden by a state filter like is:done.
-	if a.hasRemoteSessions() {
+	case a.hasRemoteSessions():
 		a.sessionList.ResetFilter()
 		a.autoStateFilter = false
-	} else if filterTerm != "" && a.autoStateFilter && filterTerm == defaultActiveStateFilter {
+	case filterTerm != "" && a.autoStateFilter && filterTerm == defaultActiveStateFilter:
 		a.applyStartupFilter()
-	} else if filterTerm != "" {
+	case filterTerm != "":
 		applyListFilter(&a.sessionList, filterTerm)
-	}
-
-	// Also re-apply startup search query if no interactive filter was active
-	if filterTerm == "" && !a.hasRemoteSessions() {
+	default:
+		// No interactive filter was active — re-apply the startup search query.
 		a.applyStartupFilter()
 	}
 

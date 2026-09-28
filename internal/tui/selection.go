@@ -108,11 +108,19 @@ func setListItemsPreservingFilter(l *list.Model, items []list.Item) {
 	// (Filtering, e.g. right after pressing "/"). Restore Filtering afterward so
 	// the live input stays open while the rows repopulate.
 	savedIndex := l.Index()
+	// Both SetFilterText and SetFilterState call FilterInput.CursorEnd(). This
+	// path runs on a background refresh (async PR/Jira ref resolve, which fires
+	// repeatedly over several seconds), so without restoring the caret every
+	// such refresh yanks it to the end of the input while the user is typing —
+	// left/right appear not to work at all, because the caret snaps back a
+	// moment after each press.
+	savedCursor := l.FilterInput.Position()
 	l.SetItems(items)
 	l.SetFilterText(filter)
 	if state == list.Filtering {
 		l.SetFilterState(list.Filtering)
 	}
+	l.FilterInput.SetCursor(savedCursor)
 	if n := len(l.VisibleItems()); n > 0 {
 		if savedIndex < 0 {
 			savedIndex = 0
