@@ -1781,7 +1781,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 				{"↑↓ / jk", "Move between contexts"},
 				{"↵ / →", "Open context"},
 				{displayKey(km.Conversation.Actions), "Context actions (jump to origin)"},
-				{displayKey(km.Conversation.RegionUp) + " / " + displayKey(km.Conversation.RegionDown), "Move between regions"},
+				{regionNavHelpKeys(km), "Move between regions"},
 				{displayKey(km.Conversation.ExecutionContexts) + " / esc", "Leave rail"},
 			}
 		}
@@ -1797,7 +1797,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 		return "Conversation", []helpRow{
 			{"↑↓ / jk", "Navigate"},
 			{"↵", "Open / drill in"},
-			{displayKey(km.Conversation.RegionUp) + " / " + displayKey(km.Conversation.RegionDown), "Move between regions"},
+			{regionNavHelpKeys(km), "Move between regions"},
 			{displayKey(km.Conversation.JumpToTree), "Jump to origin turn"},
 			{displayKey(km.Conversation.Actions), "Actions"},
 			{displayKey(km.Conversation.SwitchRegion), "Switch region"},
@@ -2307,4 +2307,17 @@ func splitANSICells(s string) []string {
 		}
 	}
 	return cells
+}
+
+// regionNavHelpKeys renders the region-navigation keys for the help overlay.
+// The pre-rebind K/J still work as aliases (see Keymap.legacyAliases), and they
+// are the keys people who used ccx before the rebind reach for — so show both
+// rather than silently dropping the spelling their fingers know.
+func regionNavHelpKeys(km Keymap) string {
+	cur := displayKey(km.Conversation.RegionUp) + " / " + displayKey(km.Conversation.RegionDown)
+	def := DefaultKeymap().Conversation
+	if km.Conversation.RegionUp == def.RegionUp && km.Conversation.RegionDown == def.RegionDown {
+		return cur + " (K/J)"
+	}
+	return cur
 }

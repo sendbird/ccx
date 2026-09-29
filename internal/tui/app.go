@@ -2105,7 +2105,10 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handlePaneProxyKey(key)
 	}
 
-	// View-specific keys
+	// View-specific keys. Resolved here, past the text-input and pane-proxy
+	// branches, so a pre-rebind key stays literal when typed into an input or
+	// forwarded to tmux.
+	key = a.keymap.resolveLegacyKey("session", key)
 	km := a.keymap
 	if a.config.PickMode && key == km.Session.Pick {
 		var items []session.Session
@@ -3885,6 +3888,7 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.handleBulkActionsMenu(key)
 	}
 	akm := a.keymap.Actions
+	key = a.keymap.resolveLegacyKey("actions", key)
 	sess := a.actionsSess
 	switch key {
 	case akm.Delete:

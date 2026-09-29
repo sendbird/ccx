@@ -373,8 +373,9 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.plgSearchNext(1)
 		}
 		return a, nil
-	// "b" (back), not "N" — unreachable under a Korean input source.
-	case "b":
+	// "b" (back) because "N" is unreachable under a Korean input source; "N"
+	// stays as an alias.
+	case "b", "N":
 		if a.plgSearchTerm != "" {
 			a.plgSearchNext(-1)
 		}
@@ -512,8 +513,9 @@ func (a *App) handleCfgPluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.plgSearchNext(1)
 		}
 		return a, nil
-	// "b" (back), not "N" — unreachable under a Korean input source.
-	case "b":
+	// "b" (back) because "N" is unreachable under a Korean input source; "N"
+	// stays as an alias.
+	case "b", "N":
 		if a.plgSearchTerm != "" {
 			a.plgSearchNext(-1)
 		}

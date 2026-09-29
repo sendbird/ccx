@@ -104,6 +104,110 @@ type PreviewKeymap struct {
 	CopyAll   string `yaml:"copy_all"`
 }
 
+// legacyBinding records a key that used to trigger an action before the
+// CJK-reachability rebind, alongside the field holding its current key.
+type legacyBinding struct {
+	old     string
+	current *string
+}
+
+// legacyAliases returns, per scope, the pre-rebind keys that should still work.
+//
+// The rebind (CPLAT-12413) moved ten actions off bare uppercase letters because
+// a 2-set Korean layout cannot produce them. That was real, but it also took
+// those keys away from everyone typing in English, where they worked fine and
+// were muscle memory — region nav had been K/J since CPLAT-10969. Neither group
+// should have to lose: the new key is what the help shows, and the old key keeps
+// working as an alias.
+//
+// Returned as pointers into km so a user's own override is respected: if they
+// bound something else to the old key, the alias is dropped rather than
+// shadowing their choice (see resolveLegacyKey).
+func (km *Keymap) legacyAliases() map[string][]legacyBinding {
+	return map[string][]legacyBinding{
+		"session": {
+			{"V", &km.Session.Views},
+			{"D", &km.Session.DailyView},
+		},
+		"actions": {
+			{"F", &km.Actions.Fork},
+			{"M", &km.Actions.ImportMem},
+			{"X", &km.Actions.RemoveMem},
+		},
+		"conversation": {
+			{"A", &km.Conversation.ExecutionContexts},
+			{"K", &km.Conversation.RegionUp},
+			{"J", &km.Conversation.RegionDown},
+			{"L", &km.Conversation.LiveToggle},
+			{"I", &km.Conversation.Input},
+		},
+		"preview": {
+			{"F", &km.Preview.ExpandAll},
+		},
+	}
+}
+
+// scopeKeys returns every key currently bound in a scope, so an alias that
+// would shadow a live binding can be skipped.
+func (km *Keymap) scopeKeys(scope string) map[string]bool {
+	out := make(map[string]bool)
+	add := func(keys ...string) {
+		for _, k := range keys {
+			if k != "" {
+				out[k] = true
+			}
+		}
+	}
+	switch scope {
+	case "session":
+		s := km.Session
+		add(s.Quit, s.Escape, s.Open, s.Edit, s.Actions, s.Views, s.Refresh,
+			s.Group, s.Help, s.Search, s.GlobalSearch, s.Live, s.Switch,
+			s.Select, s.Preview, s.PreviewBack, s.Command, s.Pick,
+			s.FoldAll, s.ExpandAll, s.FoldGroup, s.StateMenu, s.DailyView, s.PageMenu)
+	case "actions":
+		a := km.Actions
+		add(a.Delete, a.Move, a.Resume, a.CopyPath, a.Worktree, a.Kill, a.Input,
+			a.Jump, a.URLs, a.Files, a.Changes, a.Copy, a.Tags, a.ImportMem,
+			a.RemoveMem, a.Fork, a.New, a.Remote, a.Edit)
+	case "conversation":
+		c := km.Conversation
+		add(c.JumpToTree, c.SwitchRegion, c.ExecutionContexts, c.RegionUp,
+			c.RegionDown, c.LiveToggle, c.Edit, c.Actions, c.Input)
+	case "preview":
+		p := km.Preview
+		add(p.FoldAll, p.ExpandAll, p.Filter, p.CopyMode, p.CopyAll)
+	}
+	return out
+}
+
+// resolveLegacyKey rewrites a pre-rebind key to whatever now triggers the same
+// action, so both spellings work. Any other key is returned unchanged.
+//
+// Call it on the key string before dispatch. Aliases that collide with a live
+// binding in the same scope are ignored, so a user who rebound the old key to
+// something else keeps their meaning.
+func (km *Keymap) resolveLegacyKey(scope, key string) string {
+	aliases, ok := km.legacyAliases()[scope]
+	if !ok {
+		return key
+	}
+	var live map[string]bool
+	for _, a := range aliases {
+		if a.old != key || *a.current == "" || *a.current == key {
+			continue
+		}
+		if live == nil {
+			live = km.scopeKeys(scope)
+		}
+		if live[key] {
+			return key // the old key means something else now; leave it alone
+		}
+		return *a.current
+	}
+	return key
+}
+
 // Keymap holds all configurable keybindings.
 type Keymap struct {
 	Session      SessionKeymap    `yaml:"session"`

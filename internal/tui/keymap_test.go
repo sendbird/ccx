@@ -634,3 +634,74 @@ func TestFillKeymapDefaultsCoversEveryField(t *testing.T) {
 		}
 	}
 }
+
+// TestLegacyKeysStillWork pins the aliases that keep the pre-rebind keys alive.
+//
+// CPLAT-12413 moved ten actions off bare uppercase letters because a 2-set
+// Korean layout cannot produce them. That was real, but it also took those keys
+// away from everyone typing in English, where they had worked for months —
+// region nav had been K/J since CPLAT-10969, and its loss was reported as
+// "shift+hjkl doesn't switch regions any more". Both spellings must work.
+func TestLegacyKeysStillWork(t *testing.T) {
+	km := DefaultKeymap()
+	for _, c := range []struct{ scope, old, want string }{
+		{"session", "V", km.Session.Views},
+		{"session", "D", km.Session.DailyView},
+		{"actions", "F", km.Actions.Fork},
+		{"actions", "M", km.Actions.ImportMem},
+		{"actions", "X", km.Actions.RemoveMem},
+		{"conversation", "A", km.Conversation.ExecutionContexts},
+		{"conversation", "K", km.Conversation.RegionUp},
+		{"conversation", "J", km.Conversation.RegionDown},
+		{"conversation", "L", km.Conversation.LiveToggle},
+		{"conversation", "I", km.Conversation.Input},
+		{"preview", "F", km.Preview.ExpandAll},
+	} {
+		if got := km.resolveLegacyKey(c.scope, c.old); got != c.want {
+			t.Errorf("%s: legacy %q resolved to %q, want %q (the key it replaced)",
+				c.scope, c.old, got, c.want)
+		}
+	}
+
+	// Everything else passes through untouched.
+	for _, k := range []string{"q", "x", "enter", "esc", "ctrl+p", "Z", "f"} {
+		for _, scope := range []string{"session", "actions", "conversation", "preview"} {
+			if got := km.resolveLegacyKey(scope, k); got != k {
+				t.Errorf("%s: unrelated key %q was rewritten to %q", scope, k, got)
+			}
+		}
+	}
+}
+
+// TestLegacyAliasYieldsToUserBinding: an alias must never shadow a key the user
+// deliberately bound to something else.
+func TestLegacyAliasYieldsToUserBinding(t *testing.T) {
+	km := DefaultKeymap()
+	km.Conversation.Actions = "K" // user claims the old region-up key
+	if got := km.resolveLegacyKey("conversation", "K"); got != "K" {
+		t.Errorf("alias shadowed the user's own binding: K -> %q", got)
+	}
+	// The unclaimed aliases in the same scope still work.
+	if got := km.resolveLegacyKey("conversation", "J"); got != km.Conversation.RegionDown {
+		t.Errorf("unrelated alias broke: J -> %q", got)
+	}
+}
+
+// TestLegacyAliasesCoverEveryRebind ties the alias table to the migration table
+// in state.go: every default the rebind moved must keep its old key working.
+// Without this, a future rebind can silently drop a key people still press.
+func TestLegacyAliasesCoverEveryRebind(t *testing.T) {
+	km := DefaultKeymap()
+	aliased := map[string]bool{}
+	for _, binds := range km.legacyAliases() {
+		for _, b := range binds {
+			aliased[b.old] = true
+		}
+	}
+	// The uppercase keys migrateKeymapDefaults rewrites (see state.go).
+	for _, old := range []string{"V", "D", "F", "M", "X", "A", "K", "J", "L", "I"} {
+		if !aliased[old] {
+			t.Errorf("rebind moved %q away but no alias keeps it working", old)
+		}
+	}
+}
