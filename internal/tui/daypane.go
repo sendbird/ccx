@@ -66,6 +66,52 @@ var dayOutputTabOrder = []dayOutputTab{
 	{label: "Jira", kind: session.OutputJira},
 	{label: "Artifacts", kind: session.OutputArtifact},
 	{label: "Plans", kind: session.OutputPlan},
+	{label: "Scratchpad", kind: session.OutputScratchpad},
+}
+
+// dayScratchpadMsg carries one session's scratchpad rows back to the UI thread.
+type dayScratchpadMsg struct {
+	sessID  string
+	outputs []session.SessionOutput
+}
+
+// collectDayScratchpadCmd walks one session's scratchpad off the UI thread.
+//
+// Refs and plan slugs ride along on the session scan, but scratchpad lives on
+// disk and costs a directory walk per session — one measured scratchpad here
+// held 6,805 files. A day holds 250+ sessions, so doing this inline would stall
+// the pane on every date change; results are cached per session ID and survive
+// walking away and back.
+func collectDayScratchpadCmd(sess session.Session) tea.Cmd {
+	return func() tea.Msg {
+		return dayScratchpadMsg{
+			sessID:  sess.ID,
+			outputs: session.ScratchpadOutputs(sess),
+		}
+	}
+}
+
+// dayScratchpadCmds dispatches a walk for each session in scope that has not
+// been collected yet, capped so one very busy day cannot fan out unboundedly.
+// Sessions left over are picked up on the next render, since each completion
+// re-renders the pane.
+func (a *App) dayScratchpadCmds(sessions []session.Session) []tea.Cmd {
+	const maxInFlight = 8
+	var cmds []tea.Cmd
+	for _, s := range sessions {
+		if len(cmds) >= maxInFlight {
+			break
+		}
+		if s.ID == "" || s.ProjectPath == "" {
+			continue
+		}
+		if a.dayScratchpadCollected[s.ID] || a.dayScratchpadInFlight[s.ID] {
+			continue
+		}
+		a.dayScratchpadInFlight[s.ID] = true
+		cmds = append(cmds, collectDayScratchpadCmd(s))
+	}
+	return cmds
 }
 
 // dayOutputTabsFor returns All plus a tab for every kind the scope actually
@@ -164,7 +210,7 @@ func dayOutputTabIndex(tabs []dayOutputTab, active session.OutputKind) int {
 // (session.SortRefs), so the timeline only exists because of the explicit sort
 // below. Kind filtering is a separate step (filterDayOutputRows) so every tab
 // keeps this one order.
-func buildDayOutputRows(di dayItem) []dayOutputRow {
+func buildDayOutputRows(di dayItem, scratchpad map[string][]session.SessionOutput) []dayOutputRow {
 	var rows []dayOutputRow
 	byKey := map[string]int{} // identity → index into rows
 	add := func(o session.SessionOutput, s session.Session, ts time.Time, approx bool) {
@@ -199,6 +245,13 @@ func buildDayOutputRows(di dayItem) []dayOutputRow {
 			add(session.SessionOutput{
 				Kind: session.OutputPlan, Title: slug, Last: s.ModTime, Count: 1,
 			}, s, s.ModTime, true)
+		}
+		// Scratchpad arrives asynchronously (see collectDayScratchpadCmd), so a
+		// session not yet walked simply contributes nothing this render and the
+		// rows appear when its walk lands.
+		for _, o := range scratchpad[s.ID] {
+			ts, approx := outputWhen(o.Last, s)
+			add(o, s, ts, approx)
 		}
 	}
 	sortDayOutputRowsByTime(rows)
@@ -259,7 +312,7 @@ func outputKindRank(k session.OutputKind) int {
 // output, each anchored to the session that made it. Sessions themselves are
 // deliberately NOT listed — they are one row away in the list pane, and a busy
 // day really can hold 250+ of them, which would bury the outputs entirely.
-func (a *App) updateDayPreview(di dayItem) {
+func (a *App) updateDayPreview(di dayItem) tea.Cmd {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 
@@ -275,7 +328,7 @@ func (a *App) updateDayPreview(di dayItem) {
 		// outputs behind a filter the user is no longer thinking about.
 		a.dayOutputQuery = ""
 	}
-	all := buildDayOutputRows(di)
+	all := buildDayOutputRows(di, a.dayScratchpad)
 
 	// Recreate the viewport only on a size change. Rebuilding it every call
 	// would reset YOffset to 0, and since cursor movement re-renders, every
@@ -289,12 +342,13 @@ func (a *App) updateDayPreview(di dayItem) {
 	summary := fmt.Sprintf("%s across %s · %d messages",
 		plural(len(di.sessions), "session"), plural(di.projects, "project"), di.totalMsgs)
 	a.sessSplit.Preview.SetContent(a.renderOutputsPane(title, subtitle, summary, di.day, all, previewW))
+	return tea.Batch(a.dayScratchpadCmds(di.sessions)...)
 }
 
 // updateDayProjectPreview renders the middle tier of the daily tree: one day's
 // work in one project. Same pane as the day view, scoped down — the project
 // breakdown is dropped because at this level there is only one project.
-func (a *App) updateDayProjectPreview(pi projectItem) {
+func (a *App) updateDayProjectPreview(pi projectItem) tea.Cmd {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 
@@ -304,7 +358,7 @@ func (a *App) updateDayProjectPreview(pi projectItem) {
 		a.dayOutputsCacheID = cacheID
 		a.dayOutputQuery = "" // see updateDayPreview: queries do not travel
 	}
-	all := buildDayOutputRows(dayItem{sessions: pi.sessions})
+	all := buildDayOutputRows(dayItem{sessions: pi.sessions}, a.dayScratchpad)
 
 	if a.sessSplit.Preview.Width != previewW || a.sessSplit.Preview.Height != contentH {
 		a.sessSplit.Preview = viewport.New(previewW, contentH)
@@ -316,6 +370,7 @@ func (a *App) updateDayProjectPreview(pi projectItem) {
 	summary := fmt.Sprintf("%s · %d messages on this day",
 		plural(len(pi.sessions), "session"), pi.totalMsgs)
 	a.sessSplit.Preview.SetContent(a.renderOutputsPane(pi.displayName, subtitle, summary, dayKeyTime(pi.dayKey), all, previewW))
+	return tea.Batch(a.dayScratchpadCmds(pi.sessions)...)
 }
 
 // dayKeyTime parses a "2006-01-02" fold key back into a local date. A zero time
@@ -517,7 +572,7 @@ func (a *App) handleDayPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cm
 	switch HandleFlatCursorNav(&a.dayOutputsCursor, len(a.dayOutputRows), key) {
 	case NavCursorMoved:
 		a.sessSplit.CacheKey = "" // force the day pane to re-render with the new highlight
-		a.renderOwningDayScope()
+		cmd := a.renderOwningDayScope()
 		// Nudge the viewport so the cursor stays in view as it walks past the
 		// fold (the tasks/agents preview does the same).
 		switch key {
@@ -526,7 +581,7 @@ func (a *App) handleDayPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cm
 		case "down", "j":
 			sp.Preview.LineDown(1)
 		}
-		return a, nil, true
+		return a, cmd, true
 	case NavBoundaryDown, NavBoundaryUp:
 		return a, nil, true
 	}
@@ -603,10 +658,10 @@ func (a *App) dayOutputTabHint() string {
 // a.dayOutputRows no longer knows.
 func (a *App) currentDayOutputRows() []dayOutputRow {
 	if di, ok := a.selectedDay(); ok {
-		return buildDayOutputRows(di)
+		return buildDayOutputRows(di, a.dayScratchpad)
 	}
 	if pi, ok := a.selectedProject(); ok && pi.dayKey != "" {
-		return buildDayOutputRows(dayItem{sessions: pi.sessions})
+		return buildDayOutputRows(dayItem{sessions: pi.sessions}, a.dayScratchpad)
 	}
 	return nil
 }
@@ -614,14 +669,14 @@ func (a *App) currentDayOutputRows() []dayOutputRow {
 // renderOwningDayScope re-renders whichever scope owns the day pane. A
 // day-scoped PROJECT row owns it too (selectedOwnsDayPane), and rendering only
 // the day case left the pane frozen on those rows.
-func (a *App) renderOwningDayScope() {
+func (a *App) renderOwningDayScope() tea.Cmd {
 	if di, ok := a.selectedDay(); ok {
-		a.updateDayPreview(di)
-		return
+		return a.updateDayPreview(di)
 	}
 	if pi, ok := a.selectedProject(); ok && pi.dayKey != "" {
-		a.updateDayProjectPreview(pi)
+		return a.updateDayProjectPreview(pi)
 	}
+	return nil
 }
 
 func (a *App) selectedDayOutput() (dayOutputRow, bool) {

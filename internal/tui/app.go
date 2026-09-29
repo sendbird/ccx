@@ -324,6 +324,12 @@ type App struct {
 	dayOutputsCursor       int                // cursor within the day pane's output list
 	dayOutputsCacheID      string             // day key the cursor currently tracks
 	dayOutputTabKind       session.OutputKind // day pane's active kind tab ("" = the All timeline)
+	// Scratchpad rows for the day pane. Unlike refs and plan slugs — which the
+	// session scan already carries — scratchpad lives on disk and needs a walk
+	// per session, so it is collected off the UI thread and cached per scope.
+	dayScratchpad          map[string][]session.SessionOutput // session ID → its scratchpad rows
+	dayScratchpadCollected map[string]bool                    // session IDs already walked
+	dayScratchpadInFlight  map[string]bool                    // walks currently running
 	// The day pane searches independently of the session list: the two answer
 	// different questions ("which sessions" vs "which outputs"), and a day with
 	// hundreds of outputs needs narrowing even when the session list does not.
@@ -910,21 +916,24 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	}
 
 	a := &App{
-		state:               viewSessions,
-		sessions:            sessions,
-		sessionsLoading:     true, // always true — full scan happens async
-		config:              cfg,
-		keymap:              km,
-		splitRatio:          35,
-		selectedSet:         make(map[string]bool),
-		hiddenBadges:        make(map[string]bool),
-		refsInFlight:        make(map[string]bool),
-		outputsInFlight:     make(map[string]bool),
-		sessRefsSelected:    make(map[string]bool),
-		notifyPrev:          make(map[string]session.LifecycleState),
-		sessionRowCache:     newSessionRowCache(1024),
-		convPreviewRowCache: newSessionRowCache(4096),
-		termFocused:         true,
+		state:                  viewSessions,
+		sessions:               sessions,
+		sessionsLoading:        true, // always true — full scan happens async
+		config:                 cfg,
+		keymap:                 km,
+		splitRatio:             35,
+		selectedSet:            make(map[string]bool),
+		hiddenBadges:           make(map[string]bool),
+		refsInFlight:           make(map[string]bool),
+		outputsInFlight:        make(map[string]bool),
+		dayScratchpad:          make(map[string][]session.SessionOutput),
+		dayScratchpadCollected: make(map[string]bool),
+		dayScratchpadInFlight:  make(map[string]bool),
+		sessRefsSelected:       make(map[string]bool),
+		notifyPrev:             make(map[string]session.LifecycleState),
+		sessionRowCache:        newSessionRowCache(1024),
+		convPreviewRowCache:    newSessionRowCache(4096),
+		termFocused:            true,
 		// Default to a true project-centric browser: ccx now opens with one
 		// row per project (folder-like), and sessions of the same repo (and
 		// its worktrees) appear as expandable children beneath the project
@@ -1447,6 +1456,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				return a, a.updateSessionOutputsPreview(sess)
 			}
+		}
+		return a, nil
+
+	case dayScratchpadMsg:
+		// One session's scratchpad walk landed. Re-rendering the owning scope
+		// both shows the new rows and dispatches the next batch, which is how a
+		// day with more sessions than the in-flight cap finishes collecting.
+		delete(a.dayScratchpadInFlight, msg.sessID)
+		a.dayScratchpadCollected[msg.sessID] = true
+		if len(msg.outputs) > 0 {
+			a.dayScratchpad[msg.sessID] = msg.outputs
+		}
+		if a.state == viewSessions && a.sessSplit.Show && a.selectedOwnsDayPane() {
+			a.sessSplit.CacheKey = "" // the row set changed under the same scope
+			return a, a.renderOwningDayScope()
 		}
 		return a, nil
 
@@ -5512,8 +5536,7 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		}
 		a.sessSplit.CacheKey = cacheKey
 		a.sessPreviewPinned = false
-		a.updateDayPreview(di)
-		return nil
+		return a.updateDayPreview(di)
 	}
 	if pi, ok := a.selectedProject(); ok {
 		// In the daily view a project row is the middle tier: it aggregates one
@@ -5527,8 +5550,7 @@ func (a *App) updateSessionPreview() tea.Cmd {
 			}
 			a.sessSplit.CacheKey = cacheKey
 			a.sessPreviewPinned = false
-			a.updateDayProjectPreview(pi)
-			return nil
+			return a.updateDayProjectPreview(pi)
 		}
 		// In refs/outputs mode a project head row previews its representative
 		// session (selectedSession returns pi.sessions[0] for a projectItem). The

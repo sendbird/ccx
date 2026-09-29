@@ -166,9 +166,12 @@ func TestDailyPreviewShowsDaySummary(t *testing.T) {
 	}
 	app.sessionList.Select(0)
 	app.sessSplit.Show = true
-	if cmd := app.updateSessionPreview(); cmd != nil {
-		t.Fatal("expected the day preview to be synchronous (no transcript reads)")
-	}
+	// The pane must be fully rendered by the time updateSessionPreview returns:
+	// walking across dates cannot wait on I/O. Any command it returns is
+	// background enrichment (the scratchpad walk, which needs a directory walk
+	// per session), never something the content below depends on — so the
+	// assertion is on the content, not on the absence of a command.
+	_ = app.updateSessionPreview()
 	content := app.sessSplit.Preview.View()
 	// The pane is the day's outputs with a session anchor on each — not a
 	// session listing, and no project breakdown either (the list itself nests
@@ -519,7 +522,7 @@ func TestDayPreviewCollapsesRepeatedOutputs(t *testing.T) {
 		{ID: "later", ShortID: "later", ProjectPath: "/tmp/repo-b", ProjectName: "repo-b", ModTime: dayOf(0).Add(-time.Hour), Refs: []session.SessionRef{pr}},
 	}
 	di := buildDailyItems(sessions, nil)[0].(dayItem)
-	rows := buildDayOutputRows(di)
+	rows := buildDayOutputRows(di, nil)
 
 	if len(rows) != 1 {
 		t.Fatalf("expected the repeated PR to collapse to one row, got %d", len(rows))
@@ -547,7 +550,7 @@ func TestDayPreviewTabsCoverEveryKindProduced(t *testing.T) {
 		},
 	}}
 	di := buildDailyItems(sessions, nil)[0].(dayItem)
-	rows := buildDayOutputRows(di)
+	rows := buildDayOutputRows(di, nil)
 
 	tabs := dayOutputTabsFor(rows, "")
 	var got []string

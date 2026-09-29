@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -154,7 +157,7 @@ func TestDayPreviewUUIDBelongsToAnchorSession(t *testing.T) {
 			ModTime: dayOf(0).Add(-time.Hour), Refs: []session.SessionRef{later}},
 	}
 	di := buildDailyItems(sessions, nil)[0].(dayItem)
-	rows := buildDayOutputRows(di)
+	rows := buildDayOutputRows(di, nil)
 
 	if len(rows) != 1 {
 		t.Fatalf("expected the repeated PR to collapse to one row, got %d", len(rows))
@@ -320,7 +323,7 @@ func TestDayOutputRowsFollowFirstAppearance(t *testing.T) {
 			Refs: []session.SessionRef{timedRef("middle", day.Add(2*time.Hour))}},
 	}
 	di := buildDailyItems(sessions, nil)[0].(dayItem)
-	rows := buildDayOutputRows(di)
+	rows := buildDayOutputRows(di, nil)
 
 	var got []string
 	for _, r := range rows {
@@ -345,7 +348,7 @@ func TestDayOutputTabsKeepOneChronology(t *testing.T) {
 		},
 	}}
 	di := buildDailyItems(sessions, nil)[0].(dayItem)
-	rows := buildDayOutputRows(di)
+	rows := buildDayOutputRows(di, nil)
 
 	prs := filterDayOutputRows(rows, dayOutputTab{label: "PRs", kind: session.OutputPR}, "")
 	if len(prs) != 2 {
@@ -376,7 +379,7 @@ func TestDayOutputRowsFallBackToSessionTime(t *testing.T) {
 			Refs: []session.SessionRef{timedRef("timed", day.Add(-time.Hour))}},
 	}
 	di := buildDailyItems(sessions, nil)[0].(dayItem)
-	rows := buildDayOutputRows(di)
+	rows := buildDayOutputRows(di, nil)
 
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(rows))
@@ -842,5 +845,180 @@ func TestSessionRowDigitsStillSwitchPreviewMode(t *testing.T) {
 	m, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	if got := m.(*App).sessPreviewMode; got != sessPreviewRefs {
 		t.Errorf("sessPreviewMode = %v, want the refs preview 5 is bound to", got)
+	}
+}
+
+// runScratchpadCollection executes whatever the pane dispatched and feeds the
+// results back, standing in for the bubbletea runtime.
+func runScratchpadCollection(t *testing.T, app *App, cmd tea.Cmd) *App {
+	t.Helper()
+	if cmd == nil {
+		return app
+	}
+	msg := cmd()
+	if msg == nil {
+		return app
+	}
+	// tea.Batch collapses a single command, so both shapes have to be handled.
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			m, _ := app.Update(c())
+			app = m.(*App)
+		}
+		return app
+	}
+	m, _ := app.Update(msg)
+	return m.(*App)
+}
+
+// scratchpadDayApp builds a day whose single session produced both a PR and
+// scratchpad files, one of them nested — agents organize their scratchpad into
+// subdirectories, and a listing that only reached the top level would miss them.
+func scratchpadDayApp(t *testing.T) *App {
+	t.Helper()
+	base := t.TempDir()
+	t.Cleanup(session.SetScratchpadBaseOverride(base))
+
+	const proj, sid = "/tmp/proj-scratch", "scratch1"
+	dir := filepath.Join(base, session.EncodeProjectPath(proj), sid, "scratchpad")
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []struct{ path, body string }{
+		{filepath.Join(dir, "notes.md"), "top level"},
+		{filepath.Join(dir, "sub", "deep.md"), "nested"},
+	} {
+		if err := os.WriteFile(f.path, []byte(f.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := newTestApp([]session.Session{{
+		ID: sid, ShortID: sid, ProjectPath: proj, ProjectName: "proj-scratch",
+		ModTime: time.Now(),
+		Refs: []session.SessionRef{{
+			Kind: session.RefPR, Label: "o/r#1",
+			URL: "https://github.com/o/r/pull/1", Resolved: true,
+		}},
+	}})
+	app.sessGroupMode = groupDaily
+	app.rebuildSessionList()
+	app.sessSplit.Show = true
+	app.sessionList.Select(0)
+	if _, ok := app.selectedDay(); !ok {
+		t.Fatal("cursor is not on a day row")
+	}
+	return app
+}
+
+// TestDayPaneCollectsScratchpad: scratchpad belongs in the day's digest next to
+// PRs and plans, but unlike those it lives on disk and costs a directory walk
+// per session (one measured scratchpad held 6,805 files). It is therefore
+// collected off the UI thread — the pane renders immediately and the rows
+// appear when the walk lands.
+func TestDayPaneCollectsScratchpad(t *testing.T) {
+	app := scratchpadDayApp(t)
+
+	cmd := app.updateSessionPreview()
+	if cmd == nil {
+		t.Fatal("no scratchpad collection was dispatched")
+	}
+	if strings.Contains(app.sessSplit.Preview.View(), "notes.md") {
+		t.Error("scratchpad appeared before its walk completed; the walk is supposed to be async")
+	}
+
+	app = runScratchpadCollection(t, app, cmd)
+
+	content := app.sessSplit.Preview.View()
+	for _, want := range []string{"notes.md", "deep.md", "Scratchpad"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("day pane is missing %q after collection:\n%s", want, content)
+		}
+	}
+}
+
+// TestDayPaneScratchpadTabFilters guards the tab itself: All interleaves
+// scratchpad with the other kinds, and the Scratchpad tab shows only it.
+func TestDayPaneScratchpadTabFilters(t *testing.T) {
+	app := scratchpadDayApp(t)
+	app = runScratchpadCollection(t, app, app.updateSessionPreview())
+
+	kinds := map[session.OutputKind]int{}
+	for _, r := range app.currentDayOutputRows() {
+		kinds[r.out.Kind]++
+	}
+	if kinds[session.OutputScratchpad] == 0 || kinds[session.OutputPR] == 0 {
+		t.Fatalf("All tab should carry both kinds, got %v", kinds)
+	}
+
+	app.setDayOutputTabKind(session.OutputScratchpad)
+	if len(app.dayOutputRows) == 0 {
+		t.Fatal("Scratchpad tab is empty")
+	}
+	for _, r := range app.dayOutputRows {
+		if r.out.Kind != session.OutputScratchpad {
+			t.Errorf("Scratchpad tab leaked a %q row", r.out.Kind)
+		}
+	}
+}
+
+// TestDayPaneScratchpadRowIsActionable: a row you cannot act on is just noise.
+// Scratchpad rows carry a Path, which is what makes `e` (open in $EDITOR) and
+// the copy action available.
+func TestDayPaneScratchpadRowIsActionable(t *testing.T) {
+	app := scratchpadDayApp(t)
+	app = runScratchpadCollection(t, app, app.updateSessionPreview())
+	app.setDayOutputTabKind(session.OutputScratchpad)
+
+	row := app.dayOutputRows[0]
+	if row.out.Path == "" {
+		t.Fatal("scratchpad row has no Path, so edit/copy cannot be offered")
+	}
+	if row.sessID == "" {
+		t.Error("scratchpad row lost its session anchor; Enter could not reach the conversation")
+	}
+	offered := map[string]bool{}
+	for _, act := range app.outputActionsFor(row.out, row.sessID != "") {
+		offered[act.key] = true
+	}
+	for _, key := range []string{app.keymap.Actions.Edit, app.keymap.Actions.CopyPath} {
+		if !offered[key] {
+			t.Errorf("action %q not offered for a scratchpad row (have %v)", key, offered)
+		}
+	}
+}
+
+// TestDayPaneScratchpadCollectionIsBounded: a day can hold 250+ sessions, so
+// the fan-out is capped per render. The remainder is picked up as each
+// completion re-renders the pane, which is what keeps a busy day from
+// dispatching hundreds of walks at once.
+func TestDayPaneScratchpadCollectionIsBounded(t *testing.T) {
+	var sessions []session.Session
+	for i := range 40 {
+		sessions = append(sessions, session.Session{
+			ID:          fmt.Sprintf("s%02d", i),
+			ShortID:     fmt.Sprintf("s%02d", i),
+			ProjectPath: "/tmp/proj-bounded",
+			ProjectName: "proj-bounded",
+			ModTime:     time.Now(),
+		})
+	}
+	app := newTestApp(sessions)
+	cmds := app.dayScratchpadCmds(sessions)
+	if len(cmds) == 0 || len(cmds) > 8 {
+		t.Fatalf("dispatched %d walks, want between 1 and the in-flight cap of 8", len(cmds))
+	}
+	first := len(app.dayScratchpadInFlight)
+
+	// A later render picks up where this one stopped: the next batch, never a
+	// session already walking. Without that the remainder of a busy day would
+	// never be collected at all.
+	next := app.dayScratchpadCmds(sessions)
+	if len(next) == 0 {
+		t.Error("second render dispatched nothing; sessions past the cap would never be collected")
+	}
+	if got := len(app.dayScratchpadInFlight); got != first+len(next) {
+		t.Errorf("in-flight set grew to %d from %d with %d new walks — a session was dispatched twice",
+			got, first, len(next))
 	}
 }
