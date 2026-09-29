@@ -91,7 +91,7 @@ func SortOutputs(outs []SessionOutput) {
 // routine), so callers must run it off the UI thread.
 func CollectSessionOutputs(sess Session, home string) []SessionOutput {
 	outs := collectTranscriptOutputs(sess.FilePath, home)
-	outs = append(outs, collectScratchpadOutputs(sess)...)
+	outs = append(outs, ScratchpadOutputs(sess)...)
 	outs = mergeMemoryDescriptions(outs, sess, home)
 	SortOutputs(outs)
 	return outs
@@ -237,11 +237,15 @@ func hasOutputToolMarker(line []byte) bool {
 	return false
 }
 
-// collectScratchpadOutputs lists the session's scratchpad files. Unlike the
+// ScratchpadOutputs lists the session's scratchpad files. Unlike the
 // scratchpad preview we do not read bodies here — the digest only needs name,
 // size and mtime, and a large scratchpad would otherwise cost megabytes per
 // navigation.
-func collectScratchpadOutputs(sess Session) []SessionOutput {
+//
+// Exported because the daily pane collects this per session off the UI thread:
+// the walk costs real time (one measured scratchpad held 6,805 files) and a day
+// can hold hundreds of sessions.
+func ScratchpadOutputs(sess Session) []SessionOutput {
 	files := LoadScratchpadFiles(sess.ProjectPath, sess.ID)
 	outs := make([]SessionOutput, 0, len(files))
 	for _, f := range files {
