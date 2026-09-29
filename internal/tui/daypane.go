@@ -91,25 +91,62 @@ func collectDayScratchpadCmd(sess session.Session) tea.Cmd {
 	}
 }
 
+// dayScratchpadInFlightTTL bounds how long a session may be considered "already
+// being walked".
+//
+// The in-flight mark exists to stop the same walk being dispatched twice, but
+// it is set before the command reaches the runtime — and a command can be
+// dropped on the way (a render path that cannot dispatch, a handler that
+// discards its return). A permanent mark would then strand that session: never
+// collected, never retried, its scratchpad silently missing forever. A mark
+// that expires degrades that into a short delay instead, which is the failure
+// this is allowed to have.
+const dayScratchpadInFlightTTL = 10 * time.Second
+
 // dayScratchpadCmds dispatches a walk for each session in scope that has not
 // been collected yet, capped so one very busy day cannot fan out unboundedly.
 // Sessions left over are picked up on the next render, since each completion
 // re-renders the pane.
+//
+// Prefer calling this where the returned commands actually reach the runtime;
+// render paths should use the non-dispatching form (see updateDayPreviewWith).
+// The TTL above is the safety net for the cases that slip through, not a
+// licence to ignore the return value.
 func (a *App) dayScratchpadCmds(sessions []session.Session) []tea.Cmd {
 	const maxInFlight = 8
+	now := time.Now()
+
+	// Expire stale marks first, then count what is genuinely still running. The
+	// budget is over the TOTAL in flight, not over this call: every completion
+	// re-renders the pane, so a per-call cap would start a fresh batch on each
+	// message and the running set would grow with the day instead of staying
+	// bounded — 250 sessions ended up with 218 marked at once before this.
+	running := 0
+	for id, started := range a.dayScratchpadInFlight {
+		if now.Sub(started) >= dayScratchpadInFlightTTL {
+			delete(a.dayScratchpadInFlight, id)
+			continue
+		}
+		running++
+	}
+
 	var cmds []tea.Cmd
 	for _, s := range sessions {
-		if len(cmds) >= maxInFlight {
+		if running >= maxInFlight {
 			break
 		}
 		if s.ID == "" || s.ProjectPath == "" {
 			continue
 		}
-		if a.dayScratchpadCollected[s.ID] || a.dayScratchpadInFlight[s.ID] {
+		if a.dayScratchpadCollected[s.ID] {
 			continue
 		}
-		a.dayScratchpadInFlight[s.ID] = true
+		if _, ok := a.dayScratchpadInFlight[s.ID]; ok {
+			continue // still running; stale marks were already dropped above
+		}
+		a.dayScratchpadInFlight[s.ID] = now
 		cmds = append(cmds, collectDayScratchpadCmd(s))
+		running++
 	}
 	return cmds
 }
@@ -313,6 +350,19 @@ func outputKindRank(k session.OutputKind) int {
 // deliberately NOT listed — they are one row away in the list pane, and a busy
 // day really can hold 250+ of them, which would bury the outputs entirely.
 func (a *App) updateDayPreview(di dayItem) tea.Cmd {
+	return a.updateDayPreviewWith(di, true)
+}
+
+// refreshDayPreviewLayout re-renders the day pane WITHOUT arming any
+// collection. View() cannot dispatch a tea.Cmd, so calling the dispatching
+// form there would mark sessions in-flight against a command that is then
+// dropped — and those sessions would never be collected again. Same reasoning
+// as refreshOutputsPreviewLayout.
+func (a *App) refreshDayPreviewLayout(di dayItem) {
+	_ = a.updateDayPreviewWith(di, false)
+}
+
+func (a *App) updateDayPreviewWith(di dayItem, dispatch bool) tea.Cmd {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 
@@ -342,6 +392,9 @@ func (a *App) updateDayPreview(di dayItem) tea.Cmd {
 	summary := fmt.Sprintf("%s across %s · %d messages",
 		plural(len(di.sessions), "session"), plural(di.projects, "project"), di.totalMsgs)
 	a.sessSplit.Preview.SetContent(a.renderOutputsPane(title, subtitle, summary, di.day, all, previewW))
+	if !dispatch {
+		return nil
+	}
 	return tea.Batch(a.dayScratchpadCmds(di.sessions)...)
 }
 
@@ -349,6 +402,16 @@ func (a *App) updateDayPreview(di dayItem) tea.Cmd {
 // work in one project. Same pane as the day view, scoped down — the project
 // breakdown is dropped because at this level there is only one project.
 func (a *App) updateDayProjectPreview(pi projectItem) tea.Cmd {
+	return a.updateDayProjectPreviewWith(pi, true)
+}
+
+// refreshDayProjectPreviewLayout is the non-dispatching form; see
+// refreshDayPreviewLayout.
+func (a *App) refreshDayProjectPreviewLayout(pi projectItem) {
+	_ = a.updateDayProjectPreviewWith(pi, false)
+}
+
+func (a *App) updateDayProjectPreviewWith(pi projectItem, dispatch bool) tea.Cmd {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 
@@ -370,6 +433,9 @@ func (a *App) updateDayProjectPreview(pi projectItem) tea.Cmd {
 	summary := fmt.Sprintf("%s · %d messages on this day",
 		plural(len(pi.sessions), "session"), pi.totalMsgs)
 	a.sessSplit.Preview.SetContent(a.renderOutputsPane(pi.displayName, subtitle, summary, dayKeyTime(pi.dayKey), all, previewW))
+	if !dispatch {
+		return nil
+	}
 	return tea.Batch(a.dayScratchpadCmds(pi.sessions)...)
 }
 
@@ -598,13 +664,13 @@ func (a *App) handleDayPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.Cm
 // The cursor goes back to the top: every row action (Enter, o, y, x) resolves
 // through dayOutputsCursor into the FILTERED slice, so keeping an index across
 // a tab switch would point at a different output than the highlighted one.
-func (a *App) cycleDayOutputTab(delta int) {
+func (a *App) cycleDayOutputTab(delta int) tea.Cmd {
 	tabs := dayOutputTabsFor(a.currentDayOutputRows(), a.dayOutputTabKind)
 	if len(tabs) <= 1 {
-		return
+		return nil
 	}
 	idx := dayOutputTabIndex(tabs, a.dayOutputTabKind)
-	a.setDayOutputTabKind(tabs[(idx+delta+len(tabs))%len(tabs)].kind)
+	return a.setDayOutputTabKind(tabs[(idx+delta+len(tabs))%len(tabs)].kind)
 }
 
 // selectDayOutputTab jumps straight to the n-th tab in the bar, 1-based and
@@ -614,28 +680,28 @@ func (a *App) cycleDayOutputTab(delta int) {
 // digit→kind table would point the digits at labels that are not there.
 //
 // Reports whether n addressed a tab; out of range is the caller's to swallow.
-func (a *App) selectDayOutputTab(n int) bool {
+func (a *App) selectDayOutputTab(n int) (tea.Cmd, bool) {
 	tabs := dayOutputTabsFor(a.currentDayOutputRows(), a.dayOutputTabKind)
 	if n < 1 || n > len(tabs) {
-		return false
+		return nil, false
 	}
-	a.setDayOutputTabKind(tabs[n-1].kind)
-	return true
+	return a.setDayOutputTabKind(tabs[n-1].kind), true
 }
 
 // setDayOutputTabKind applies a tab switch: repaint the pane under the new
 // filter and put the cursor back on its first row. Re-selecting the active tab
 // keeps the cursor where it is — nothing about the list changed, so moving it
 // would be a switch the user did not ask for.
-func (a *App) setDayOutputTabKind(kind session.OutputKind) {
+func (a *App) setDayOutputTabKind(kind session.OutputKind) tea.Cmd {
 	if kind == a.dayOutputTabKind {
-		return
+		return nil
 	}
 	a.dayOutputTabKind = kind
 	a.dayOutputsCursor = 0
 	a.sessSplit.CacheKey = ""
-	a.renderOwningDayScope()
+	cmd := a.renderOwningDayScope()
 	a.sessSplit.Preview.GotoTop()
+	return cmd
 }
 
 // dayOutputTabHint lists the digit → tab bindings for the help overlay, in the
@@ -784,20 +850,17 @@ func (a *App) handleDayOutputSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		a.dayOutputSearching = false
-		a.applyDayOutputQuery(a.dayOutputSearchTI.Value())
-		return a, nil
+		return a, a.applyDayOutputQuery(a.dayOutputSearchTI.Value())
 	case "esc":
 		a.dayOutputSearching = false
 		// Esc cancels the edit, not the filter: it restores what was applied when
 		// the input opened, so an abandoned edit does not silently become the
 		// filter and an accidental keypress does not lose the narrowing.
-		a.applyDayOutputQuery(a.dayOutputQueryBefore)
-		return a, nil
+		return a, a.applyDayOutputQuery(a.dayOutputQueryBefore)
 	}
 	var cmd tea.Cmd
 	a.dayOutputSearchTI, cmd = a.dayOutputSearchTI.Update(msg)
-	a.applyDayOutputQuery(a.dayOutputSearchTI.Value())
-	return a, cmd
+	return a, tea.Batch(cmd, a.applyDayOutputQuery(a.dayOutputSearchTI.Value()))
 }
 
 // applyDayOutputQuery sets the pane's query and re-renders. The cursor goes back
@@ -805,15 +868,15 @@ func (a *App) handleDayOutputSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // resolves through dayOutputsCursor into the FILTERED slice, so an index kept
 // across a filter change would point at a different output than the highlighted
 // one.
-func (a *App) applyDayOutputQuery(q string) {
+func (a *App) applyDayOutputQuery(q string) tea.Cmd {
 	a.dayOutputQuery = q
 	a.dayOutputsCursor = 0
 	a.sessSplit.CacheKey = ""
-	a.renderOwningDayScope()
+	return a.renderOwningDayScope()
 }
 
 // clearDayOutputSearch drops the pane's query entirely.
-func (a *App) clearDayOutputSearch() {
+func (a *App) clearDayOutputSearch() tea.Cmd {
 	a.dayOutputSearching = false
-	a.applyDayOutputQuery("")
+	return a.applyDayOutputQuery("")
 }

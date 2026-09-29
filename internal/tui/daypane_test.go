@@ -1008,17 +1008,163 @@ func TestDayPaneScratchpadCollectionIsBounded(t *testing.T) {
 	if len(cmds) == 0 || len(cmds) > 8 {
 		t.Fatalf("dispatched %d walks, want between 1 and the in-flight cap of 8", len(cmds))
 	}
-	first := len(app.dayScratchpadInFlight)
 
-	// A later render picks up where this one stopped: the next batch, never a
-	// session already walking. Without that the remainder of a busy day would
-	// never be collected at all.
-	next := app.dayScratchpadCmds(sessions)
-	if len(next) == 0 {
-		t.Error("second render dispatched nothing; sessions past the cap would never be collected")
+	// A render while the batch is still running adds nothing: the budget is over
+	// the total in flight, and re-rendering is not evidence that anything
+	// finished. (Re-dispatching here is what let 250 sessions reach 218 walks at
+	// once — see TestDayScratchpadStaysBoundedAndCompletes.)
+	if again := app.dayScratchpadCmds(sessions); len(again) != 0 {
+		t.Errorf("re-render dispatched %d more walks while %d were still running",
+			len(again), len(cmds))
 	}
-	if got := len(app.dayScratchpadInFlight); got != first+len(next) {
-		t.Errorf("in-flight set grew to %d from %d with %d new walks — a session was dispatched twice",
-			got, first, len(next))
+
+	// Progress resumes as completions free up budget.
+	done := cmds[0]().(dayScratchpadMsg)
+	m, _ := app.Update(done)
+	app = m.(*App)
+	if next := app.dayScratchpadCmds(sessions); len(next) == 0 {
+		t.Error("no walk dispatched after one completed; the remainder would never be collected")
+	}
+}
+
+// pumpCmds drains a command the way the runtime does: a batch is expanded, and
+// the command a message handler returns is run in turn. Collection finishes in
+// waves (each completion re-renders and dispatches the next batch), so a
+// harness that only runs the first command sees it stop at the in-flight cap
+// and wrongly concludes the rest is stranded.
+func pumpCmds(app **App, cmd tea.Cmd, depth int) {
+	if cmd == nil || depth > 2000 {
+		return
+	}
+	msg := cmd()
+	if msg == nil {
+		return
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			pumpCmds(app, c, depth+1)
+		}
+		return
+	}
+	m, next := (*app).Update(msg)
+	*app = m.(*App)
+	pumpCmds(app, next, depth+1)
+}
+
+// TestDayScratchpadStaysBoundedAndCompletes is the load case the cap exists
+// for: a day of 250 sessions that all have a scratchpad.
+//
+// Two properties, and the first one was got wrong at first. The budget has to
+// be over the TOTAL number of walks running, not over one call — every
+// completion re-renders the pane, so a per-call cap starts a fresh batch on
+// every message and the running set grows with the day instead of staying
+// bounded (250 sessions reached 218 marked at once). The second property is
+// that it still finishes: bounding the fan-out must not strand the remainder.
+func TestDayScratchpadStaysBoundedAndCompletes(t *testing.T) {
+	base := t.TempDir()
+	t.Cleanup(session.SetScratchpadBaseOverride(base))
+
+	const total = 250
+	var sessions []session.Session
+	for i := range total {
+		id := fmt.Sprintf("s%03d", i)
+		dir := filepath.Join(base, session.EncodeProjectPath("/tmp/repo"), id, "scratchpad")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "note.md"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sessions = append(sessions, session.Session{
+			ID: id, ShortID: id, ProjectPath: "/tmp/repo", ProjectName: "repo",
+			ModTime: dayOf(0).Add(-time.Duration(i) * time.Minute),
+		})
+	}
+
+	app := newTestApp(sessions)
+	app.sessGroupMode = groupDaily
+	app.rebuildSessionList()
+	app.sessSplit.Show = true
+	app.sessSplit.Focus = true
+	for i, it := range app.sessionList.VisibleItems() {
+		if _, ok := it.(dayItem); ok {
+			app.sessionList.Select(i)
+			break
+		}
+	}
+
+	// The overrun is not visible in any single call — it accumulates across the
+	// re-renders that completions trigger. So dispatch repeatedly WITHOUT
+	// completing anything, exactly as a burst of renders would, and watch the
+	// running set. With a per-call cap this climbs without limit.
+	for range 40 {
+		app.dayScratchpadCmds(sessions)
+		if got := len(app.dayScratchpadInFlight); got > 8 {
+			t.Fatalf("%d walks running at once, want at most the cap of 8 "+
+				"(the budget must be over the total in flight, not per call)", got)
+		}
+	}
+	app.dayScratchpadInFlight = make(map[string]time.Time) // reset for the full run
+
+	pumpCmds(&app, app.updateSessionPreview(), 0)
+
+	if got := len(app.dayScratchpadCollected); got != total {
+		t.Errorf("collected %d of %d sessions — bounding the fan-out stranded the rest", got, total)
+	}
+	if got := len(app.dayScratchpadInFlight); got != 0 {
+		t.Errorf("%d walks still marked in flight after everything completed", got)
+	}
+}
+
+// TestDayCursorMoveCostWithScratchpad: TestDayCursorMoveCost covers a day whose
+// sessions have no scratchpad, so it never exercises this path. Cursor movement
+// must stay inside the frame budget once the rows are actually there.
+func TestDayCursorMoveCostWithScratchpad(t *testing.T) {
+	base := t.TempDir()
+	t.Cleanup(session.SetScratchpadBaseOverride(base))
+
+	var sessions []session.Session
+	for i := range 250 {
+		id := fmt.Sprintf("s%03d", i)
+		dir := filepath.Join(base, session.EncodeProjectPath("/tmp/repo"), id, "scratchpad")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for f := range 5 {
+			if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.md", f)), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sessions = append(sessions, session.Session{
+			ID: id, ShortID: id, ProjectPath: "/tmp/repo", ProjectName: "repo",
+			ModTime: dayOf(0).Add(-time.Duration(i) * time.Minute),
+		})
+	}
+
+	app := newTestApp(sessions)
+	app.sessGroupMode = groupDaily
+	app.rebuildSessionList()
+	app.sessSplit.Show = true
+	app.sessSplit.Focus = true
+	for i, it := range app.sessionList.VisibleItems() {
+		if _, ok := it.(dayItem); ok {
+			app.sessionList.Select(i)
+			break
+		}
+	}
+	pumpCmds(&app, app.updateSessionPreview(), 0)
+	if len(app.dayOutputRows) == 0 {
+		t.Fatal("no rows to move through")
+	}
+
+	start := time.Now()
+	const moves = 100
+	for range moves {
+		app.handleDayPreviewKeys(&app.sessSplit, "down")
+	}
+	per := time.Since(start) / moves
+	t.Logf("per cursor move: %s (rows=%d)", per.Round(time.Microsecond), len(app.dayOutputRows))
+	if per > 16*time.Millisecond {
+		t.Errorf("cursor move costs %s — above a 60fps frame budget", per)
 	}
 }
