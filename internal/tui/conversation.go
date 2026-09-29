@@ -362,6 +362,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleExecutionContextMenuKey(key)
 	}
 
+	// Past the text-input guards, so a pre-rebind key typed into the block
+	// filter or memory search stays literal.
+	key = a.keymap.resolveLegacyKey("conversation", key)
+
 	// Uppercase K/J move focus between the vertically-stacked regions
 	// (RESOURCES ↑ CONVERSATION ↕ EXECUTION CONTEXTS ↓). Handled before the
 	// execution-rail and split-pane branches so it works from any region,
@@ -633,9 +637,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// stuck on the hardcoded "f"/"F" pair that a Korean input source
 		// collapses into one key (see cjkReachableUpper).
 		if sp.Folds != nil && sp.Folds.Collapsed != nil {
-			switch key {
+			foldKey := a.keymap.resolveLegacyKey("preview", key)
+			switch foldKey {
 			case a.keymap.Preview.FoldAll, a.keymap.Preview.ExpandAll:
-				if key == a.keymap.Preview.FoldAll {
+				if foldKey == a.keymap.Preview.FoldAll {
 					sp.Folds.FoldAll()
 				} else {
 					sp.Folds.ExpandAll()

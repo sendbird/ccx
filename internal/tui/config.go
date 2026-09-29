@@ -385,9 +385,9 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.updateConfigPreview()
 		}
 		return a, nil
-	// "b" (back), not "N": a Korean input source cannot produce "N", which left
-	// reverse match navigation unreachable. See cjkReachableUpper.
-	case "b":
+	// "b" (back) because a Korean input source cannot produce "N"; "N" stays as
+	// an alias so the original key still works in English. See cjkReachableUpper.
+	case "b", "N":
 		if a.cfgSearchTerm != "" {
 			a.prevCfgMatch()
 			sp.CacheKey = "" // force preview refresh with highlights

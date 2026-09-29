@@ -438,7 +438,7 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `Ctrl+L` | Toggle live tail |
 | `w` | Send input to a live session |
 | `o` | Jump lifecycle/artifact row to its exact origin; on a turn, jump to tmux pane |
-| `Ctrl+P` / `Ctrl+N` | Move between stacked regions (resources / conversation / execution) |
+| `Ctrl+P` / `Ctrl+N` (or `K` / `J`) | Move between stacked regions (resources / conversation / execution) |
 | `a` | Execution-contexts rail |
 | `R` | Refresh |
 | `Esc` | Exit zoom, close inspector, pop drill-down, or return to sessions |
@@ -667,6 +667,11 @@ enforces this over the whole keymap, so a new binding is covered automatically.
 Single-letter shortcuts still work while a Korean IME is active: ccx maps the
 jamo back to the Latin key at the same physical position (`langmap` in
 `config.yaml` overrides or extends this for other layouts).
+
+The uppercase keys this rebind moved away from — `V`, `D`, `F`, `M`, `X`, `A`,
+`K`, `J`, `L`, `I` — still work as aliases, so muscle memory from before the
+change is not lost. The help overlay shows the new key; both are dispatched. An
+alias is dropped if you bind that key to something else yourself.
 
 ## Development
 
