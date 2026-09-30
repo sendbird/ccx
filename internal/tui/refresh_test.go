@@ -120,7 +120,33 @@ func TestDoRefreshRebuildsFilteredSessionItemsWhenLiveStateChanges(t *testing.T)
 	}
 
 	writeRegistryEntry(t, configDir, "sess-b", projectPath, "idle")
-	app.doRefresh()
+
+	// The rescan (and the tmux live-state marking it carries) now runs off the
+	// UI loop, so the refresh only dispatches it; the state lands when the
+	// result message is handled. Run the command and feed it back the way the
+	// runtime does.
+	cmd := app.doRefresh()
+	if cmd == nil {
+		t.Fatal("doRefresh dispatched no rescan")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			if m := c(); m != nil {
+				if _, isScan := m.(refreshScannedMsg); isScan {
+					msg = m
+				}
+			}
+		}
+	}
+	if _, isScan := msg.(refreshScannedMsg); !isScan {
+		t.Fatalf("expected a rescan result, got %T", msg)
+	}
+	m, _ := app.Update(msg)
+	app = m.(*App)
 
 	selected, ok = app.selectedSession()
 	if !ok {
@@ -269,5 +295,114 @@ func TestRefreshSkipsPreviewInvalidationForLiveMode(t *testing.T) {
 	}
 	if app.sessSplit.CacheKey != "keep-me" {
 		t.Errorf("live-mode R invalidated the preview cache key: %q", app.sessSplit.CacheKey)
+	}
+}
+
+// TestDoRefreshDoesNotScanOnTheUILoop is the guard for the freeze this was
+// reported as: "list navigation locks up sometimes".
+//
+// doRefresh used to call ScanSessions and MarkLiveSessions inline. Measured on
+// a 277-session directory that is ~308ms and ~127ms respectively — so a manual
+// refresh, a post-spawn refresh, or (with live updates on) every 3s tick froze
+// the UI for the better part of half a second. Both now run off the loop.
+//
+// The assertion is on the shape rather than a wall-clock number so it cannot
+// go flaky on a loaded machine: doRefresh must hand back a command and leave
+// the session slice untouched until that command's result is handled.
+func TestDoRefreshDoesNotScanOnTheUILoop(t *testing.T) {
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "config"))
+	t.Setenv("TMUX", "")
+
+	writeTestSessionFile(t, claudeDir, filepath.Join(home, "proj-a"), "sess-a")
+	sessions, err := session.ScanSessions(claudeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := newConfiguredTestApp(sessions, Config{ClaudeDir: claudeDir, TmuxEnabled: true})
+
+	// A session that exists on disk but not yet in the app's slice: if doRefresh
+	// still scanned inline, it would be picked up before the call returns.
+	writeTestSessionFile(t, claudeDir, filepath.Join(home, "proj-b"), "sess-b")
+	before := len(app.sessions)
+
+	cmd := app.doRefresh()
+	if cmd == nil {
+		t.Fatal("doRefresh returned no command; the rescan was not dispatched")
+	}
+	if got := len(app.sessions); got != before {
+		t.Errorf("session list grew from %d to %d during doRefresh — the scan ran "+
+			"on the UI loop instead of being dispatched", before, got)
+	}
+
+	// The new session appears once the dispatched scan's result is handled.
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			if m := c(); m != nil {
+				if _, isScan := m.(refreshScannedMsg); isScan {
+					msg = m
+				}
+			}
+		}
+	}
+	scan, ok := msg.(refreshScannedMsg)
+	if !ok {
+		t.Fatalf("expected a refreshScannedMsg, got %T", msg)
+	}
+	m, _ := app.Update(scan)
+	app = m.(*App)
+	if len(app.sessions) <= before {
+		t.Errorf("after the scan landed the list is still %d sessions, want more than %d",
+			len(app.sessions), before)
+	}
+}
+
+// TestDoRefreshDedupsConcurrentScans: the tick fires every 3s but a scan of a
+// large session directory takes longer than that. Without dedup the walks
+// stack up and compete for the same disk.
+func TestDoRefreshDedupsConcurrentScans(t *testing.T) {
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "config"))
+	t.Setenv("TMUX", "")
+	writeTestSessionFile(t, claudeDir, filepath.Join(home, "proj-a"), "sess-a")
+	sessions, _ := session.ScanSessions(claudeDir)
+	app := newConfiguredTestApp(sessions, Config{ClaudeDir: claudeDir, TmuxEnabled: true})
+
+	if cmd := app.doRefresh(); cmd == nil {
+		t.Fatal("first refresh dispatched nothing")
+	}
+	// A second refresh while the first is still running must not start another.
+	cmd := app.doRefresh()
+	if cmd == nil {
+		return // nothing dispatched at all is also acceptable
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			if m := c(); m != nil {
+				if _, isScan := m.(refreshScannedMsg); isScan {
+					t.Error("a second scan was dispatched while one was already in flight")
+				}
+			}
+		}
+		return
+	}
+	if _, isScan := msg.(refreshScannedMsg); isScan {
+		t.Error("a second scan was dispatched while one was already in flight")
 	}
 }
