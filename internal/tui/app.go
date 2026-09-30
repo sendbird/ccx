@@ -329,7 +329,7 @@ type App struct {
 	// per session, so it is collected off the UI thread and cached per scope.
 	dayScratchpad          map[string][]session.SessionOutput // session ID → its scratchpad rows
 	dayScratchpadCollected map[string]bool                    // session IDs already walked
-	dayScratchpadInFlight  map[string]bool                    // walks currently running
+	dayScratchpadInFlight  map[string]time.Time               // session ID → when its walk was dispatched
 	// The day pane searches independently of the session list: the two answer
 	// different questions ("which sessions" vs "which outputs"), and a day with
 	// hundreds of outputs needs narrowing even when the session list does not.
@@ -928,7 +928,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		outputsInFlight:        make(map[string]bool),
 		dayScratchpad:          make(map[string][]session.SessionOutput),
 		dayScratchpadCollected: make(map[string]bool),
-		dayScratchpadInFlight:  make(map[string]bool),
+		dayScratchpadInFlight:  make(map[string]time.Time),
 		sessRefsSelected:       make(map[string]bool),
 		notifyPrev:             make(map[string]session.LifecycleState),
 		sessionRowCache:        newSessionRowCache(1024),
@@ -1417,17 +1417,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// on refStatusMsg, which never arrives for a session whose links all
 		// resolve from cache, and a day with 40 PRs reports zero.
 		a.syncSessionRefsToList(msg.id)
+		var dayCmd tea.Cmd
 		if a.state == viewSessions && a.sessSplit.Show {
 			if di, ok := a.selectedDay(); ok {
 				a.sessSplit.CacheKey = ""
-				a.updateDayPreview(di)
+				dayCmd = a.updateDayPreview(di)
 			}
 		}
 		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessRefsCacheKey = ""
 				previewCmd := a.updateSessionRefsPreview(sess)
-				return a, tea.Batch(previewCmd, statusCmd)
+				return a, tea.Batch(previewCmd, statusCmd, dayCmd)
 			}
 		}
 		// The Outputs digest lists refs alongside plans/memory/files, so it has
@@ -1436,10 +1437,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessOutputsCacheKey = ""
 				previewCmd := a.updateSessionOutputsPreview(sess)
-				return a, tea.Batch(previewCmd, statusCmd)
+				return a, tea.Batch(previewCmd, statusCmd, dayCmd)
 			}
 		}
-		return a, statusCmd
+		return a, tea.Batch(statusCmd, dayCmd)
 
 	case outputsCollectedMsg:
 		// A transcript scan landed. Ignore it when the user has since moved to a
@@ -1502,22 +1503,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.syncSessionRefsToList(msg.id)
 		// A date row's pane is built from its children's refs, so a landing
 		// status adds rows to the day's "Produced" list.
+		var dayCmd tea.Cmd
 		if a.state == viewSessions && a.sessSplit.Show {
 			if di, ok := a.selectedDay(); ok {
 				a.sessSplit.CacheKey = ""
-				a.updateDayPreview(di)
+				dayCmd = a.updateDayPreview(di)
 			}
 		}
 		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewRefs {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessRefsCacheKey = "" // force re-render with the newly-resolved ref
-				return a, a.updateSessionRefsPreview(sess)
+				return a, tea.Batch(a.updateSessionRefsPreview(sess), dayCmd)
 			}
 		}
 		if a.state == viewSessions && a.sessSplit.Show && a.sessPreviewMode == sessPreviewOutputs {
 			if sess, ok := a.selectedSession(); ok && sess.ID == msg.id {
 				a.sessOutputsCacheKey = ""
-				return a, a.updateSessionOutputsPreview(sess)
+				return a, tea.Batch(a.updateSessionOutputsPreview(sess), dayCmd)
 			}
 		}
 		// Re-render the conversation view so the Session Refs & URLs flow row
@@ -1526,7 +1528,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.conv.split.CacheKey = ""
 			a.updateConvPreview()
 		}
-		return a, nil
+		return a, dayCmd
 
 	case urlRefStatusMsg:
 		// One PR/Jira URL's status landed; store it so the URL menu row renders
@@ -1605,8 +1607,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// narrowing you can see is the thing Esc undoes.
 		if msg.String() == "esc" && a.state == viewSessions && a.sessSplit.Focus &&
 			a.selectedOwnsDayPane() && a.dayOutputQuery != "" {
-			a.clearDayOutputSearch()
-			return a, nil
+			return a, a.clearDayOutputSearch()
 		}
 
 		// Esc clears an applied search filter before doing normal navigation.
@@ -2416,8 +2417,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// rowSupportsPreviewModes blocks the digits there). Tab switches the
 		// pane's KIND instead, which is the only axis it actually has.
 		if a.selectedOwnsDayPane() {
-			a.cycleDayOutputTab(+1)
-			return a, nil
+			return a, a.cycleDayOutputTab(+1)
 		}
 		a.cycleSessionPreviewMode()
 		return a, a.updateSessionPreview()
@@ -2428,8 +2428,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, a.updateSessionPreview()
 		}
 		if a.selectedOwnsDayPane() {
-			a.cycleDayOutputTab(-1)
-			return a, nil
+			return a, a.cycleDayOutputTab(-1)
 		}
 		a.cycleSessionPreviewModeReverse()
 		return a, a.updateSessionPreview()
@@ -5382,7 +5381,7 @@ func (a *App) renderSessionSplit() string {
 	// resizeAll). View only re-renders their already-populated content (the
 	// resize block below).
 	if !previewDispatchesFromView(a.sessPreviewMode) {
-		_ = a.updateSessionPreview()
+		a.refreshSessionPreviewLayout()
 	}
 
 	if a.sessSplit.Preview.Width != previewW || a.sessSplit.Preview.Height != contentH {
@@ -5423,7 +5422,7 @@ func (a *App) renderSessionSplit() string {
 			a.refreshConvPreview()
 		} else if a.sessPreviewMode != sessPreviewLive && !isRemoteSetup {
 			a.sessSplit.CacheKey = ""
-			_ = a.updateSessionPreview()
+			a.refreshSessionPreviewLayout()
 			if a.sessPreviewMode == sessPreviewLive {
 				a.sessSplit.Preview.GotoBottom()
 			} else {
@@ -5520,6 +5519,18 @@ type liveFindMsg struct {
 }
 
 func (a *App) updateSessionPreview() tea.Cmd {
+	return a.updateSessionPreviewWith(true)
+}
+
+// refreshSessionPreviewLayout re-renders the preview from the View path, which
+// cannot dispatch a tea.Cmd. Anything that would arm async work is skipped:
+// arming it here marks the work in flight against a command that is then
+// dropped, and the pane never recovers (see dayScratchpadCmds).
+func (a *App) refreshSessionPreviewLayout() {
+	_ = a.updateSessionPreviewWith(false)
+}
+
+func (a *App) updateSessionPreviewWith(dispatch bool) tea.Cmd {
 	if !a.sessSplit.Show {
 		return nil
 	}
@@ -5536,6 +5547,10 @@ func (a *App) updateSessionPreview() tea.Cmd {
 		}
 		a.sessSplit.CacheKey = cacheKey
 		a.sessPreviewPinned = false
+		if !dispatch {
+			a.refreshDayPreviewLayout(di)
+			return nil
+		}
 		return a.updateDayPreview(di)
 	}
 	if pi, ok := a.selectedProject(); ok {
@@ -5550,6 +5565,10 @@ func (a *App) updateSessionPreview() tea.Cmd {
 			}
 			a.sessSplit.CacheKey = cacheKey
 			a.sessPreviewPinned = false
+			if !dispatch {
+				a.refreshDayProjectPreviewLayout(pi)
+				return nil
+			}
 			return a.updateDayProjectPreview(pi)
 		}
 		// In refs/outputs mode a project head row previews its representative

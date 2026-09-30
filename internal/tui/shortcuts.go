@@ -231,8 +231,10 @@ func (a *App) handleShortcutKey(key string) (tea.Model, tea.Cmd, bool) {
 	// a second surprise on top of the first.
 	if isPreviewModeCmd(cmdName) && !a.rowSupportsPreviewModes() {
 		if a.sessSplit.Show {
-			if n, err := strconv.Atoi(key); err == nil && a.selectDayOutputTab(n) {
-				return a, nil, true
+			if n, err := strconv.Atoi(key); err == nil {
+				if cmd, ok := a.selectDayOutputTab(n); ok {
+					return a, cmd, true
+				}
 			}
 		}
 		return a, nil, true
