@@ -120,7 +120,7 @@ Browse all Claude Code sessions across projects, sorted by recency.
   - **Fork** — agent-fork grouping
   - **Daily** (`d`) — day → project → session tree (newest day first), previewing what each level produced
 - **Project filter** — `/proj:<name>` scopes the list to one project
-- **Preview pane** (`Tab` to cycle): conversation, stats, memory, tasks/plan, workflows, outputs, references, live
+- **Preview pane** (`Tab` to cycle): outputs (the default — PRs, Jira issues, plans, scratchpad files), conversation, stats, memory, tasks/plan, workflows, references, live
 - **Fleet notifications** — when a live session transitions into an attention state (→ `WAIT`/`DONE`/`STUCK`), a `(!)N` indicator appears in the status bar; press `n` to jump to the most recently notified session
 - **Multi-select** (`Space`) — bulk delete, copy paths, send input
 - **Actions menu** (`x`) — delete, move, resume, copy path, worktree, kill, input, jump, URLs, files
