@@ -974,11 +974,15 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		// persisted preference or -group daily): the browser's default, not the
 		// zero value, which would drop the user into flat.
 		preDailyGroupMode: groupProjectCentric,
-		// Each view remembers its own preview. The daily view exists to show
-		// results, so it opens on the outputs digest rather than a wall of
-		// conversation text; the project browser keeps the conversation preview.
+		// Each view remembers its own preview, and both open on the outputs
+		// digest: the first question about a row is what it produced — PRs,
+		// Jira issues, plans, scratchpad files — not the wall of conversation
+		// text that answers how. Scratchpad in particular was only reachable
+		// from a date row before this, because that row ignores the preview
+		// mode while project and session rows follow it. Tab (or the page menu)
+		// switches to the conversation when the how is what you want.
 		dailyPreviewMode:   sessPreviewOutputs,
-		browserPreviewMode: sessPreviewConversation,
+		browserPreviewMode: sessPreviewOutputs,
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
@@ -1055,10 +1059,15 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 			}
 		}
 	}
-	// Starting in the daily view with no explicit -preview: open on its own
-	// default (outputs) rather than the browser's conversation preview.
-	if a.sessGroupMode == groupDaily && a.config.PreviewMode == "" {
-		a.sessPreviewMode = a.dailyPreviewMode
+	// With no explicit -preview, open on the starting view's own default rather
+	// than sessPreviewMode's zero value, which is the conversation preview and
+	// has nothing to do with what either view wants to show first.
+	if a.config.PreviewMode == "" {
+		if a.sessGroupMode == groupDaily {
+			a.sessPreviewMode = a.dailyPreviewMode
+		} else {
+			a.sessPreviewMode = a.browserPreviewMode
+		}
 	}
 	if a.config.ViewMode != "" {
 		modeMap := map[string]viewState{
@@ -1086,6 +1095,12 @@ func (a *App) Init() tea.Cmd {
 		claudeDir := a.config.ClaudeDir
 		cmds = append(cmds, func() tea.Msg {
 			sessions, err := session.ScanSessions(claudeDir)
+			// Warm the window-scan memo here as well. autoSelectSession, which
+			// runs the moment this scan lands, calls CurrentWindowClaudes to
+			// decide where to put the cursor — and the first call walks every
+			// tmux pane for ~223ms. Memoized it is 2µs, so doing it on this
+			// goroutine turns a visible startup stall into nothing.
+			tmux.CurrentWindowClaudes()
 			// Mark live state here too: MarkLiveSessions shells out to tmux and
 			// costs ~112ms, which is a visible stall if left on the UI loop.
 			if err == nil && len(sessions) > 0 {

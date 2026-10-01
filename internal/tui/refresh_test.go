@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tmux"
 )
 
 func newConfiguredTestApp(sessions []session.Session, cfg Config) *App {
@@ -404,5 +406,99 @@ func TestDoRefreshDedupsConcurrentScans(t *testing.T) {
 	}
 	if _, isScan := msg.(refreshScannedMsg); isScan {
 		t.Error("a second scan was dispatched while one was already in flight")
+	}
+}
+
+// TestScannedMsgDoesNotWalkTmuxOnTheUILoop guards the startup stall: ccx felt
+// sluggish for the first moment after launch.
+//
+// The initial scan's result handler calls autoSelectSession to place the
+// cursor, which asks tmux which panes in this window are running Claude. That
+// walk costs ~223ms the first time and 2µs once memoized — so the whole cost
+// landed on the UI loop at exactly the moment the list first appeared. Init's
+// scan command now warms the memo on its own goroutine.
+//
+// Asserting on the memo rather than a wall-clock number keeps this honest on a
+// loaded machine: what matters is that the expensive call has already happened
+// off the loop by the time the handler runs.
+func TestScannedMsgDoesNotWalkTmuxOnTheUILoop(t *testing.T) {
+	if !tmux.InTmux() {
+		t.Skip("not inside tmux; the window scan is a no-op")
+	}
+	// Cold: the walk has not run yet.
+	tmux.InvalidateWindowClaudes()
+
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "config"))
+	writeTestSessionFile(t, claudeDir, filepath.Join(home, "proj-a"), "sess-a")
+	sessions, err := session.ScanSessions(claudeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app := newConfiguredTestApp(nil, Config{ClaudeDir: claudeDir, TmuxEnabled: true})
+
+	// Run what Init dispatches, expanding the batch the way the runtime does:
+	// each command is its own goroutine there, so every one has to actually be
+	// called for this to stand in for startup.
+	app.sessionsLoading = true
+	if msg := app.Init()(); msg != nil {
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				if c != nil {
+					_ = c()
+				}
+			}
+		}
+	}
+
+	warmed := time.Now()
+	tmux.CurrentWindowClaudes()
+	if d := time.Since(warmed); d > 20*time.Millisecond {
+		t.Errorf("window scan still cold after the startup command ran (%s) — "+
+			"autoSelectSession will pay for it on the UI loop", d.Round(time.Millisecond))
+	}
+
+	// And the handler itself stays cheap.
+	start := time.Now()
+	m, _ := app.Update(sessionsScannedMsg{sessions: sessions})
+	app = m.(*App)
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Errorf("sessionsScannedMsg blocked the loop for %s", d.Round(time.Millisecond))
+	}
+}
+
+// TestBrowserOpensOnTheOutputsDigest: the first question about a row is what it
+// produced, so every view now opens on the outputs digest. It also makes
+// scratchpad reachable from project and session rows — a date row ignores the
+// preview mode and always shows Produced, which is why scratchpad appeared
+// there and nowhere else.
+func TestBrowserOpensOnTheOutputsDigest(t *testing.T) {
+	app := NewApp([]session.Session{
+		{ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: time.Now()},
+	}, Config{})
+	if got := app.sessPreviewMode; got != sessPreviewOutputs {
+		t.Errorf("startup preview mode = %v, want the outputs digest (%v)", got, sessPreviewOutputs)
+	}
+	if got := app.browserPreviewMode; got != sessPreviewOutputs {
+		t.Errorf("browser preview mode = %v, want the outputs digest", got)
+	}
+	if got := app.dailyPreviewMode; got != sessPreviewOutputs {
+		t.Errorf("daily preview mode = %v, want the outputs digest", got)
+	}
+}
+
+// TestExplicitPreviewFlagStillWins: the new default must not override what the
+// user asked for on the command line.
+func TestExplicitPreviewFlagStillWins(t *testing.T) {
+	app := NewApp([]session.Session{
+		{ID: "a1", ShortID: "a1", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: time.Now()},
+	}, Config{PreviewMode: "conv"})
+	if got := app.sessPreviewMode; got != sessPreviewConversation {
+		t.Errorf("-preview conv gave %v, want the conversation preview", got)
 	}
 }
