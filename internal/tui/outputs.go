@@ -76,6 +76,17 @@ func (a *App) buildOutputsPreview(sess session.Session, dispatch bool) tea.Cmd {
 	// A transcript that grew invalidates the collection; the ref count is not
 	// part of the key because refs are merged in at render time, not collected.
 	dataKey := fmt.Sprintf("%s:%d", sess.ID, sess.ModTime.UnixNano())
+	// Adopt an earlier collection for this exact transcript before deciding to
+	// scan. Switching rows clears the single-session digest state above, so
+	// without this, moving the cursor off a row and back rescans its transcript
+	// — 8ms median, 117ms p95 per session, paid once per row per pass while
+	// walking the list.
+	if a.sessOutputsCollected != dataKey {
+		if cached, ok := a.sessOutputsStore.Get(dataKey); ok {
+			a.sessOutputs = cached
+			a.sessOutputsCollected = dataKey
+		}
+	}
 	if dispatch && a.sessOutputsCollected != dataKey && !a.outputsInFlight[sess.ID] {
 		a.outputsInFlight[sess.ID] = true
 		cmds = append(cmds, collectOutputsCmd(sess, dataKey))

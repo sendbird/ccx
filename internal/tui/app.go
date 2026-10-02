@@ -240,6 +240,21 @@ type App struct {
 	sessionList         list.Model
 	sessionRowCache     *sessionRowCache
 	convPreviewRowCache *sessionRowCache
+	// Collected outputs survive a row change so walking the list up and down
+	// does not rescan the same transcripts (see outputsStore).
+	sessOutputsStore *outputsStore
+
+	// Preview payloads loaded off the UI loop, keyed by mode+session+mtime.
+	// previewLoadInFlight dedups a load that a repeated row visit would
+	// otherwise dispatch twice before the first one lands.
+	previewLoads        *sessionStore[any]
+	previewLoadInFlight map[string]bool
+
+	// Per-mode payloads the renderers read, filled by applyPreviewLoad.
+	sessCtxTree         *session.SessionContextTree
+	sessCtxErr          error
+	sessScratchpadFiles []session.ScratchpadFile
+	sessShellJobs       []session.ShellJob
 
 	// Split panes
 	sessSplit SplitPane
@@ -963,6 +978,8 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		notifyPrev:             make(map[string]session.LifecycleState),
 		sessionRowCache:        newSessionRowCache(1024),
 		convPreviewRowCache:    newSessionRowCache(4096),
+		sessOutputsStore:       newOutputsStore(outputsStoreCap),
+		previewLoads:           newSessionStore[any](previewStoreCap),
 		termFocused:            true,
 		// Default to a true project-centric browser: ccx now opens with one
 		// row per project (folder-like), and sessions of the same repo (and
@@ -1258,6 +1275,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case previewLoadMsg:
+		return a, a.handlePreviewLoad(msg)
+
 	case previewDebounceMsg:
 		if msg.id != a.previewDebounceID {
 			return a, nil // stale: a newer navigation happened
@@ -1516,6 +1536,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// different session — the digest state tracks exactly one session, and
 		// adopting a stale result would show another session's outputs.
 		delete(a.outputsInFlight, msg.id)
+		// Keep the result even when the cursor has moved on: the scan already
+		// happened, and storing it is what makes moving back free.
+		a.sessOutputsStore.Set(msg.dataKey, msg.outputs)
 		if a.sessOutputsCacheID != msg.id {
 			return a, nil
 		}
@@ -5392,7 +5415,8 @@ func previewDispatchesCmd(mode sessPreview) bool {
 // through to the project-summary preview rather than being re-routed to a
 // representative session — so the two predicates are deliberately not merged.
 func previewDispatchesFromView(mode sessPreview) bool {
-	return previewDispatchesCmd(mode) || mode == sessPreviewConversation
+	return previewDispatchesCmd(mode) || mode == sessPreviewConversation ||
+		previewLoadsOffLoop(mode)
 }
 
 func (a *App) renderSessionSplit() string {
@@ -5671,17 +5695,17 @@ func (a *App) updateSessionPreviewWith(dispatch bool) tea.Cmd {
 	case sessPreviewMemory:
 		a.updateSessionMemoryPreview(sess)
 	case sessPreviewScratchpad:
-		a.updateSessionScratchpadPreview(sess)
+		return a.updateSessionScratchpadPreview(sess)
 	case sessPreviewTasksPlan:
 		a.updateSessionTasksPlanPreview(sess)
 	case sessPreviewAgents:
-		a.updateSessionAgentsPreview(sess)
+		return a.updateSessionAgentsPreview(sess)
 	case sessPreviewWorkflows:
-		a.updateSessionWorkflowsPreview(sess)
+		return a.updateSessionWorkflowsPreview(sess)
 	case sessPreviewShells:
-		a.updateSessionShellsPreview(sess)
+		return a.updateSessionShellsPreview(sess)
 	case sessPreviewContexts:
-		a.updateSessionContextsPreview(sess)
+		return a.updateSessionContextsPreview(sess)
 	case sessPreviewRefs:
 		return a.updateSessionRefsPreview(sess)
 	case sessPreviewOutputs:
@@ -6436,16 +6460,27 @@ func (a *App) updateSessionMemoryPreview(sess session.Session) {
 	a.sessSplit.Preview.SetContent(a.sessMemoryCache)
 }
 
-func (a *App) updateSessionScratchpadPreview(sess session.Session) {
+func (a *App) updateSessionScratchpadPreview(sess session.Session) tea.Cmd {
 	if a.sessScratchpadCacheKey != sess.ID {
-		a.sessScratchpadCache = a.buildScratchpadContent(sess)
-		a.sessScratchpadCacheKey = sess.ID
+		a.sessScratchpadFiles = nil
+		a.sessScratchpadCache = ""
+		a.sessScratchpadCacheKey = ""
+	}
+	cmd := a.adoptPreviewLoad(sessPreviewScratchpad, sess)
+	if a.sessScratchpadCacheKey != sess.ID {
+		if _, loaded := a.previewLoads.Get(previewLoadKey(sessPreviewScratchpad, sess)); loaded {
+			a.sessScratchpadCache = a.buildScratchpadContent(sess, a.sessScratchpadFiles)
+			a.sessScratchpadCacheKey = sess.ID
+		} else {
+			a.sessScratchpadCache = dimStyle.Render("(loading scratchpad…)")
+		}
 	}
 
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessScratchpadCache)
+	return cmd
 }
 
 func (a *App) updateSessionTasksPlanPreview(sess session.Session) {
@@ -6460,27 +6495,39 @@ func (a *App) updateSessionTasksPlanPreview(sess session.Session) {
 	a.sessSplit.Preview.SetContent(a.sessTasksCache)
 }
 
-func (a *App) updateSessionAgentsPreview(sess session.Session) {
+func (a *App) updateSessionAgentsPreview(sess session.Session) tea.Cmd {
+	cmd := a.adoptPreviewLoad(sessPreviewAgents, sess)
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	if _, loaded := a.previewLoads.Get(previewLoadKey(sessPreviewAgents, sess)); !loaded {
+		a.sessSplit.Preview.SetContent(dimStyle.Render("(loading agents…)"))
+		return cmd
+	}
 	a.sessSplit.Preview.SetContent(a.buildAgentsPreviewContent(sess))
+	return cmd
 }
 
-func (a *App) updateSessionWorkflowsPreview(sess session.Session) {
-	// Load + join workflow runs and their nested agents once per session, so the
-	// cursor can drill into any agent's transcript.
+// updateSessionWorkflowsPreview renders the workflow runs for a session. The
+// runs and their nested agents are loaded off the UI loop once per session, so
+// the cursor can drill into any agent's transcript without re-reading it.
+func (a *App) updateSessionWorkflowsPreview(sess session.Session) tea.Cmd {
 	if a.sessWorkflowsCacheKey != sess.ID {
-		a.sessWfRuns, _ = session.FindWorkflows(sess.FilePath)
-		allAgents, _ := session.FindSubagents(sess.FilePath)
-		a.sessWfAgents = session.JoinWorkflowAgents(a.sessWfRuns, allAgents)
+		a.sessWfRuns, a.sessWfAgents = nil, nil
 		a.sessWfCursor = 0
-		a.sessWorkflowsCacheKey = sess.ID
+		a.sessWorkflowsCacheKey = ""
 	}
+	cmd := a.adoptPreviewLoad(sessPreviewWorkflows, sess)
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	if _, loaded := a.previewLoads.Get(previewLoadKey(sessPreviewWorkflows, sess)); !loaded {
+		a.sessSplit.Preview.SetContent(dimStyle.Render("(loading workflows…)"))
+		return cmd
+	}
+	a.sessWorkflowsCacheKey = sess.ID
 	a.sessSplit.Preview.SetContent(a.buildWorkflowsPreviewContent(sess, previewW))
+	return cmd
 }
 
 // buildWorkflowsPreviewContent renders the workflow runs recorded for a session
@@ -6491,10 +6538,8 @@ func (a *App) updateSessionWorkflowsPreview(sess session.Session) {
 // result). Agent rows are indexed to match a.sessWfAgents so the cursor maps to
 // a real drill-down target.
 func (a *App) buildWorkflowsPreviewContent(sess session.Session, width int) string {
+	// Loaded off the UI loop into sessWfRuns; see preview_load.go.
 	runs := a.sessWfRuns
-	if len(runs) == 0 {
-		runs, _ = session.FindWorkflows(sess.FilePath)
-	}
 	if len(runs) == 0 {
 		return dimStyle.Render("No workflow runs found.")
 	}
@@ -6654,18 +6699,33 @@ func formatDurationMS(ms int64) string {
 	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
-func (a *App) updateSessionShellsPreview(sess session.Session) {
+func (a *App) updateSessionShellsPreview(sess session.Session) tea.Cmd {
 	if a.sessShellsCacheKey != sess.ID {
-		a.sessShellsCache = a.buildShellsPreviewContent(sess)
-		a.sessShellsCacheKey = sess.ID
+		a.sessShellJobs = nil
+		a.sessShellsCache = ""
+		a.sessShellsCacheKey = ""
+	}
+	cmd := a.adoptPreviewLoad(sessPreviewShells, sess)
+	if a.sessShellsCacheKey != sess.ID {
+		if _, loaded := a.previewLoads.Get(previewLoadKey(sessPreviewShells, sess)); loaded {
+			a.sessShellsCache = a.buildShellsPreviewContent(sess)
+			a.sessShellsCacheKey = sess.ID
+		} else {
+			a.sessShellsCache = dimStyle.Render("(loading shells…)")
+		}
 	}
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessShellsCache)
+	return cmd
 }
 
-func (a *App) updateSessionContextsPreview(sess session.Session) {
+// updateSessionContextsPreview renders the context tree for a session. The
+// tree itself is loaded off the UI loop (previewLoadCmd) and cached by
+// session+mtime; only the render below is keyed by cursor/width/focus, so
+// moving the highlight inside the pane no longer re-reads the transcript.
+func (a *App) updateSessionContextsPreview(sess session.Session) tea.Cmd {
 	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
 	contentH := max(a.height-3, 1)
 	// Reset the cursor when the selected session changes so we don't carry a
@@ -6673,25 +6733,27 @@ func (a *App) updateSessionContextsPreview(sess session.Session) {
 	if a.sessCtxCacheID != sess.ID {
 		a.sessCtxCursor = 0
 		a.sessCtxCacheID = sess.ID
+		a.sessCtxTree, a.sessCtxNodes, a.sessCtxErr = nil, nil, nil
 	}
-	// Cursor/focus are part of the key so highlight moves re-render.
-	cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t", sess.ID, sess.ModTime.UnixNano(), previewW, a.sessCtxCursor, a.sessSplit.Focus)
-	if a.sessContextsCacheKey != cacheKey {
-		tree, err := session.BuildSessionContextTree(a.config.ClaudeDir, sess)
-		if err != nil {
-			a.sessContextsCache = dimStyle.Render("Failed to build context tree: " + err.Error())
-			a.sessCtxNodes = nil
-		} else {
-			a.sessCtxNodes = flattenContextNodes(tree)
-			if a.sessCtxCursor >= len(a.sessCtxNodes) {
-				a.sessCtxCursor = max(len(a.sessCtxNodes)-1, 0)
-			}
-			a.sessContextsCache = renderSessionContextTreeCursor(tree, previewW, a.sessCtxCursor, a.sessSplit.Focus)
-		}
-		a.sessContextsCacheKey = cacheKey
-	}
+	cmd := a.adoptPreviewLoad(sessPreviewContexts, sess)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
+	switch {
+	case a.sessCtxErr != nil:
+		a.sessContextsCache = dimStyle.Render("Failed to build context tree: " + a.sessCtxErr.Error())
+		a.sessContextsCacheKey = ""
+	case a.sessCtxTree == nil:
+		a.sessContextsCache = dimStyle.Render("(loading context tree…)")
+		a.sessContextsCacheKey = ""
+	default:
+		// Cursor/focus/width are part of the key so highlight moves re-render.
+		cacheKey := fmt.Sprintf("%s:%d:%d:%d:%t", sess.ID, sess.ModTime.UnixNano(), previewW, a.sessCtxCursor, a.sessSplit.Focus)
+		if a.sessContextsCacheKey != cacheKey {
+			a.sessContextsCache = renderSessionContextTreeCursor(a.sessCtxTree, previewW, a.sessCtxCursor, a.sessSplit.Focus)
+			a.sessContextsCacheKey = cacheKey
+		}
+	}
 	a.sessSplit.Preview.SetContent(a.sessContextsCache)
+	return cmd
 }
 
 // updateSessionRefsPreview renders the PR/Jira references for a session with
@@ -7374,11 +7436,8 @@ func (a *App) buildShellsPreviewContent(sess session.Session) string {
 	}
 	jobs := sess.ShellJobs
 	if len(jobs) == 0 {
-		entries, err := session.LoadMessages(sess.FilePath)
-		if err != nil {
-			return dimStyle.Render("Failed to load session: " + err.Error())
-		}
-		jobs = session.LoadShellJobsFromEntries(entries)
+		// Parsed off the UI loop into sessShellJobs; see preview_load.go.
+		jobs = a.sessShellJobs
 	}
 	if len(jobs) == 0 {
 		return dimStyle.Render("No background shells or monitors found for this session.")
@@ -7612,15 +7671,15 @@ func (a *App) buildTasksPlanContent(sess session.Session) string {
 }
 
 func (a *App) buildAgentsPreviewContent(sess session.Session) string {
-	a.sessPreviewAgents = nil
 	if !sess.HasAgents {
+		a.sessPreviewAgents = nil
 		return dimStyle.Render("No agents found for this session.")
 	}
-	agents, err := session.FindSubagents(sess.FilePath)
-	if err != nil || len(agents) == 0 {
+	// Extracted off the UI loop into sessPreviewAgents; see preview_load.go.
+	agents := a.sessPreviewAgents
+	if len(agents) == 0 {
 		return dimStyle.Render("No agents found for this session.")
 	}
-	a.sessPreviewAgents = agents
 	if a.sessAgentCursor >= len(agents) {
 		a.sessAgentCursor = 0
 	}
@@ -7682,11 +7741,15 @@ func (a *App) buildAgentsPreviewContent(sess session.Session) string {
 // name + size + mtime, then the (markdown-rendered) body for text files. This
 // is the same level/surface as the memory preview — reachable via the `x` page
 // menu key, `tab` cycling, and `preview:scratch`.
-func (a *App) buildScratchpadContent(sess session.Session) string {
+// buildScratchpadContent renders an already-loaded set of scratchpad files.
+// The files are passed in rather than read here so the sessions pane can hand
+// over what previewLoadCmd fetched off the UI loop (see preview_load.go) while
+// the conversation inspector, reached by an explicit node selection rather than
+// by row navigation, can still load them on the spot.
+func (a *App) buildScratchpadContent(sess session.Session, files []session.ScratchpadFile) string {
 	if sess.ProjectPath == "" || sess.ID == "" {
 		return dimStyle.Render("(no session context)")
 	}
-	files := session.LoadScratchpadFiles(sess.ProjectPath, sess.ID)
 	if len(files) == 0 {
 		return dimStyle.Render("No scratchpad files.")
 	}
