@@ -516,7 +516,8 @@ func (a *App) renderInspectorOverview(item convItem, node session.FlowNode) stri
 		case "refs":
 			content = a.buildRefsListText()
 		case "scratchpad":
-			content = a.buildScratchpadContent(a.conv.sess)
+			content = a.buildScratchpadContent(a.conv.sess,
+				session.LoadScratchpadFiles(a.conv.sess.ProjectPath, a.conv.sess.ID))
 		default:
 			content = a.buildTasksPlanContent(a.conv.sess)
 		}
