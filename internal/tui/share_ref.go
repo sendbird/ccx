@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/sendbird/ccx/internal/session"
-	"github.com/sendbird/ccx/internal/tmux"
 )
 
 // shareRefItem is one shareable artifact from the source session: a memory
@@ -31,7 +30,7 @@ const (
 // openShareRef opens a two-step picker: (1) pick a shareable artifact from the
 // currently selected session, (2) pick a target live session to receive an
 // @<path> reference prompt. The prompt is injected into the target's tmux pane
-// via tmux.SendKeys — the same channel openLiveInput uses.
+// via sendKeys — the same channel openLiveInput uses.
 func (a *App) openShareRef() (tea.Model, tea.Cmd) {
 	sess, ok := a.selectedSession()
 	if !ok {
@@ -179,14 +178,9 @@ func (a *App) confirmShareRef() (tea.Model, tea.Cmd) {
 	}
 
 	prompt := buildShareRefPrompt(a.shareRefSrcShort, pickedItem)
-	a.copiedMsg = fmt.Sprintf("Shared @%s → %s", filepath.Base(pickedItem.Path), shortSessionLabel(target))
-	return a, func() tea.Msg {
-		pane, found := tmux.FindPane(target.ProjectPath, target.ID)
-		if !found || !tmux.HasClaude(pane.PID) {
-			return liveInputSentMsg{err: fmt.Errorf("no live Claude pane for %s", shortSessionLabel(target))}
-		}
-		return liveInputSentMsg{err: tmux.SendKeys(pane, prompt)}
-	}
+	label := fmt.Sprintf("@%s → %s", filepath.Base(pickedItem.Path), shortSessionLabel(target))
+	a.copiedMsg = "Sharing " + label + "…"
+	return a, shareRefSendCmd(target, prompt, "Shared "+label)
 }
 
 // buildShareRefPrompt composes the prompt injected into the target session.

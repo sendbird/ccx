@@ -174,7 +174,7 @@ func (a *App) handleLiveInputPane(msg liveInputPaneMsg) tea.Cmd {
 				return liveInputSentMsg{err: fmt.Errorf("empty")}
 			}
 			sendText := strings.TrimRight(string(content), "\n")
-			return liveInputSentMsg{err: tmux.SendKeys(pane, sendText)}
+			return liveInputSentMsg{err: sendKeys(pane, sendText)}
 		}
 	}
 

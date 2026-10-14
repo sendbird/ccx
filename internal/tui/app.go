@@ -72,6 +72,7 @@ func scanSessionsCmd(claudeDir string) tea.Cmd {
 type liveCaptureMsg struct {
 	content string
 	failed  bool
+	sendErr error // keys sent before the capture failed to reach the pane
 }
 
 // Conversation right-pane detail levels.
@@ -508,7 +509,9 @@ type App struct {
 	liveInputPane    tmux.Pane
 	liveInputModal   inputModal
 	liveInputProjDir string // project path for $EDITOR cwd
-	liveInputSeq     int    // generation of the latest openLiveInput lookup
+	liveInputSeq     int    // generation of the latest openLiveInput/bulkInput lookup
+	paneJumpSeq      int    // generation of the latest pane jump lookup
+	livePreviewSeq   int    // generation of the latest openLivePreview lookup
 
 	// Pane proxy: unified live preview + shell-in-preview
 	paneProxy *paneProxyState
@@ -1275,9 +1278,29 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case liveInputPaneMsg:
 		return a, a.handleLiveInputPane(msg)
 
+	case paneJumpFoundMsg:
+		return a, a.handlePaneJumpFound(msg)
+
+	case paneJumpDoneMsg:
+		if msg.err != nil {
+			a.copiedMsg = "Switch failed: " + msg.err.Error()
+		}
+		return a, nil
+
+	case livePreviewPaneMsg:
+		return a, a.handleLivePreviewPane(msg)
+
+	case bulkInputPanesMsg:
+		a.handleBulkInputPanes(msg)
+		return a, nil
+
+	case shareRefSentMsg:
+		a.handleShareRefSent(msg)
+		return a, nil
+
 	case liveInputSentMsg:
 		if msg.err != nil {
-			a.copiedMsg = "Send failed"
+			a.copiedMsg = "Send failed: " + msg.err.Error()
 		} else {
 			a.copiedMsg = "Sent!"
 		}
@@ -1342,6 +1365,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case liveCaptureMsg:
+		if msg.sendErr != nil {
+			a.copiedMsg = "Send failed: " + msg.sendErr.Error()
+		}
 		if a.paneProxy == nil || a.sessPreviewMode != sessPreviewLive {
 			return a, nil
 		}
@@ -2204,10 +2230,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
 		case "ctrl+g":
 			// Jump to the actual tmux pane
-			if err := tmux.SwitchToPane(a.paneProxy.pane); err != nil {
-				a.copiedMsg = "Switch failed"
-			}
-			return a, nil
+			pane := a.paneProxy.pane
+			return a, func() tea.Msg { return paneJumpDoneMsg{err: switchToPane(pane)} }
 		case "ctrl+n":
 			// Send backslash + enter for multi-line input in Claude
 			return a, a.liveNewlineCmd()
@@ -2710,15 +2734,14 @@ func (a *App) handlePaneProxyKey(key string) (tea.Model, tea.Cmd) {
 func (a *App) liveNewlineCmd() tea.Cmd {
 	pane := a.paneProxy.pane
 	return func() tea.Msg {
-		target := pane.Session + ":" + pane.Window + "." + pane.Pane
-		exec.Command("tmux", "send-keys", "-l", "-t", target, "\\").Run()
-		exec.Command("tmux", "send-keys", "-t", target, "Enter").Run()
+		// Literal "\\" then Enter: Claude's line-continuation.
+		sendErr := sendKeys(pane, "\\")
 		time.Sleep(30 * time.Millisecond)
 		content, err := tmux.CapturePane(pane)
 		if err != nil || !tmux.HasClaude(pane.PID) {
-			return liveCaptureMsg{failed: true}
+			return liveCaptureMsg{failed: true, sendErr: sendErr}
 		}
-		return liveCaptureMsg{content: content}
+		return liveCaptureMsg{content: content, sendErr: sendErr}
 	}
 }
 
@@ -3523,22 +3546,6 @@ func (a *App) openStatsDetail(mode statsDetailMode) (tea.Model, tea.Cmd) {
 
 // --- Live Preview (tmux capture in split pane) ---
 
-func (a *App) openLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
-	if !sess.IsLive {
-		a.copiedMsg = "not a live session"
-		return a, nil
-	}
-	pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
-	if !found {
-		a.copiedMsg = "tmux pane not found"
-		return a, nil
-	}
-	a.paneProxy = &paneProxyState{pane: pane, sessID: sess.ID}
-	a.toggleSessionPreviewMode(sessPreviewLive)
-	a.refreshLivePreview()
-	return a, liveTickCmd()
-}
-
 func (a *App) refreshLivePreview() {
 	if a.paneProxy == nil {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(no pane)"))
@@ -3679,23 +3686,10 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 	}
 
 	if sess.IsLive {
-		// Live session: jump to existing pane
-		pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
-		if found {
-			if err := tmux.SwitchToPane(pane); err != nil {
-				a.copiedMsg = "Switch failed"
-			}
-			return a, nil
-		}
-		// Fallback: take over CSB
-		cmd, err := a.claudeCmd(dir, "--resume", sess.ID)
-		if err != nil {
-			a.copiedMsg = "Claude command failed: " + err.Error()
-			return a, nil
-		}
-		return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
-			return tea.QuitMsg{}
-		})
+		// Live session: jump to its pane; without one, resume in this
+		// terminal (handlePaneJumpFound).
+		resume := sess
+		return a, a.paneJumpCmd(&resume, sess.ProjectPath, sess.ID)
 	}
 
 	// Non-live session in tmux: spawn a new tmux window, reusing the window
@@ -4337,34 +4331,6 @@ func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
-	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
-		return a, nil
-	}
-	var panes []tmux.Pane
-	for _, s := range selected {
-		if !s.IsLive {
-			continue
-		}
-		pane, found := tmux.FindPane(s.ProjectPath, s.ID)
-		if !found || !tmux.HasClaude(pane.PID) {
-			continue
-		}
-		panes = append(panes, pane)
-	}
-	if len(panes) == 0 {
-		a.copiedMsg = "No live Claude panes"
-		return a, nil
-	}
-	a.liveInputPanes = panes
-	a.liveInputModal = newInputModal()
-	a.liveInputModal.title = fmt.Sprintf("Send to %d panes", len(panes))
-	a.liveInputActive = true
-	a.liveInputProjDir = selected[0].ProjectPath
-	return a, nil
-}
-
 func (a *App) resolveImagePath(pasteID int) string {
 	home, _ := os.UserHomeDir()
 	p, err := session.ExtractImageToTemp(home, a.currentSess.FilePath, a.currentSess.ID, pasteID)
@@ -4727,19 +4693,6 @@ func (a *App) executeCmdNewSession(input string) (tea.Model, tea.Cmd) {
 	})
 }
 
-func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
-	pane, found := tmux.FindPane(projectPath, sessionID...)
-	if !found {
-		a.copiedMsg = "No tmux pane found"
-		return a, nil
-	}
-	if err := tmux.SwitchToPane(pane); err != nil {
-		a.copiedMsg = "Switch failed"
-		return a, nil
-	}
-	return a, nil
-}
-
 // liveInputSentMsg is sent after async tmuxSendKeys completes.
 type liveInputSentMsg struct{ err error }
 
@@ -4760,20 +4713,11 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 		if len(a.liveInputPanes) > 0 {
 			panes := a.liveInputPanes
 			a.liveInputPanes = nil
-			return a, func() tea.Msg {
-				var lastErr error
-				for _, p := range panes {
-					if err := tmux.SendKeys(p, text); err != nil {
-						lastErr = err
-					}
-				}
-				return liveInputSentMsg{err: lastErr}
-			}
+			return a, func() tea.Msg { return liveInputSentMsg{err: sendToPanes(panes, text)} }
 		}
 		pane := a.liveInputPane
 		return a, func() tea.Msg {
-			err := tmux.SendKeys(pane, text)
-			return liveInputSentMsg{err: err}
+			return liveInputSentMsg{err: sendKeys(pane, text)}
 		}
 	case "editor":
 		// Remember editor preference for next time
@@ -4807,15 +4751,9 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 			}
 			sendText := strings.TrimRight(string(content), "\n")
 			if len(panes) > 0 {
-				var lastErr error
-				for _, p := range panes {
-					if err := tmux.SendKeys(p, sendText); err != nil {
-						lastErr = err
-					}
-				}
-				return liveInputSentMsg{err: lastErr}
+				return liveInputSentMsg{err: sendToPanes(panes, sendText)}
 			}
-			return liveInputSentMsg{err: tmux.SendKeys(pane, sendText)}
+			return liveInputSentMsg{err: sendKeys(pane, sendText)}
 		}
 	case "cancel":
 		a.liveInputActive = false
@@ -5487,7 +5425,7 @@ func (a *App) updateSessionPreviewWith(dispatch bool) tea.Cmd {
 			projectPath := sess.ProjectPath
 			sessID := sess.ID
 			return func() tea.Msg {
-				pane, found := tmux.FindPane(projectPath, sessID)
+				pane, found := findPane(projectPath, sessID)
 				return liveFindMsg{pane: pane, found: found, sessID: sessID}
 			}
 		}
