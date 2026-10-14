@@ -335,7 +335,7 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case a.keymap.Session.Views:
 		a.viewsMenu = true
 		return a, nil
-	case "x":
+	case a.keymap.Session.Actions:
 		if a.cfgSkillBrowse {
 			return a, nil
 		}

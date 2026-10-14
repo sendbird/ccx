@@ -88,7 +88,16 @@ func renderInteractionLine(actions ...interactionAction) string {
 }
 
 func renderInteractionHintBox(lines [][]interactionAction, footer string) string {
-	rendered := make([]string, 0, len(lines)+1)
+	return renderInteractionHintBoxTitled("", lines, footer)
+}
+
+// renderInteractionHintBoxTitled is renderInteractionHintBox with an
+// already-styled first line (e.g. "3 selected").
+func renderInteractionHintBoxTitled(header string, lines [][]interactionAction, footer string) string {
+	rendered := make([]string, 0, len(lines)+2)
+	if header != "" {
+		rendered = append(rendered, header)
+	}
 	for _, line := range lines {
 		if text := renderInteractionLine(line...); text != "" {
 			rendered = append(rendered, text)

@@ -72,6 +72,7 @@ func scanSessionsCmd(claudeDir string) tea.Cmd {
 type liveCaptureMsg struct {
 	content string
 	failed  bool
+	sendErr error // keys sent before the capture failed to reach the pane
 }
 
 // Conversation right-pane detail levels.
@@ -508,7 +509,9 @@ type App struct {
 	liveInputPane    tmux.Pane
 	liveInputModal   inputModal
 	liveInputProjDir string // project path for $EDITOR cwd
-	liveInputSeq     int    // generation of the latest openLiveInput lookup
+	liveInputSeq     int    // generation of the latest openLiveInput/bulkInput lookup
+	paneJumpSeq      int    // generation of the latest pane jump lookup
+	livePreviewSeq   int    // generation of the latest openLivePreview lookup
 
 	// Pane proxy: unified live preview + shell-in-preview
 	paneProxy *paneProxyState
@@ -1275,9 +1278,29 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case liveInputPaneMsg:
 		return a, a.handleLiveInputPane(msg)
 
+	case paneJumpFoundMsg:
+		return a, a.handlePaneJumpFound(msg)
+
+	case paneJumpDoneMsg:
+		if msg.err != nil {
+			a.copiedMsg = "Switch failed: " + msg.err.Error()
+		}
+		return a, nil
+
+	case livePreviewPaneMsg:
+		return a, a.handleLivePreviewPane(msg)
+
+	case bulkInputPanesMsg:
+		a.handleBulkInputPanes(msg)
+		return a, nil
+
+	case shareRefSentMsg:
+		a.handleShareRefSent(msg)
+		return a, nil
+
 	case liveInputSentMsg:
 		if msg.err != nil {
-			a.copiedMsg = "Send failed"
+			a.copiedMsg = "Send failed: " + msg.err.Error()
 		} else {
 			a.copiedMsg = "Sent!"
 		}
@@ -1342,6 +1365,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case liveCaptureMsg:
+		if msg.sendErr != nil {
+			a.copiedMsg = "Send failed: " + msg.sendErr.Error()
+		}
 		if a.paneProxy == nil || a.sessPreviewMode != sessPreviewLive {
 			return a, nil
 		}
@@ -1819,7 +1845,7 @@ func (a *App) View() string {
 			c := spinnerColors[a.spinnerFrame/len(spinnerFrames)%len(spinnerColors)]
 			s := lipgloss.NewStyle().Foreground(c).Bold(true)
 			content = "\n  " + s.Render(fmt.Sprintf("%s Scanning sessions…", frame))
-			help = formatHelp("loading… q:quit")
+			help = a.footer("  " + helpStyle.Render("loading…"))
 			break
 		}
 		if len(a.sessions) == 0 {
@@ -1828,7 +1854,7 @@ func (a *App) View() string {
 				dir = "~/.claude/projects/"
 			}
 			content = "\n  " + dimStyle.Render(fmt.Sprintf("No sessions found in %s", dir))
-			help = formatHelp("q:quit")
+			help = a.footer("")
 			break
 		}
 		content = a.renderSessionSplit()
@@ -1848,13 +1874,13 @@ func (a *App) View() string {
 			c := spinnerColors[a.spinnerFrame/len(spinnerFrames)%len(spinnerColors)]
 			s := lipgloss.NewStyle().Foreground(c).Bold(true)
 			content = "\n  " + s.Render(fmt.Sprintf("%s Scanning %d sessions…", frame, len(a.sessions)))
-			help = formatHelp("loading… v:views q:quit")
+			help = a.footer("  "+helpStyle.Render("loading…"), a.bind("session", "views"))
 		} else if a.statsDetail != statsDetailNone {
 			content = a.statsDetailVP.View()
-			help = formatHelp("p:page ↑↓:scroll esc:back " + a.helpSuffix())
+			help = a.footer("", a.bind("session", "page_menu"), fh("↑↓", "scroll"), a.bind("session", "escape"))
 		} else {
 			content = a.globalStatsVP.View()
-			help = formatHelp("p:page ↑↓:scroll " + a.keymap.Session.Views + ":views " + a.helpSuffix())
+			help = a.footer("", a.bind("session", "page_menu"), fh("↑↓", "scroll"), a.bind("session", "views"))
 		}
 
 	case viewConversation:
@@ -1928,7 +1954,7 @@ func (a *App) View() string {
 	if a.convActionsMenu && a.state == viewConversation {
 		hintBox := a.renderConvActionsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp(fmtKey(a.keymap.Conversation.Actions, "actions") + " — pick an action")
+		help = menuFooter(a.bind("conversation", "actions"), "pick an action")
 	}
 
 	// Actions menu hint box floating above help line
@@ -1936,22 +1962,22 @@ func (a *App) View() string {
 		hintBox := a.renderActionsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
 		if a.outputsPreviewActionsActive() {
-			help = formatHelp("x:actions — pick an action for this output")
+			help = menuFooter(a.bind("session", "actions"), "pick an action for this output")
 		} else {
-			help = formatHelp("x:actions — pick an action")
+			help = menuFooter(a.bind("session", "actions"), "pick an action")
 		}
 	}
 
 	if a.sessPageMenu && a.state == viewSessions {
 		hintBox := a.renderSessPageHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("p:page — pick a preview")
+		help = menuFooter(a.bind("session", "page_menu"), "pick a preview")
 	}
 
 	if a.stateMenu && a.state == viewSessions {
 		hintBox := a.renderStateHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("S:states — toggle which session states show")
+		help = menuFooter(a.bind("session", "state_menu"), "toggle which session states show")
 	}
 
 	// Tag menu centered modal
@@ -1974,42 +2000,42 @@ func (a *App) View() string {
 	if a.cfgActionsMenu && a.state == viewConfig {
 		hintBox := a.renderCfgActionsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("x:actions — pick an action")
+		help = menuFooter(a.bind("session", "actions"), "pick an action")
 	}
 
 	// Plugin actions menu hint box
 	if a.plgActionsMenu && a.state == viewConfig && a.cfgPluginsPage {
 		hintBox := a.renderPlgActionsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("x:actions — pick an action")
+		help = menuFooter(a.bind("session", "actions"), "pick an action")
 	}
 
 	// Plugin detail actions menu hint box
 	if a.plgCompActionsMenu && a.state == viewConfig && a.cfgPluginsPage && a.plgDetailActive {
 		hintBox := a.renderPlgCompActionsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 28), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("x:actions — pick an action")
+		help = menuFooter(a.bind("session", "actions"), "pick an action")
 	}
 
 	// Views menu centered modal
 	if a.viewsMenu {
 		hintBox := a.renderViewsHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("v:views — pick a view")
+		help = menuFooter(a.bind("session", "views"), "pick a view")
 	}
 
 	// Edit menu centered modal
 	if a.editMenu {
 		hintBox := a.renderEditHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("e:edit — pick a file")
+		help = menuFooter(a.bind("actions", "edit"), "pick a file")
 	}
 
 	// Stats page jump centered modal
 	if a.statsPageMenu && a.state == viewGlobalStats {
 		hintBox := a.renderStatsPageHintBox()
 		content = overlayCenteredModal(content, hintBox, a.width, ContentHeight(a.height), modalOptions{paddingX: 2, paddingY: 1, maxWidth: max(a.width-8, 20), maxHeight: max(ContentHeight(a.height)-4, 8)})
-		help = formatHelp("p:page — pick a page")
+		help = menuFooter(a.bind("session", "page_menu"), "pick a page")
 	}
 
 	// Conversation inspector facet picker.
@@ -2204,10 +2230,8 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(capturePaneCmd(a.paneProxy.pane), liveTickCmd())
 		case "ctrl+g":
 			// Jump to the actual tmux pane
-			if err := tmux.SwitchToPane(a.paneProxy.pane); err != nil {
-				a.copiedMsg = "Switch failed"
-			}
-			return a, nil
+			pane := a.paneProxy.pane
+			return a, func() tea.Msg { return paneJumpDoneMsg{err: switchToPane(pane)} }
 		case "ctrl+n":
 			// Send backslash + enter for multi-line input in Claude
 			return a, a.liveNewlineCmd()
@@ -2220,7 +2244,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// View-specific keys. Resolved here, past the text-input and pane-proxy
 	// branches, so a pre-rebind key stays literal when typed into an input or
 	// forwarded to tmux.
-	key = a.keymap.resolveLegacyKey("session", key)
+	key = a.keymap.resolveSplitKey(a.keymap.resolveLegacyKey("session", key))
 	km := a.keymap
 	if a.config.PickMode && key == km.Session.Pick {
 		var items []session.Session
@@ -2710,15 +2734,14 @@ func (a *App) handlePaneProxyKey(key string) (tea.Model, tea.Cmd) {
 func (a *App) liveNewlineCmd() tea.Cmd {
 	pane := a.paneProxy.pane
 	return func() tea.Msg {
-		target := pane.Session + ":" + pane.Window + "." + pane.Pane
-		exec.Command("tmux", "send-keys", "-l", "-t", target, "\\").Run()
-		exec.Command("tmux", "send-keys", "-t", target, "Enter").Run()
+		// Literal "\\" then Enter: Claude's line-continuation.
+		sendErr := sendKeys(pane, "\\")
 		time.Sleep(30 * time.Millisecond)
 		content, err := tmux.CapturePane(pane)
 		if err != nil || !tmux.HasClaude(pane.PID) {
-			return liveCaptureMsg{failed: true}
+			return liveCaptureMsg{failed: true, sendErr: sendErr}
 		}
-		return liveCaptureMsg{content: content}
+		return liveCaptureMsg{content: content, sendErr: sendErr}
 	}
 }
 
@@ -3280,9 +3303,9 @@ func (a *App) handleGlobalStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// In detail view: tab cycles, esc goes back
 	if a.statsDetail != statsDetailNone {
 		switch key {
-		case "q":
+		case a.keymap.Session.Quit:
 			return a.quit()
-		case "esc":
+		case a.keymap.Session.Escape:
 			a.statsDetail = statsDetailNone
 			return a, nil
 		case a.keymap.Session.Views:
@@ -3294,7 +3317,7 @@ func (a *App) handleGlobalStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a.openStatsDetail(a.statsDetail.next())
 		case "shift+tab":
 			return a.openStatsDetail(a.statsDetail.prev())
-		case "p":
+		case a.keymap.Session.PageMenu:
 			a.statsPageMenu = true
 			return a, nil
 		}
@@ -3304,16 +3327,16 @@ func (a *App) handleGlobalStatsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key {
-	case "q":
+	case a.keymap.Session.Quit:
 		return a.quit()
-	case "esc":
+	case a.keymap.Session.Escape:
 		return a, nil
 	case a.keymap.Session.Views:
 		a.viewsMenu = true
 		return a, nil
 	case a.keymap.Session.Refresh:
 		return a.openGlobalStats()
-	case "p":
+	case a.keymap.Session.PageMenu:
 		a.statsPageMenu = true
 		return a, nil
 	case "tab":
@@ -3523,22 +3546,6 @@ func (a *App) openStatsDetail(mode statsDetailMode) (tea.Model, tea.Cmd) {
 
 // --- Live Preview (tmux capture in split pane) ---
 
-func (a *App) openLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
-	if !sess.IsLive {
-		a.copiedMsg = "not a live session"
-		return a, nil
-	}
-	pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
-	if !found {
-		a.copiedMsg = "tmux pane not found"
-		return a, nil
-	}
-	a.paneProxy = &paneProxyState{pane: pane, sessID: sess.ID}
-	a.toggleSessionPreviewMode(sessPreviewLive)
-	a.refreshLivePreview()
-	return a, liveTickCmd()
-}
-
 func (a *App) refreshLivePreview() {
 	if a.paneProxy == nil {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(no pane)"))
@@ -3679,23 +3686,10 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 	}
 
 	if sess.IsLive {
-		// Live session: jump to existing pane
-		pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
-		if found {
-			if err := tmux.SwitchToPane(pane); err != nil {
-				a.copiedMsg = "Switch failed"
-			}
-			return a, nil
-		}
-		// Fallback: take over CSB
-		cmd, err := a.claudeCmd(dir, "--resume", sess.ID)
-		if err != nil {
-			a.copiedMsg = "Claude command failed: " + err.Error()
-			return a, nil
-		}
-		return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
-			return tea.QuitMsg{}
-		})
+		// Live session: jump to its pane; without one, resume in this
+		// terminal (handlePaneJumpFound).
+		resume := sess
+		return a, a.paneJumpCmd(&resume, sess.ProjectPath, sess.ID)
 	}
 
 	// Non-live session in tmux: spawn a new tmux window, reusing the window
@@ -4337,34 +4331,6 @@ func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
-	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
-		return a, nil
-	}
-	var panes []tmux.Pane
-	for _, s := range selected {
-		if !s.IsLive {
-			continue
-		}
-		pane, found := tmux.FindPane(s.ProjectPath, s.ID)
-		if !found || !tmux.HasClaude(pane.PID) {
-			continue
-		}
-		panes = append(panes, pane)
-	}
-	if len(panes) == 0 {
-		a.copiedMsg = "No live Claude panes"
-		return a, nil
-	}
-	a.liveInputPanes = panes
-	a.liveInputModal = newInputModal()
-	a.liveInputModal.title = fmt.Sprintf("Send to %d panes", len(panes))
-	a.liveInputActive = true
-	a.liveInputProjDir = selected[0].ProjectPath
-	return a, nil
-}
-
 func (a *App) resolveImagePath(pasteID int) string {
 	home, _ := os.UserHomeDir()
 	p, err := session.ExtractImageToTemp(home, a.currentSess.FilePath, a.currentSess.ID, pasteID)
@@ -4727,19 +4693,6 @@ func (a *App) executeCmdNewSession(input string) (tea.Model, tea.Cmd) {
 	})
 }
 
-func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
-	pane, found := tmux.FindPane(projectPath, sessionID...)
-	if !found {
-		a.copiedMsg = "No tmux pane found"
-		return a, nil
-	}
-	if err := tmux.SwitchToPane(pane); err != nil {
-		a.copiedMsg = "Switch failed"
-		return a, nil
-	}
-	return a, nil
-}
-
 // liveInputSentMsg is sent after async tmuxSendKeys completes.
 type liveInputSentMsg struct{ err error }
 
@@ -4760,20 +4713,11 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 		if len(a.liveInputPanes) > 0 {
 			panes := a.liveInputPanes
 			a.liveInputPanes = nil
-			return a, func() tea.Msg {
-				var lastErr error
-				for _, p := range panes {
-					if err := tmux.SendKeys(p, text); err != nil {
-						lastErr = err
-					}
-				}
-				return liveInputSentMsg{err: lastErr}
-			}
+			return a, func() tea.Msg { return liveInputSentMsg{err: sendToPanes(panes, text)} }
 		}
 		pane := a.liveInputPane
 		return a, func() tea.Msg {
-			err := tmux.SendKeys(pane, text)
-			return liveInputSentMsg{err: err}
+			return liveInputSentMsg{err: sendKeys(pane, text)}
 		}
 	case "editor":
 		// Remember editor preference for next time
@@ -4807,15 +4751,9 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 			}
 			sendText := strings.TrimRight(string(content), "\n")
 			if len(panes) > 0 {
-				var lastErr error
-				for _, p := range panes {
-					if err := tmux.SendKeys(p, sendText); err != nil {
-						lastErr = err
-					}
-				}
-				return liveInputSentMsg{err: lastErr}
+				return liveInputSentMsg{err: sendToPanes(panes, sendText)}
 			}
-			return liveInputSentMsg{err: tmux.SendKeys(pane, sendText)}
+			return liveInputSentMsg{err: sendKeys(pane, sendText)}
 		}
 	case "cancel":
 		a.liveInputActive = false
@@ -5487,7 +5425,7 @@ func (a *App) updateSessionPreviewWith(dispatch bool) tea.Cmd {
 			projectPath := sess.ProjectPath
 			sessID := sess.ID
 			return func() tea.Msg {
-				pane, found := tmux.FindPane(projectPath, sessID)
+				pane, found := findPane(projectPath, sessID)
 				return liveFindMsg{pane: pane, found: found, sessID: sessID}
 			}
 		}
@@ -7869,52 +7807,39 @@ func (a *App) truncateFooter(h string) string {
 	return out
 }
 
-// renderActionsHintBox renders a compact bordered hint box for the actions menu.
+// renderActionsHintBox renders a compact bordered hint box for the actions
+// menu. Keys and labels come from the binding table (actions scope).
 func (a *App) renderActionsHintBox() string {
-	hl := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	d := dimStyle
-	sp := "  "
-	akm := a.keymap.Actions
-
-	var lines []string
 	if a.outputsPreviewActionsActive() {
 		return a.renderOutputActionsHintBox()
 	}
 	if a.hasMultiSelection() && !a.sessionPreviewActionsActive() {
-		header := fmt.Sprintf("%d selected", len(a.selectedSet))
-		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
-		lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Copy))+d.Render(":copy")+sp+hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input"))
-		lines = append(lines, hl.Render(displayKey(akm.URLs))+d.Render(":urls")+sp+hl.Render(displayKey(akm.Files))+d.Render(":files")+sp+hl.Render(displayKey(akm.Changes))+d.Render(":changes")+sp+hl.Render(displayKey(akm.Tags))+d.Render(":tags"))
-	} else {
-		sess := a.actionsSess
-		if a.sessionPreviewActionsActive() {
-			lines = append(lines, hl.Render("c")+d.Render(":contexts")+sp+hl.Render("f")+d.Render(":full")+sp+hl.Render("y")+d.Render(":copy"))
-		} else {
-			lines = append(lines, hl.Render(displayKey(akm.Delete))+d.Render(":delete")+sp+hl.Render(displayKey(akm.Move))+d.Render(":move")+sp+hl.Render(displayKey(akm.Resume))+d.Render(":resume")+sp+hl.Render(displayKey(akm.Copy))+d.Render(":copy")+sp+hl.Render(displayKey(akm.CopyPath))+d.Render(":copy-path"))
-		}
-		line2 := hl.Render(displayKey(akm.Edit)) + d.Render(":edit") + sp + hl.Render(displayKey(akm.Worktree)) + d.Render(":worktree") + sp + hl.Render(displayKey(akm.URLs)) + d.Render(":urls") + sp + hl.Render(displayKey(akm.Files)) + d.Render(":files") + sp + hl.Render(displayKey(akm.Changes)) + d.Render(":changes") + sp + hl.Render(displayKey(akm.Tags)) + d.Render(":tags")
-		if sess.HasMemory {
-			line2 += sp + hl.Render(displayKey(akm.RemoveMem)) + d.Render(":rm-mem")
-		}
-		if sess.IsWorktree {
-			line2 += sp + hl.Render(displayKey(akm.ImportMem)) + d.Render(":import-mem")
-		}
-		line2 += sp + hl.Render(displayKey(akm.Fork)) + d.Render(":fork")
-		line2 += sp + hl.Render(displayKey(akm.New)) + d.Render(":new")
-		line2 += sp + hl.Render(displayKey(akm.Remote)) + d.Render(":remote")
-		lines = append(lines, line2)
-		if sess.IsLive && a.config.TmuxEnabled {
-			lines = append(lines, hl.Render(displayKey(akm.Kill))+d.Render(":kill")+sp+hl.Render(displayKey(akm.Input))+d.Render(":input")+sp+hl.Render(displayKey(akm.Jump))+d.Render(":jump"))
-		}
+		header := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(fmt.Sprintf("%d selected", len(a.selectedSet)))
+		return renderInteractionHintBoxTitled(header, [][]interactionAction{
+			a.actionLine("delete", "resume", "copy", "kill", "input"),
+			a.actionLine("urls", "files", "changes", "tags"),
+		}, "esc:cancel")
 	}
-	lines = append(lines, d.Render("esc:cancel"))
-
-	body := strings.Join(lines, "\n")
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorDim).
-		Padding(0, 1)
-	return boxStyle.Render(body)
+	sess := a.actionsSess
+	var lines [][]interactionAction
+	if a.sessionPreviewActionsActive() {
+		lines = append(lines, []interactionAction{labelAction("", "c", "contexts"), labelAction("", "f", "full"), labelAction("", "y", "copy")})
+	} else {
+		lines = append(lines, a.actionLine("delete", "move", "resume", "copy", "copy_path"))
+	}
+	second := []string{"edit", "worktree", "urls", "files", "changes", "tags"}
+	if sess.HasMemory {
+		second = append(second, "remove_mem")
+	}
+	if sess.IsWorktree {
+		second = append(second, "import_mem")
+	}
+	second = append(second, "fork", "new", "remote")
+	lines = append(lines, a.actionLine(second...))
+	if sess.IsLive && a.config.TmuxEnabled {
+		lines = append(lines, a.actionLine("kill", "input", "jump"))
+	}
+	return renderInteractionHintBox(lines, "esc:cancel")
 }
 
 // renderSearchHintBox renders a compact bordered hint box for search filters.

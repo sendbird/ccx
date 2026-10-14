@@ -2,34 +2,17 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 )
-
-// fmtHints builds a help line from alternating key, desc pairs.
-// Example: fmtHints("↵", "open", "e", "edit", "q", "quit") → "↵:open e:edit q:quit"
-func fmtHints(pairs ...string) string {
-	var parts []string
-	for i := 0; i+1 < len(pairs); i += 2 {
-		parts = append(parts, displayKey(pairs[i])+":"+pairs[i+1])
-	}
-	return formatHelp(strings.Join(parts, " "))
-}
-
-// helpSuffix is the shared trailing hint for navigable footers: the help key
-// and quit. The full key list lives in the "?" overlay.
-func (a *App) helpSuffix() string {
-	return fmtKey(a.keymap.Session.Help, "help") + " " + fmtKey(a.keymap.Session.Quit, "quit")
-}
 
 // --- Session view help ---
 
 func (a *App) sessHelpLine() string {
 	// Loading
 	if a.sessionsLoading && len(a.sessions) == 0 {
-		return formatHelp("loading… q:quit")
+		return a.footer("  " + helpStyle.Render("loading…"))
 	}
 	if len(a.sessions) == 0 {
-		return formatHelp("q:quit")
+		return a.footer("")
 	}
 
 	// Modal overlays
@@ -46,7 +29,7 @@ func (a *App) sessHelpLine() string {
 		return "" // Tag menu has its own help
 	}
 	if a.sessPageMenu {
-		return formatHelp("p:page — pick a preview")
+		return menuFooter(a.bind("session", "page_menu"), "pick a preview")
 	}
 	if a.moveMode {
 		return "  " + a.moveInput.View() + helpStyle.Render("  enter:move esc:cancel")
@@ -70,43 +53,50 @@ func (a *App) sessHelpLine() string {
 		return "  " + a.paneProxyIndicator() + " " + formatHelp("keys→pane ^G:jump ^N:newline ^Q:unfocus")
 	}
 	if a.paneProxy != nil && a.sessPreviewMode == sessPreviewLive && !a.sessSplit.Focus {
-		return "  " + a.paneProxyIndicator() + " " + formatHelp("→:focus esc:close []:resize")
+		return a.footer("  "+a.paneProxyIndicator(), a.bind("session", "right"), a.bindAs("session", "escape", "close"), a.resizeHint())
 	}
 
 	// Normal session list/preview — concise; full list is in the "?" overlay.
-	sk := a.keymap.Session
-	var h string
-	if !a.sessSplit.Show {
-		h = fmtKey(sk.Open, "open") + " " + fmtKey(sk.Actions, "actions") + " →:preview p:page " + fmtKey(sk.Search, "search")
-	} else if a.sessSplit.Focus {
+	// Hints are in priority order; footer() drops from the end when narrow.
+	nav, unfocus, mode, page := fh("↑↓", "nav"), a.bindAs("session", "left", "unfocus"), a.bind("session", "preview"), a.bind("session", "page_menu")
+	var hints []footerHint
+	switch {
+	case !a.sessSplit.Show:
+		hints = []footerHint{a.bind("session", "open"), a.bind("session", "actions"), a.bindAs("session", "right", "preview"), page, a.bind("session", "search")}
+	case a.sessSplit.Focus:
 		switch {
 		case a.outputsPreviewActionsActive():
 			// Both digests: the row under the cursor is what the keys act on.
-			h = "↑↓:nav ↵:jump o:open " + fmtKey(sk.Actions, "actions")
+			hints = []footerHint{nav, a.bindAs("session", "open", "jump"), fh("o", "open"), a.bind("session", "actions")}
 			if a.selectedOwnsDayPane() {
 				// Only the day pane is tabbed by kind — the per-session digest
 				// has one fixed list, so advertising it there would mislead.
-				h += " 1-9/tab:kind"
+				hints = append(hints, fh("1-9/tab", "kind"))
 			}
-			h += " ←:unfocus p:page"
+			hints = append(hints, unfocus, page)
 		case a.sessPreviewMode == sessPreviewConversation:
-			h = "↑↓:nav c:full " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
+			hints = []footerHint{nav, fh("c", "full"), a.bindAs("session", "open", "jump"), unfocus, mode}
 		case a.sessPreviewMode == sessPreviewAgents:
-			h = "↑↓:nav " + fmtKey(sk.Open, "jump") + " ←:unfocus tab:mode"
+			hints = []footerHint{nav, a.bindAs("session", "open", "jump"), unfocus, mode}
 		case a.sessPreviewMode == sessPreviewWorkflows:
-			h = "↑↓:agent ↵:transcript ←:unfocus tab:mode"
+			hints = []footerHint{fh("↑↓", "agent"), a.bindAs("session", "open", "transcript"), unfocus, mode}
 		case a.sessPreviewMode == sessPreviewRefs:
-			h = "↑↓:nav ↵:open sp:select ←:unfocus tab:mode"
+			hints = []footerHint{nav, a.bind("session", "open"), a.bind("session", "select"), unfocus, mode}
 		case a.sessPreviewMode == sessPreviewContexts:
-			h = "↑↓:node ↵:open ←:unfocus tab:mode"
+			hints = []footerHint{fh("↑↓", "node"), a.bind("session", "open"), unfocus, mode}
 		default:
-			h = "↑↓:scroll ←:unfocus tab:mode"
+			hints = []footerHint{fh("↑↓", "scroll"), unfocus, mode}
 		}
-	} else {
-		h = "↑↓:nav →:focus tab:mode p:page ←:close"
+	default:
+		hints = []footerHint{nav, a.bind("session", "right"), mode, page, a.bindAs("session", "left", "close")}
 	}
-	h += " " + a.helpSuffix()
-	return formatHelp(h)
+	return a.footer("", hints...)
+}
+
+// resizeHint is the combined shrink/grow hint ("[]:resize").
+func (a *App) resizeHint() footerHint {
+	k := displayKey(a.keymap.Session.ResizeShrink) + displayKey(a.keymap.Session.ResizeGrow)
+	return footerHint{key: k, label: "resize"}
 }
 
 // --- Conversation view help ---
@@ -116,7 +106,11 @@ func (a *App) convHelpLine(badges string) string {
 		return formatHelp("↵:jump to origin  esc:close")
 	}
 	if a.conv.execution.Focused {
-		return formatHelp("↑↓:context ↵:open x:menu A/esc:back q:quit")
+		back := a.bindAs("conversation", "execution_contexts", "back")
+		if back.key != "" {
+			back.key += "/" + displayKey(a.keymap.Session.Escape)
+		}
+		return a.footer("", fh("↑↓", "context"), a.bind("session", "open"), a.bindAs("conversation", "actions", "menu"), back)
 	}
 	if a.conv.memorySearching {
 		return "  " + a.conv.memorySearchTI.View() + helpStyle.Render("  enter:apply esc:cancel")
@@ -126,22 +120,26 @@ func (a *App) convHelpLine(badges string) string {
 	}
 
 	sp := &a.conv.split
-	h := interactionHelpText(a.conversationPrimaryHelpActions()...)
+	hints := hintsFromActions(a.conversationPrimaryHelpActions()...)
 	escLabel := "sessions"
 	if sp.Show {
 		if sp.Focus {
 			next := previewModeLabels[(a.conv.rightPaneMode+1)%len(previewModeLabels)]
+			var pane []footerHint
 			if a.conv.rightPaneMode == previewText {
-				h = joinHelpSections(h, interactionHelpText(a.conversationPreviewTextHelpActions(next)...))
+				pane = hintsFromActions(a.conversationPreviewTextHelpActions(next)...)
 			} else {
-				h = joinHelpSections(h, interactionHelpText(a.conversationPreviewStructuredHelpActions(next)...))
+				pane = hintsFromActions(a.conversationPreviewStructuredHelpActions(next)...)
 			}
 			// On the Changes tab, `m` toggles per-occurrence vs per-file merge.
 			if a.conv.inspector.Tab == inspectorChanges {
-				h = joinHelpSections(h, interactionHelpText(labelAction("", "m", "merge")))
+				pane = append(pane, fh("m", "merge"))
 			}
+			// The focused pane's keys come first: a narrow footer drops the
+			// list-level hints before them.
+			hints = append(pane, hints...)
 		} else {
-			h = joinHelpSections(h, interactionHelpText(a.conversationPreviewUnfocusedHelpActions("inspector")...))
+			hints = append(hints, hintsFromActions(a.conversationPreviewUnfocusedHelpActions("inspector")...)...)
 		}
 		switch {
 		case a.conv.inspector.MemorySearch != "":
@@ -157,21 +155,24 @@ func (a *App) convHelpLine(badges string) string {
 		default:
 			escLabel = "close"
 		}
-		h = joinHelpSections(h, interactionHelpText(labelAction("", "esc", escLabel), resizeHelpAction(a)))
-	} else if len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.cron.ID != "" {
-		escLabel = "parent"
-		h = joinHelpSections(h, interactionHelpText(a.conversationPreviewHiddenHelpActions()...), "esc:"+escLabel)
+		// esc is how the user leaves this view: a narrow footer drops the
+		// optional hints before it.
+		hints = append(hints, a.bindAs("session", "escape", escLabel).keep(), a.resizeHint())
 	} else {
-		h = joinHelpSections(h, interactionHelpText(a.conversationPreviewHiddenHelpActions()...), "esc:"+escLabel)
+		if len(a.navStack) > 0 || a.conv.task.ID != "" || a.conv.cron.ID != "" {
+			escLabel = "parent"
+		}
+		hints = append(hints, hintsFromActions(a.conversationPreviewHiddenHelpActions()...)...)
+		hints = append(hints, a.bindAs("session", "escape", escLabel).keep())
 	}
 
+	prefix := badges
 	if sp.Folds != nil && sp.Folds.BlockFilter != "" {
 		vis := countVisibleBlocks(sp.Folds.BlockVisible)
 		total := len(sp.Folds.Entry.Content)
-		filterInfo := filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, sp.Folds.BlockFilter))
-		return filterInfo + " " + badges + formatHelp(joinHelpSections(h, a.helpSuffix()))
+		prefix = filterBadge.Render(fmt.Sprintf(" [%d/%d] %s", vis, total, sp.Folds.BlockFilter)) + " " + badges
 	}
-	return badges + formatHelp(joinHelpSections(h, a.helpSuffix()))
+	return a.footer(prefix, hints...)
 }
 
 // --- Config view help ---
@@ -187,7 +188,6 @@ func (a *App) configHelpLine() string {
 		return "  " + a.cfgSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
 	}
 	if a.cfgSkillBrowse {
-		h := "↵:edit e:edit /:search esc:back"
 		if a.cfgSearchTerm != "" {
 			badge := fmt.Sprintf("[%d/%d]", a.cfgSearchIdx+1, len(a.cfgSearchMatch))
 			if len(a.cfgSearchMatch) == 0 {
@@ -196,10 +196,9 @@ func (a *App) configHelpLine() string {
 			return "  " + filterBadge.Render(badge) + formatHelp(" n/b:next/prev esc:clear-search")
 		}
 		if a.cfgSplit.Show && a.cfgSplit.Focus {
-			h = "↑↓:scroll esc:unfocus"
+			return a.footer("", fh("↑↓", "scroll"), fh("esc", "unfocus"))
 		}
-		h += " " + a.helpSuffix()
-		return formatHelp(h)
+		return a.footer("", fh("↵", "edit"), fh("e", "edit"), a.bind("session", "search"), fh("esc", "back"))
 	}
 	if a.cfgPluginsPage {
 		// PLUGINS page reuses the plugins help line plus page-cycling hints.
@@ -213,34 +212,33 @@ func (a *App) configHelpLine() string {
 		return "  " + filterBadge.Render(badge) + formatHelp(" n/b:next/prev esc:clear")
 	}
 
-	h := "↵:open x:actions []:page " + a.keymap.Session.Search + ":search " + a.keymap.Session.Views + ":views"
+	actions, page, views := a.bind("session", "actions"), fh("[]", "page"), a.bind("session", "views")
+	hints := []footerHint{fh("↵", "open"), actions, page, a.bind("session", "search"), views}
 	if a.cfgHasSelection() {
-		h = "sp:sel x:actions []:page esc:clear"
+		hints = []footerHint{fh("sp", "sel"), actions, page, fh("esc", "clear")}
 	}
 	if a.cfgSplit.Show {
 		if a.cfgSplit.Focus {
-			h = "↑↓:scroll esc:unfocus"
+			hints = []footerHint{fh("↑↓", "scroll"), fh("esc", "unfocus")}
 		} else {
-			h = "↑↓:nav →:focus x:actions []:page " + a.keymap.Session.Views + ":views"
+			hints = []footerHint{fh("↑↓", "nav"), fh("→", "focus"), actions, page, views}
 		}
 	}
-	h += " " + a.helpSuffix()
-	var badges string
+	prefix := "  "
 	if a.cfgHasSelection() {
-		badges += filterBadge.Render(fmt.Sprintf("%d selected", len(a.cfgSelectedSet))) + " "
+		prefix += filterBadge.Render(fmt.Sprintf("%d selected", len(a.cfgSelectedSet))) + " "
 	}
-	return "  " + badges + formatHelp(h)
+	return a.footer(prefix, hints...)
 }
 
 // --- Plugins view help ---
 
 func (a *App) pluginsHelpLine() string {
 	if a.plgDetailActive {
-		h := "↑↓:nav →:preview x:actions e:edit esc:back"
 		if a.plgDetailSplit.Show && a.plgDetailSplit.Focus {
-			h = "↑↓:scroll ←:unfocus"
+			return a.footer("  ", fh("↑↓", "scroll"), fh("←", "unfocus"))
 		}
-		return "  " + formatHelp(h+" "+a.helpSuffix())
+		return a.footer("  ", fh("↑↓", "nav"), fh("→", "preview"), a.bind("session", "actions"), fh("e", "edit"), fh("esc", "back"))
 	}
 	if a.plgSearching {
 		return "  " + a.plgSearchInput.View() + helpStyle.Render("  enter:apply esc:cancel")
@@ -248,14 +246,13 @@ func (a *App) pluginsHelpLine() string {
 	if a.plgSearchTerm != "" {
 		return "  " + filterBadge.Render(a.plgSearchTerm) + formatHelp(" n/b:next/prev esc:clear")
 	}
-	h := "↵:open →:preview x:actions []:page " + a.keymap.Session.Search + ":search"
+	hints := []footerHint{a.bind("session", "open"), fh("→", "preview"), a.bind("session", "actions"), fh("[]", "page"), a.bind("session", "search")}
 	if a.plgSplit.Show && a.plgSplit.Focus {
-		h = "↑↓:scroll ←:unfocus []:page"
+		hints = []footerHint{fh("↑↓", "scroll"), fh("←", "unfocus"), fh("[]", "page")}
 	}
-	h += " " + a.helpSuffix()
+	prefix := "  "
 	if a.plgHasSelection() {
-		badges := filterBadge.Render(fmt.Sprintf("%d sel", len(a.plgSelectedSet)))
-		return "  " + badges + formatHelp(" "+h)
+		prefix += filterBadge.Render(fmt.Sprintf("%d sel", len(a.plgSelectedSet))) + " "
 	}
-	return "  " + formatHelp(h)
+	return a.footer(prefix, hints...)
 }

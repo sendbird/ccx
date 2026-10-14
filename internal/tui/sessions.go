@@ -1808,10 +1808,11 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 		}
 	case viewGlobalStats:
 		return "Global stats", []helpRow{
-			{"p", "Page menu (tools/mcp/agents/…)"},
+			{displayKey(km.Session.PageMenu), "Page menu (tools/mcp/agents/…)"},
 			{"↑↓", "Scroll"},
 			{"1-9", "Jump to page"},
-			{"esc", "Back"},
+			{displayKey(km.Session.Escape), "Back"},
+			a.helpRowFor("session", "refresh"),
 		}
 	case viewConfig:
 		return "Config", []helpRow{
@@ -1834,19 +1835,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 		if a.sessSplit.Show && a.sessSplit.Focus {
 			return "Preview (focused)", a.sessionsPreviewContextRows()
 		}
-		return "Sessions", []helpRow{
-			{displayKey(km.Session.Open), "Open / expand"},
-			{displayKey(km.Session.Right) + " / tab", "Preview / cycle mode"},
-			{displayKey(km.Session.Actions), "Actions (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.CopyPath) + "/…)"},
-			{displayKey(km.Session.Search), "Search / filter"},
-			{displayKey(km.Session.Views), "Views (stats/config/plugins)"},
-			{displayKey(km.Session.Refresh), "Refresh"},
-			{displayKey(km.Session.PageMenu) + " → l", "Live preview (page menu → live)"},
-			{displayKey(km.Session.Select), "Multi-select"},
-			{displayKey(km.Session.FoldGroup) + " / " + displayKey(km.Session.FoldAll) + " / " + displayKey(km.Session.ExpandAll), "Fold group / all / expand all"},
-			{displayKey(km.Session.StateMenu), "Toggle session states shown (live/done/…)"},
-			{displayKey(km.Session.DailyView), "Daily view (dates + what each day produced)"},
-		}
+		return "Sessions", a.sessionsListHelpRows()
 	}
 }
 
@@ -1905,16 +1894,11 @@ func (a *App) sessionsPreviewContextRows() []helpRow {
 
 // helpCommonRows returns the cross-view keys shown in every help overlay.
 func (a *App) helpCommonRows() []helpRow {
-	km := a.keymap.Session
-	return []helpRow{
-		{displayKey(km.Command), "Command palette (full actions)"},
-		{displayKey(km.Views), "Switch views"},
-		{displayKey(km.Search), "Search / filter"},
-		{displayKey(km.GlobalSearch), "Global search"},
-		{displayKey(km.Escape), "Back / close"},
-		{displayKey(km.Help), "This help"},
-		{displayKey(km.Quit), "Quit"},
+	var rows []helpRow
+	for _, name := range []string{"command", "views", "search", "global_search", "escape", "help", "quit"} {
+		rows = append(rows, a.helpRowFor("session", name))
 	}
+	return rows
 }
 
 func (a *App) renderHelpModal(bg string, screenW, screenH int) string {

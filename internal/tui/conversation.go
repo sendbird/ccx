@@ -364,7 +364,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Past the text-input guards, so a pre-rebind key typed into the block
 	// filter or memory search stays literal.
-	key = a.keymap.resolveLegacyKey("conversation", key)
+	key = a.keymap.resolveSplitKey(a.keymap.resolveLegacyKey("conversation", key))
 
 	// Uppercase K/J move focus between the vertically-stacked regions
 	// (RESOURCES ↑ CONVERSATION ↕ EXECUTION CONTEXTS ↓). Handled before the

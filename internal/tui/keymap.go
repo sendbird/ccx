@@ -151,32 +151,13 @@ func (km *Keymap) legacyAliases() map[string][]legacyBinding {
 // would shadow a live binding can be skipped.
 func (km *Keymap) scopeKeys(scope string) map[string]bool {
 	out := make(map[string]bool)
-	add := func(keys ...string) {
-		for _, k := range keys {
-			if k != "" {
-				out[k] = true
-			}
+	for _, b := range bindingTable {
+		if b.scope != scope {
+			continue
 		}
-	}
-	switch scope {
-	case "session":
-		s := km.Session
-		add(s.Quit, s.Escape, s.Open, s.Edit, s.Actions, s.Views, s.Refresh,
-			s.Group, s.Help, s.Search, s.GlobalSearch, s.Live, s.Switch,
-			s.Select, s.Preview, s.PreviewBack, s.Command, s.Pick,
-			s.FoldAll, s.ExpandAll, s.FoldGroup, s.StateMenu, s.DailyView, s.PageMenu)
-	case "actions":
-		a := km.Actions
-		add(a.Delete, a.Move, a.Resume, a.CopyPath, a.Worktree, a.Kill, a.Input,
-			a.Jump, a.URLs, a.Files, a.Changes, a.Copy, a.Tags, a.ImportMem,
-			a.RemoveMem, a.Fork, a.New, a.Remote, a.Edit)
-	case "conversation":
-		c := km.Conversation
-		add(c.JumpToTree, c.SwitchRegion, c.ExecutionContexts, c.RegionUp,
-			c.RegionDown, c.LiveToggle, c.Edit, c.Actions, c.Input)
-	case "preview":
-		p := km.Preview
-		add(p.FoldAll, p.ExpandAll, p.Filter, p.CopyMode, p.CopyAll)
+		if k := km.bindingKey(b.scope, b.name); k != "" {
+			out[k] = true
+		}
 	}
 	return out
 }
