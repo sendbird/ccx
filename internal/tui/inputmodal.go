@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // inputModal is a simple multi-line text input shown as a modal overlay.
@@ -131,13 +132,69 @@ func (m *inputModal) insertChar(r rune) {
 	m.cursorCol++
 }
 
-// ensureVisible adjusts scrollOff so the cursor row is visible.
-func (m *inputModal) ensureVisible(visibleH int) {
-	if m.cursorRow < m.scrollOff {
-		m.scrollOff = m.cursorRow
+// inputTabWidth matches lipgloss's default tab expansion, so wrapping math
+// agrees with what the bordered style finally renders.
+const inputTabWidth = 4
+
+func inputCellWidth(r rune) int {
+	if r == '\t' {
+		return inputTabWidth
 	}
-	if m.cursorRow >= m.scrollOff+visibleH {
-		m.scrollOff = m.cursorRow - visibleH + 1
+	return max(runewidth.RuneWidth(r), 0)
+}
+
+// inputVisualRow is one on-screen row: runes [start,end) of logical line.
+type inputVisualRow struct {
+	line, start, end int
+}
+
+// layout soft-wraps every logical line into rows of at most width terminal
+// cells and returns the index of the row holding the cursor. Wrapping is by
+// cell width, not rune count: a Hangul/CJK rune occupies two cells, and
+// counting runes let such lines overflow the modal border.
+func (m *inputModal) layout(width int) ([]inputVisualRow, int) {
+	width = max(width, 2) // a wide rune must always fit on a row
+	var rows []inputVisualRow
+	cursorVis := 0
+	for li, line := range m.lines {
+		runes := []rune(line)
+		first := len(rows)
+		start, w := 0, 0
+		for i, r := range runes {
+			cw := inputCellWidth(r)
+			if w+cw > width && i > start {
+				rows = append(rows, inputVisualRow{li, start, i})
+				start, w = i, 0
+			}
+			w += cw
+		}
+		rows = append(rows, inputVisualRow{li, start, len(runes)})
+		// A cursor at end-of-line draws a one-cell block; if the last row
+		// is already full the block belongs on a fresh row.
+		if li == m.cursorRow && m.cursorCol >= len(runes) && w+1 > width {
+			rows = append(rows, inputVisualRow{li, len(runes), len(runes)})
+		}
+		if li == m.cursorRow {
+			cursorVis = first
+			for vi := first; vi < len(rows); vi++ {
+				r := rows[vi]
+				if m.cursorCol >= r.start && (m.cursorCol < r.end || vi == len(rows)-1) {
+					cursorVis = vi
+					break
+				}
+			}
+		}
+	}
+	return rows, cursorVis
+}
+
+// ensureVisible adjusts scrollOff (in visual rows) so cursorVis is visible.
+func (m *inputModal) ensureVisible(cursorVis, visibleH int) {
+	if cursorVis < m.scrollOff {
+		m.scrollOff = cursorVis
+	}
+	if cursorVis >= m.scrollOff+visibleH {
+		m.scrollOff = cursorVis - visibleH + 1
 	}
 }
 
@@ -159,40 +216,31 @@ func (m *inputModal) render(bg string, screenW, screenH int) string {
 	helpText := dimStyle.Render("^S:send  ^E:$EDITOR  esc:cancel")
 
 	contentH := min(screenH/2, 20)
-	m.ensureVisible(contentH)
+	m.clampCursor()
+	rows, cursorVis := m.layout(innerW)
+	m.ensureVisible(cursorVis, contentH)
 
 	var body strings.Builder
 	body.WriteString(title + "\n")
 	body.WriteString(strings.Repeat("─", innerW) + "\n")
 
-	endRow := m.scrollOff + contentH
-	if endRow > len(m.lines) {
-		endRow = len(m.lines)
-	}
+	endRow := min(m.scrollOff+contentH, len(rows))
 	cursorStyle := lipgloss.NewStyle().Reverse(true)
-	for i := m.scrollOff; i < endRow; i++ {
-		line := m.lines[i]
-		runes := []rune(line)
-		if i == m.cursorRow {
-			col := m.cursorCol
-			if col > len(runes) {
-				col = len(runes)
-			}
-			before := string(runes[:col])
-			var ch, after string
-			if col < len(runes) {
-				ch = string(runes[col])
-				after = string(runes[col+1:])
-			} else {
-				ch = " "
-			}
-			body.WriteString(before + cursorStyle.Render(ch) + after + "\n")
-		} else {
-			if utf8.RuneCountInString(line) > innerW {
-				line = string([]rune(line)[:innerW])
-			}
-			body.WriteString(line + "\n")
+	for vi := m.scrollOff; vi < endRow; vi++ {
+		r := rows[vi]
+		runes := []rune(m.lines[r.line])[r.start:r.end]
+		if vi != cursorVis {
+			body.WriteString(string(runes) + "\n")
+			continue
 		}
+		col := m.cursorCol - r.start
+		before := string(runes[:col])
+		ch, after := " ", ""
+		if col < len(runes) {
+			ch = string(runes[col])
+			after = string(runes[col+1:])
+		}
+		body.WriteString(before + cursorStyle.Render(ch) + after + "\n")
 	}
 
 	for i := endRow - m.scrollOff; i < contentH; i++ {

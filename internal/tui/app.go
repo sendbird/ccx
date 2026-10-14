@@ -27,7 +27,6 @@ import (
 )
 
 type tickMsg time.Time
-type kittyTickMsg time.Time
 type liveTickMsg time.Time // slow live capture (2s, unfocused)
 type spinnerTickMsg time.Time
 type globalStatsMsg session.GlobalStats
@@ -95,16 +94,6 @@ func spinnerTickCmd() tea.Cmd {
 func tickCmd() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
-	})
-}
-
-// kittyTickCmd fires a fast tick used only to watch for tmux window-switch
-// transitions. tmux does not forward focus-out events on window switch, so
-// we have to poll `PaneVisible()` ourselves. 250ms feels responsive without
-// thrashing the tmux control channel.
-func kittyTickCmd() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
-		return kittyTickMsg(t)
 	})
 }
 
@@ -519,6 +508,7 @@ type App struct {
 	liveInputPane    tmux.Pane
 	liveInputModal   inputModal
 	liveInputProjDir string // project path for $EDITOR cwd
+	liveInputSeq     int    // generation of the latest openLiveInput lookup
 
 	// Pane proxy: unified live preview + shell-in-preview
 	paneProxy *paneProxyState
@@ -1136,6 +1126,14 @@ func (a *App) Init() tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	if a.state == viewSessions {
+		a.syncSessionSplitLayout()
+	}
+	return m, cmd
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		first := a.width == 0 && a.height == 0
@@ -1149,7 +1147,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Enable focus reporting so we get BlurMsg on tmux window switch
 		if first && kitty.Supported() {
-			cmd = tea.Batch(cmd, tea.EnableReportFocus, kittyTickCmd())
+			cmd = tea.Batch(cmd, tea.EnableReportFocus, startKittyWatch(true))
 		}
 		return a, cmd
 
@@ -1267,6 +1265,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-scan plugins to reflect changes
 		return a.openPluginExplorer()
 
+	case worktreeDoneMsg:
+		return a, a.handleWorktreeDone(msg)
+
+	case sessionsKilledMsg:
+		a.handleSessionsKilled(msg)
+		return a, nil
+
+	case liveInputPaneMsg:
+		return a, a.handleLiveInputPane(msg)
+
 	case liveInputSentMsg:
 		if msg.err != nil {
 			a.copiedMsg = "Send failed"
@@ -1300,23 +1308,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.handleTick()
 		return a, tea.Batch(cmd, tickCmd())
 
-	case kittyTickMsg:
-		// Fast visibility poll: detect tmux window-switch transitions that
-		// don't surface as BlurMsg. When our pane becomes invisible, clear
-		// any lingering Kitty graphics so they don't bleed through to the
-		// window the user switched to.
-		if kitty.Supported() {
-			visible := kitty.PaneVisible()
-			if !visible && a.termFocused {
-				a.termFocused = false
-				fmt.Fprint(os.Stdout, kitty.ClearImages())
-				_ = os.Stdout.Sync()
-			} else if visible && !a.termFocused {
-				a.termFocused = true
-				kitty.InvalidatePaneOffset()
-			}
-		}
-		return a, kittyTickCmd()
+	case kittyVisibilityMsg:
+		// Detect tmux window-switch transitions that don't surface as
+		// BlurMsg; see kitty_watch.go.
+		return a, a.handleKittyVisibility(msg)
 
 	case liveTickMsg:
 		// 2s tick: async capture for passive updates (process output, unfocused view)
@@ -4342,32 +4337,6 @@ func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a *App) bulkKill(selected []session.Session) (tea.Model, tea.Cmd) {
-	count := 0
-	for _, s := range selected {
-		if !s.IsLive {
-			continue
-		}
-		pane, found := tmux.FindPane(s.ProjectPath, s.ID)
-		if !found {
-			continue
-		}
-		target := pane.Session + ":" + pane.Window + "." + pane.Pane
-		exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
-		exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
-		if a.paneProxy != nil && a.paneProxy.sessID == s.ID {
-			a.closePaneProxy()
-			a.sessPreviewMode = sessPreviewConversation
-			a.sessSplit.CacheKey = ""
-			a.sessSplit.Focus = false
-		}
-		count++
-	}
-	a.clearMultiSelection()
-	a.copiedMsg = fmt.Sprintf("Killed %d", count)
-	return a, nil
-}
-
 func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
 	if !tmux.InTmux() {
 		a.copiedMsg = "Requires tmux"
@@ -4393,32 +4362,6 @@ func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
 	a.liveInputModal.title = fmt.Sprintf("Send to %d panes", len(panes))
 	a.liveInputActive = true
 	a.liveInputProjDir = selected[0].ProjectPath
-	return a, nil
-}
-
-// killLiveSession sends SIGHUP to the Claude process in the session's tmux pane.
-func (a *App) killLiveSession(sess session.Session) (tea.Model, tea.Cmd) {
-	pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
-	if !found {
-		// Fallback: try to find any Claude process for this path
-		pane, found = tmux.FindPane(sess.ProjectPath)
-		if !found {
-			a.copiedMsg = "No tmux pane found"
-			return a, nil
-		}
-	}
-	// Send ctrl+c then ctrl+d to gracefully stop Claude
-	target := pane.Session + ":" + pane.Window + "." + pane.Pane
-	exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
-	exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
-	// Close any live preview for this session
-	if a.paneProxy != nil && a.paneProxy.sessID == sess.ID {
-		a.closePaneProxy()
-		a.sessPreviewMode = sessPreviewConversation
-		a.sessSplit.CacheKey = ""
-		a.sessSplit.Focus = false
-	}
-	a.copiedMsg = "Killed"
 	return a, nil
 }
 
@@ -4714,102 +4657,6 @@ func (a *App) delayedRefreshCmd() tea.Cmd {
 
 type delayedRefreshMsg struct{ remaining int }
 
-// executeNewWorktreeSession creates a git worktree and spawns a new Claude session in it.
-func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (tea.Model, tea.Cmd) {
-	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		a.copiedMsg = "Not a git repo"
-		return a, nil
-	}
-	repoRoot := strings.TrimSpace(string(out))
-	wtPath := filepath.Join(repoRoot, a.config.WorktreeDir, branch)
-
-	// Try adding worktree
-	if err := exec.Command("git", "-C", repoRoot, "worktree", "add", wtPath, branch).Run(); err != nil {
-		if err2 := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", branch, wtPath).Run(); err2 != nil {
-			a.copiedMsg = "Worktree failed: " + err2.Error()
-			return a, nil
-		}
-	}
-
-	// Spawn new Claude session in the worktree
-	name := filepath.Base(repoRoot) + "/" + branch
-	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNewWithConfig(name, wtPath, a.config.Claude); err != nil {
-			a.copiedMsg = "Spawn failed"
-			return a, nil
-		}
-		a.copiedMsg = fmt.Sprintf("New session → %s/%s", a.config.WorktreeDir, branch)
-		return a, a.delayedRefreshCmd()
-	}
-	cmd, err := a.claudeCmd(wtPath)
-	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
-		return a, nil
-	}
-	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return tea.QuitMsg{}
-	})
-}
-
-func (a *App) executeWorktree(sess session.Session, name string) (tea.Model, tea.Cmd) {
-	// Get repo root
-	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		a.copiedMsg = "Not a git repo"
-		return a, nil
-	}
-	repoRoot := strings.TrimSpace(string(out))
-
-	// Determine branch
-	branch := sess.GitBranch
-	if branch == "" {
-		bOut, err := exec.Command("git", "-C", sess.ProjectPath, "branch", "--show-current").Output()
-		if err != nil {
-			a.copiedMsg = "Cannot determine branch"
-			return a, nil
-		}
-		branch = strings.TrimSpace(string(bOut))
-	}
-
-	wtPath := filepath.Join(repoRoot, a.config.WorktreeDir, name)
-
-	// Try adding worktree on existing branch first; if it fails because
-	// the branch is already checked out, create a new branch from it.
-	if err := exec.Command("git", "-C", repoRoot, "worktree", "add", wtPath, branch).Run(); err != nil {
-		if err2 := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", name, wtPath, branch).Run(); err2 != nil {
-			a.copiedMsg = "Worktree failed: " + err2.Error()
-			return a, nil
-		}
-	}
-
-	// Move session data to the new worktree path
-	oldPath := sess.ProjectPath
-	if err := session.MoveProject(oldPath, wtPath); err != nil {
-		a.copiedMsg = "Move failed: " + err.Error()
-		return a, nil
-	}
-
-	home, _ := os.UserHomeDir()
-	newName := session.ShortenPath(wtPath, home)
-
-	// Update in-memory sessions
-	for i := range a.sessions {
-		if a.sessions[i].ProjectPath == oldPath {
-			a.sessions[i].ProjectPath = wtPath
-			a.sessions[i].ProjectName = newName
-			a.sessions[i].IsWorktree = true
-			oldEncoded := session.EncodeProjectPath(oldPath)
-			newEncoded := session.EncodeProjectPath(wtPath)
-			a.sessions[i].FilePath = strings.Replace(a.sessions[i].FilePath, oldEncoded, newEncoded, 1)
-		}
-	}
-
-	a.rebuildSessionList()
-	a.copiedMsg = fmt.Sprintf("Worktree created → %s/%s", a.config.WorktreeDir, name)
-	return a, nil
-}
-
 // newSession opens a new Claude session (without --resume) in the selected
 // session's project directory, or CWD if no session is selected.
 func (a *App) newSession() (tea.Model, tea.Cmd) {
@@ -4880,63 +4727,6 @@ func (a *App) executeCmdNewSession(input string) (tea.Model, tea.Cmd) {
 	})
 }
 
-// executeCmdWorktreeNew handles "worktree:new <branch>" / "wt:new <branch>".
-// It creates a git worktree for the given branch and opens a new Claude session in it.
-func (a *App) executeCmdWorktreeNew(input string) (tea.Model, tea.Cmd) {
-	parts := strings.Fields(input)
-	if len(parts) < 2 {
-		a.copiedMsg = "Usage: worktree:new <branch>"
-		return a, nil
-	}
-	branch := parts[len(parts)-1]
-
-	sess, ok := a.selectedSession()
-	if !ok || sess.ProjectPath == "" {
-		a.copiedMsg = "No session with project selected"
-		return a, nil
-	}
-
-	// Get repo root
-	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		a.copiedMsg = "Not a git repo"
-		return a, nil
-	}
-	repoRoot := strings.TrimSpace(string(out))
-
-	wtPath := filepath.Join(repoRoot, a.config.WorktreeDir, branch)
-
-	// Try creating worktree: first on existing branch, then create new branch
-	if err := exec.Command("git", "-C", repoRoot, "worktree", "add", wtPath, branch).Run(); err != nil {
-		if err2 := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", branch, wtPath).Run(); err2 != nil {
-			a.copiedMsg = "Worktree failed: " + err2.Error()
-			return a, nil
-		}
-	}
-
-	// Open new Claude session in the worktree
-	windowName := branch
-	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNewWithConfig(windowName, wtPath, a.config.Claude); err != nil {
-			a.copiedMsg = "Worktree created but spawn failed"
-		} else {
-			a.copiedMsg = fmt.Sprintf("Worktree + session → %s/%s", a.config.WorktreeDir, branch)
-		}
-		return a, nil
-	}
-
-	// Non-tmux: take over terminal
-	cmd, err := a.claudeCmd(wtPath)
-	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
-		return a, nil
-	}
-	a.copiedMsg = fmt.Sprintf("Worktree created → %s/%s", a.config.WorktreeDir, branch)
-	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return tea.QuitMsg{}
-	})
-}
-
 func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
 	pane, found := tmux.FindPane(projectPath, sessionID...)
 	if !found {
@@ -4952,50 +4742,6 @@ func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model
 
 // liveInputSentMsg is sent after async tmuxSendKeys completes.
 type liveInputSentMsg struct{ err error }
-
-func (a *App) openLiveInput(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
-	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
-		return a, nil
-	}
-	pane, found := tmux.FindPane(projectPath, sessionID...)
-	if !found || !tmux.HasClaude(pane.PID) {
-		a.copiedMsg = "No live Claude pane"
-		return a, nil
-	}
-	a.liveInputPane = pane
-	a.liveInputProjDir = projectPath
-
-	// If user prefers $EDITOR, skip inline modal and open editor directly
-	if a.editorInput {
-		return a, func() tea.Msg {
-			tmpFile, err := os.CreateTemp("", "ccx-input-*.md")
-			if err != nil {
-				return liveInputSentMsg{err: err}
-			}
-			tmpFile.Close()
-			defer os.Remove(tmpFile.Name())
-
-			editor := os.Getenv("EDITOR")
-			if editor == "" {
-				editor = "vim"
-			}
-			cmd := fmt.Sprintf("cd %s && %s %s", shellescape(projectPath), editor, tmpFile.Name())
-			exec.Command("tmux", "display-popup", "-E", "-w", "80%", "-h", "70%", cmd).Run()
-
-			content, readErr := os.ReadFile(tmpFile.Name())
-			if readErr != nil || len(strings.TrimSpace(string(content))) == 0 {
-				return liveInputSentMsg{err: fmt.Errorf("empty")}
-			}
-			sendText := strings.TrimRight(string(content), "\n")
-			return liveInputSentMsg{err: tmux.SendKeys(pane, sendText)}
-		}
-	}
-
-	a.liveInputModal = newInputModal()
-	a.liveInputActive = true
-	return a, nil
-}
 
 func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 	action := a.liveInputModal.handleKey(key)
@@ -5419,13 +5165,18 @@ func previewDispatchesFromView(mode sessPreview) bool {
 		previewLoadsOffLoop(mode)
 }
 
-func (a *App) renderSessionSplit() string {
+// syncSessionSplitLayout sizes the session list and preview viewport for the
+// current window and re-wraps cached preview content when the size changed.
+// It runs after every Update rather than inside View: View must not write
+// model state, or rendering twice (tests, render caches) stops being
+// deterministic.
+func (a *App) syncSessionSplitLayout() {
 	if a.sessionList.Width() == 0 {
-		return ""
+		return
 	}
 	clampPaginator(&a.sessionList)
 	if !a.sessSplit.Show || a.width < 40 || a.height < 10 {
-		return a.sessionList.View()
+		return
 	}
 
 	listW := a.sessSplit.ListWidth(a.width, a.splitRatio)
@@ -5508,12 +5259,31 @@ func (a *App) renderSessionSplit() string {
 		a.sessSplit.Preview.GotoBottom()
 	}
 
+	// Live preview: always snap to bottom after all updates/resizes
+	if a.sessPreviewMode == sessPreviewLive && a.paneProxy != nil {
+		a.sessSplit.Preview.GotoBottom()
+	}
+	clampPaginator(&a.sessionList)
+}
+
+// renderSessionSplit draws the list/preview split. It only reads state;
+// sizing happens in syncSessionSplitLayout.
+func (a *App) renderSessionSplit() string {
+	if a.sessionList.Width() == 0 {
+		return ""
+	}
+	if !a.sessSplit.Show || a.width < 40 || a.height < 10 {
+		return a.sessionList.View()
+	}
+
+	listW := a.sessSplit.ListWidth(a.width, a.splitRatio)
+	previewW := max(a.width-listW-1, 1)
+	contentH := max(a.height-3, 1)
+
 	borderColor := colorBorderDim
 	if a.sessSplit.Focus {
 		borderColor = colorBorderFocused
 	}
-
-	clampPaginator(&a.sessionList)
 
 	left := a.sessionList.View()
 	right := a.sessSplit.Preview.View()
