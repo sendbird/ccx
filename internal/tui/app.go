@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	tk "github.com/keyolk/tuikit/kitty"
 	"github.com/keyolk/tuikit/prefs"
 	"github.com/keyolk/tuikit/toast"
 	"github.com/sendbird/ccx/internal/claudecmd"
@@ -1115,7 +1116,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 type initViewMsg struct{}
 
 func (a *App) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd()}
+	cmds := []tea.Cmd{tickCmd(), kitty.EnsurePassthroughCmd()}
 	if a.sessionsLoading {
 		// Phase 1 (live sessions) was done synchronously in main.
 		// Fire phase 2: full async scan for all remaining sessions.
@@ -1170,15 +1171,15 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		first := a.width == 0 && a.height == 0
 		a.width = msg.Width
 		a.height = msg.Height
-		kitty.InvalidatePaneOffset()
-		cmd := a.resizeAll()
+		// The pane may have moved; re-read its offset for image placement.
+		cmd := tea.Batch(a.resizeAll(), kittyPaneQueryCmd())
 		// On first size, trigger deferred view init for -view flag or picker jump
 		if first && (a.state != viewSessions || a.config.JumpSession != "") {
 			cmd = tea.Batch(cmd, func() tea.Msg { return initViewMsg{} })
 		}
 		// Enable focus reporting so we get BlurMsg on tmux window switch
 		if first && kitty.Supported() {
-			cmd = tea.Batch(cmd, tea.EnableReportFocus, startKittyWatch(true))
+			cmd = tea.Batch(cmd, tea.EnableReportFocus, kittyWatchCmd(tk.PaneMsg{Pane: tk.Pane{Visible: true}}))
 		}
 		return a, cmd
 
@@ -1188,21 +1189,13 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// when the user actually switches windows — moving focus between
 		// panes in the same window keeps our pane on screen, and the
 		// image should stay visible there.
-		if kitty.Supported() && !kitty.PaneVisible() {
-			a.termFocused = false
-			// tmux stops forwarding our pane's passthrough output once
-			// the window switches away, so a clear emitted on the next
-			// render would be dropped. Writing directly to stdout here
-			// fires before tmux finishes the switch.
-			fmt.Fprint(os.Stdout, kitty.ClearImages())
-			_ = os.Stdout.Sync()
-		}
-		return a, nil
+		// Ask tmux off the loop; handleKittyPane clears the image (straight
+		// to stdout, before tmux finishes the switch) if we are hidden.
+		return a, kittyPaneQueryCmd()
 
 	case tea.FocusMsg:
 		a.termFocused = true
-		kitty.InvalidatePaneOffset()
-		return a, nil
+		return a, kittyPaneQueryCmd()
 
 	case initViewMsg:
 		// Jump to a specific session+message (from picker subcommand)
@@ -1359,10 +1352,16 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.handleTick()
 		return a, tea.Batch(cmd, tickCmd())
 
-	case kittyVisibilityMsg:
-		// Detect tmux window-switch transitions that don't surface as
-		// BlurMsg; see kitty_watch.go.
-		return a, a.handleKittyVisibility(msg)
+	case kittyPaneMsg:
+		// Pane geometry, and tmux window-switch transitions that don't
+		// surface as BlurMsg; see kitty_watch.go.
+		return a, a.handleKittyPane(msg)
+
+	case tk.PassthroughMsg:
+		if msg.Err != nil {
+			a.flash("tmux allow-passthrough not set (images may linger): " + msg.Err.Error())
+		}
+		return a, nil
 
 	case liveTickMsg:
 		// 2s tick: async capture for passive updates (process output, unfocused view)

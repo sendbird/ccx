@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	tk "github.com/keyolk/tuikit/kitty"
 	"github.com/keyolk/tuikit/render"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/extract"
@@ -161,7 +162,7 @@ type pickerRefStatusMsg struct {
 }
 
 func (m pickerModel) Init() tea.Cmd {
-	return m.resolveRefsCmd()
+	return tea.Batch(m.resolveRefsCmd(), kitty.EnsurePassthroughCmd())
 }
 
 // resolveRefsCmd asynchronously resolves PR/Jira status for every GitHub-PR or
@@ -194,15 +195,27 @@ func (m pickerModel) resolveRefsCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// kittyPickerTickMsg fires every 250ms when Kitty is supported so we can
-// poll tmux pane visibility — tmux does NOT forward focus-out events on
-// window switch, so BlurMsg alone isn't enough to detect the transition.
-type kittyPickerTickMsg time.Time
+// kittyPaneMsg carries a tmux pane query. watch marks the visibility
+// watcher's own answer (re-armed); one-off queries after resize, focus or
+// blur only update the recorded pane. tmux does NOT forward focus-out on a
+// window switch, so BlurMsg alone cannot detect the transition, and the
+// watcher (tuikit kitty.WatchPane) polls off the UI loop instead of the old
+// 250ms tick that ran tmux synchronously in Update.
+type kittyPaneMsg struct {
+	tk.PaneMsg
+	watch bool
+}
 
-func kittyPickerTickCmd() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
-		return kittyPickerTickMsg(t)
-	})
+func kittyPaneCmd(cmd tea.Cmd, watch bool) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if pm, ok := cmd().(tk.PaneMsg); ok {
+			return kittyPaneMsg{PaneMsg: pm, watch: watch}
+		}
+		return nil
+	}
 }
 
 func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -223,9 +236,9 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.preview = viewport.New(m.previewWidth(), m.height-3)
 		m.updatePreview()
-		// tmux pane geometry changes on resize — invalidate the cached
-		// offset so Kitty cursor positioning recomputes next render.
-		kitty.InvalidatePaneOffset()
+		// tmux pane geometry changes on resize — re-read the offset so
+		// Kitty cursor positioning follows.
+		resize := kittyPaneCmd(kitty.PaneCmd(), false)
 		// Ask the terminal to send focus events the first time we have a
 		// real size (Bubbletea delivers the first WindowSizeMsg early). We
 		// only need this when Kitty is supported so we can hide the image
@@ -233,46 +246,35 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if kitty.Supported() && !m.focusReportingEnabled {
 			m.focusReportingEnabled = true
-			cmd = tea.Batch(tea.EnableReportFocus, kittyPickerTickCmd())
+			cmd = tea.Batch(tea.EnableReportFocus,
+				kittyPaneCmd(kitty.WatchCmd(tk.PaneMsg{Pane: tk.Pane{Visible: true}}), true))
 		}
-		return m, cmd
-	case kittyPickerTickMsg:
-		// Poll tmux pane visibility. BlurMsg arrives only when the outer
-		// terminal loses focus (cmd-tab, etc.) — tmux intra-session window
-		// switches do not surface a focus event, so we rely on this tick
-		// to notice that our pane is no longer on screen and wipe any
-		// lingering Kitty graphics before they bleed into the new window.
-		if kitty.Supported() {
-			visible := kitty.PaneVisible()
-			if !visible && m.termFocused {
-				m.termFocused = false
-				fmt.Fprint(os.Stdout, kitty.ClearImages())
-				_ = os.Stdout.Sync()
-			} else if visible && !m.termFocused {
-				m.termFocused = true
-				kitty.InvalidatePaneOffset()
-			}
-		}
-		return m, kittyPickerTickCmd()
-	case tea.BlurMsg:
-		// BlurMsg fires on BOTH same-window pane focus changes and on
-		// tmux window switches. We only want to clear Kitty graphics in
-		// the latter case — same-window pane moves leave our pane on
-		// screen and the image must stay visible.
-		if kitty.Supported() && !kitty.PaneVisible() {
+		return m, tea.Batch(cmd, resize)
+	case kittyPaneMsg:
+		kitty.SetPane(msg.Pane)
+		if !msg.Pane.Visible && m.termFocused {
 			m.termFocused = false
-			// tmux stops forwarding our pane's passthrough output as soon
-			// as the window switches away, so a clear emitted from the
-			// next render would be dropped. Write directly to stdout here
-			// while our pane is still being drained.
-			fmt.Fprint(os.Stdout, kitty.ClearImages())
-			_ = os.Stdout.Sync()
+			// tmux stops forwarding our pane's passthrough output once the
+			// window switches away, so clear right away, straight to stdout.
+			if s := kitty.ClearImages(); s != "" {
+				fmt.Fprint(os.Stdout, s)
+				_ = os.Stdout.Sync()
+			}
+		} else if msg.Pane.Visible && !m.termFocused && msg.watch {
+			m.termFocused = true
+		}
+		if msg.watch {
+			return m, kittyPaneCmd(kitty.WatchCmd(msg.PaneMsg), true)
 		}
 		return m, nil
+	case tea.BlurMsg:
+		// BlurMsg fires on BOTH same-window pane focus changes and on tmux
+		// window switches; only the latter hides our pane. Ask tmux off the
+		// loop and let kittyPaneMsg clear the image if we are hidden.
+		return m, kittyPaneCmd(kitty.PaneCmd(), false)
 	case tea.FocusMsg:
 		m.termFocused = true
-		kitty.InvalidatePaneOffset()
-		return m, nil
+		return m, kittyPaneCmd(kitty.PaneCmd(), false)
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			m.quit = true
@@ -1445,6 +1447,7 @@ func RunPicker(kind string, items []PickerItem, openerCfg opener.Config, ctx pic
 	if len(items) == 0 {
 		return nil, fmt.Errorf("no %s found in session", kind)
 	}
+	kitty.Init()
 	model := newPickerModel(kind, items, openerCfg, ctx)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()
