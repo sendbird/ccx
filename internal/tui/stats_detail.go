@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/keyolk/tuikit/render"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -573,9 +574,8 @@ func rollingErrorRate(callTS, errTS []time.Time, numBuckets int) []int {
 	return rates
 }
 
+// truncName cuts name to maxW cells. It used to slice bytes, which split
+// multibyte names mid-rune and panicked for maxW < 1.
 func truncName(name string, maxW int) string {
-	if len(name) > maxW {
-		return name[:maxW-1] + "…"
-	}
-	return name
+	return render.Truncate(name, maxW)
 }

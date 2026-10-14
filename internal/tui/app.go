@@ -7127,22 +7127,7 @@ func contextNodeLine(node session.ContextNode) string {
 }
 
 func truncateContextText(s string, maxLen int) string {
-	if maxLen <= 3 || lipgloss.Width(s) <= maxLen {
-		return s
-	}
-	// Cell-width aware, rune-boundary safe: byte-slicing s[:maxLen-3] split
-	// multi-byte runes (invalid UTF-8) and mis-sized CJK/emoji.
-	var b strings.Builder
-	w := 0
-	for _, r := range s {
-		rw := lipgloss.Width(string(r))
-		if w+rw > maxLen-3 {
-			break
-		}
-		b.WriteRune(r)
-		w += rw
-	}
-	return b.String() + "..."
+	return truncate(s, maxLen)
 }
 
 func oneLine(s string) string {

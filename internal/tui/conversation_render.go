@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -1152,21 +1153,13 @@ func buildConvItems(sess session.Session, merged []mergedMsg, agents []session.S
 	return items
 }
 
+// truncate cuts s to maxW cells ending in "...", ANSI-safe (tuikit/render);
+// widths of 3 or less are left alone, as before.
 func truncate(s string, maxW int) string {
-	if lipgloss.Width(s) <= maxW || maxW <= 3 {
+	if maxW <= 3 {
 		return s
 	}
-	out := ""
-	w := 0
-	for _, r := range s {
-		rw := lipgloss.Width(string(r))
-		if w+rw > maxW-3 {
-			break
-		}
-		out += string(r)
-		w += rw
-	}
-	return out + "..."
+	return render.TruncateMarker(s, maxW, "...")
 }
 
 func compactTreeLabel(kind, text string, maxW int) string {

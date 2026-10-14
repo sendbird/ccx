@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -352,10 +353,7 @@ func (d sessionDelegate) renderDay(w io.Writer, m list.Model, index int, di dayI
 // padSelectedRow pads a row to the full list width and applies the selected-row
 // background so the highlight spans the pane.
 func padSelectedRow(line string, width int) string {
-	if bare := lipgloss.Width(line); bare < width {
-		line += strings.Repeat(" ", width-bare)
-	}
-	return selectedRowStyle.Render(line)
+	return selectedRowStyle.Render(render.PadRight(line, width))
 }
 
 // plural renders "1 session" / "2 sessions" for the day summary's counts.

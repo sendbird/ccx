@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -373,26 +374,10 @@ func trimLeadingDisplay(s string, cells int) (string, string) {
 }
 
 // truncateDisplayWidth returns s trimmed to at most maxCells display cells,
-// appending an ellipsis when truncation occurs.
+// appending an ellipsis when truncation occurs (render.Ellipsis: "~" under a
+// CJK locale, where "…" draws two cells).
 func truncateDisplayWidth(s string, maxCells int) string {
-	if maxCells <= 0 {
-		return ""
-	}
-	if runewidth.StringWidth(s) <= maxCells {
-		return s
-	}
-	var b strings.Builder
-	w := 0
-	for _, r := range s {
-		rw := runewidth.RuneWidth(r)
-		if w+rw > maxCells-1 {
-			b.WriteString("…")
-			break
-		}
-		b.WriteRune(r)
-		w += rw
-	}
-	return b.String()
+	return render.Truncate(s, maxCells)
 }
 
 // memoryListRow formats one memory note as a single selectable row: name, type

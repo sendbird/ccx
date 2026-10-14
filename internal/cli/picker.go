@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/kitty"
@@ -1311,41 +1312,17 @@ func copyToClipboard(text string) {
 }
 
 func padRightWidth(s string, n int) string {
-	w := runewidth.StringWidth(s)
-	if w >= n {
-		return s
-	}
-	return s + strings.Repeat(" ", n-w)
+	return render.PadRight(s, n)
 }
 
 func truncateWidth(s string, maxW int) string {
-	if maxW <= 0 {
-		return ""
-	}
-	if runewidth.StringWidth(s) <= maxW {
-		return s
+	if maxW <= 0 || render.Width(s) <= maxW {
+		return render.TruncateMarker(s, maxW, "")
 	}
 	if maxW <= 3 {
 		return strings.Repeat(".", maxW)
 	}
-	out := ""
-	w := 0
-	for _, r := range s {
-		rw := runewidth.RuneWidth(r)
-		if w+rw > maxW-3 {
-			break
-		}
-		out += string(r)
-		w += rw
-	}
-	return out + "..."
-}
-
-func padRight(s string, n int) string {
-	if len(s) >= n {
-		return s[:n]
-	}
-	return s + strings.Repeat(" ", n-len(s))
+	return render.TruncateMarker(s, maxW, "...")
 }
 
 func (m pickerModel) conversationArtifactTargets(editableOnly bool) []string {
