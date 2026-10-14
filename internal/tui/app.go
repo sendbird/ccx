@@ -1126,6 +1126,14 @@ func (a *App) Init() tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	if a.state == viewSessions {
+		a.syncSessionSplitLayout()
+	}
+	return m, cmd
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		first := a.width == 0 && a.height == 0
@@ -5157,13 +5165,18 @@ func previewDispatchesFromView(mode sessPreview) bool {
 		previewLoadsOffLoop(mode)
 }
 
-func (a *App) renderSessionSplit() string {
+// syncSessionSplitLayout sizes the session list and preview viewport for the
+// current window and re-wraps cached preview content when the size changed.
+// It runs after every Update rather than inside View: View must not write
+// model state, or rendering twice (tests, render caches) stops being
+// deterministic.
+func (a *App) syncSessionSplitLayout() {
 	if a.sessionList.Width() == 0 {
-		return ""
+		return
 	}
 	clampPaginator(&a.sessionList)
 	if !a.sessSplit.Show || a.width < 40 || a.height < 10 {
-		return a.sessionList.View()
+		return
 	}
 
 	listW := a.sessSplit.ListWidth(a.width, a.splitRatio)
@@ -5246,12 +5259,31 @@ func (a *App) renderSessionSplit() string {
 		a.sessSplit.Preview.GotoBottom()
 	}
 
+	// Live preview: always snap to bottom after all updates/resizes
+	if a.sessPreviewMode == sessPreviewLive && a.paneProxy != nil {
+		a.sessSplit.Preview.GotoBottom()
+	}
+	clampPaginator(&a.sessionList)
+}
+
+// renderSessionSplit draws the list/preview split. It only reads state;
+// sizing happens in syncSessionSplitLayout.
+func (a *App) renderSessionSplit() string {
+	if a.sessionList.Width() == 0 {
+		return ""
+	}
+	if !a.sessSplit.Show || a.width < 40 || a.height < 10 {
+		return a.sessionList.View()
+	}
+
+	listW := a.sessSplit.ListWidth(a.width, a.splitRatio)
+	previewW := max(a.width-listW-1, 1)
+	contentH := max(a.height-3, 1)
+
 	borderColor := colorBorderDim
 	if a.sessSplit.Focus {
 		borderColor = colorBorderFocused
 	}
-
-	clampPaginator(&a.sessionList)
 
 	left := a.sessionList.View()
 	right := a.sessSplit.Preview.View()

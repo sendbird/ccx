@@ -27,6 +27,10 @@ func outputsDigestApp(t *testing.T, rows []session.SessionOutput) *App {
 	app.sessPreviewMode = sessPreviewOutputs
 	app.sessSplit.Show = true
 	app.sessSplit.Focus = true
+	// Settle the split layout first, as the first Update after these
+	// changes would; otherwise that pass re-collects the digest and
+	// replaces the injected rows.
+	app.syncSessionSplitLayout()
 	app.sessOutputsCacheID = "maker"
 	app.sessOutputsRows = rows
 	app.sessOutputsCursor = 0
