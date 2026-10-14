@@ -27,7 +27,6 @@ import (
 )
 
 type tickMsg time.Time
-type kittyTickMsg time.Time
 type liveTickMsg time.Time // slow live capture (2s, unfocused)
 type spinnerTickMsg time.Time
 type globalStatsMsg session.GlobalStats
@@ -95,16 +94,6 @@ func spinnerTickCmd() tea.Cmd {
 func tickCmd() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
-	})
-}
-
-// kittyTickCmd fires a fast tick used only to watch for tmux window-switch
-// transitions. tmux does not forward focus-out events on window switch, so
-// we have to poll `PaneVisible()` ourselves. 250ms feels responsive without
-// thrashing the tmux control channel.
-func kittyTickCmd() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
-		return kittyTickMsg(t)
 	})
 }
 
@@ -1149,7 +1138,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Enable focus reporting so we get BlurMsg on tmux window switch
 		if first && kitty.Supported() {
-			cmd = tea.Batch(cmd, tea.EnableReportFocus, kittyTickCmd())
+			cmd = tea.Batch(cmd, tea.EnableReportFocus, startKittyWatch(true))
 		}
 		return a, cmd
 
@@ -1300,23 +1289,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.handleTick()
 		return a, tea.Batch(cmd, tickCmd())
 
-	case kittyTickMsg:
-		// Fast visibility poll: detect tmux window-switch transitions that
-		// don't surface as BlurMsg. When our pane becomes invisible, clear
-		// any lingering Kitty graphics so they don't bleed through to the
-		// window the user switched to.
-		if kitty.Supported() {
-			visible := kitty.PaneVisible()
-			if !visible && a.termFocused {
-				a.termFocused = false
-				fmt.Fprint(os.Stdout, kitty.ClearImages())
-				_ = os.Stdout.Sync()
-			} else if visible && !a.termFocused {
-				a.termFocused = true
-				kitty.InvalidatePaneOffset()
-			}
-		}
-		return a, kittyTickCmd()
+	case kittyVisibilityMsg:
+		// Detect tmux window-switch transitions that don't surface as
+		// BlurMsg; see kitty_watch.go.
+		return a, a.handleKittyVisibility(msg)
 
 	case liveTickMsg:
 		// 2s tick: async capture for passive updates (process output, unfocused view)
