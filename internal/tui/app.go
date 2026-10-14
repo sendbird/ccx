@@ -508,6 +508,7 @@ type App struct {
 	liveInputPane    tmux.Pane
 	liveInputModal   inputModal
 	liveInputProjDir string // project path for $EDITOR cwd
+	liveInputSeq     int    // generation of the latest openLiveInput lookup
 
 	// Pane proxy: unified live preview + shell-in-preview
 	paneProxy *paneProxyState
@@ -1255,6 +1256,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.clearPlgSelection()
 		// Re-scan plugins to reflect changes
 		return a.openPluginExplorer()
+
+	case worktreeDoneMsg:
+		return a, a.handleWorktreeDone(msg)
+
+	case sessionsKilledMsg:
+		a.handleSessionsKilled(msg)
+		return a, nil
+
+	case liveInputPaneMsg:
+		return a, a.handleLiveInputPane(msg)
 
 	case liveInputSentMsg:
 		if msg.err != nil {
@@ -4318,32 +4329,6 @@ func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a *App) bulkKill(selected []session.Session) (tea.Model, tea.Cmd) {
-	count := 0
-	for _, s := range selected {
-		if !s.IsLive {
-			continue
-		}
-		pane, found := tmux.FindPane(s.ProjectPath, s.ID)
-		if !found {
-			continue
-		}
-		target := pane.Session + ":" + pane.Window + "." + pane.Pane
-		exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
-		exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
-		if a.paneProxy != nil && a.paneProxy.sessID == s.ID {
-			a.closePaneProxy()
-			a.sessPreviewMode = sessPreviewConversation
-			a.sessSplit.CacheKey = ""
-			a.sessSplit.Focus = false
-		}
-		count++
-	}
-	a.clearMultiSelection()
-	a.copiedMsg = fmt.Sprintf("Killed %d", count)
-	return a, nil
-}
-
 func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
 	if !tmux.InTmux() {
 		a.copiedMsg = "Requires tmux"
@@ -4369,32 +4354,6 @@ func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
 	a.liveInputModal.title = fmt.Sprintf("Send to %d panes", len(panes))
 	a.liveInputActive = true
 	a.liveInputProjDir = selected[0].ProjectPath
-	return a, nil
-}
-
-// killLiveSession sends SIGHUP to the Claude process in the session's tmux pane.
-func (a *App) killLiveSession(sess session.Session) (tea.Model, tea.Cmd) {
-	pane, found := tmux.FindPane(sess.ProjectPath, sess.ID)
-	if !found {
-		// Fallback: try to find any Claude process for this path
-		pane, found = tmux.FindPane(sess.ProjectPath)
-		if !found {
-			a.copiedMsg = "No tmux pane found"
-			return a, nil
-		}
-	}
-	// Send ctrl+c then ctrl+d to gracefully stop Claude
-	target := pane.Session + ":" + pane.Window + "." + pane.Pane
-	exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
-	exec.Command("tmux", "send-keys", "-t", target, "C-c").Run()
-	// Close any live preview for this session
-	if a.paneProxy != nil && a.paneProxy.sessID == sess.ID {
-		a.closePaneProxy()
-		a.sessPreviewMode = sessPreviewConversation
-		a.sessSplit.CacheKey = ""
-		a.sessSplit.Focus = false
-	}
-	a.copiedMsg = "Killed"
 	return a, nil
 }
 
@@ -4690,102 +4649,6 @@ func (a *App) delayedRefreshCmd() tea.Cmd {
 
 type delayedRefreshMsg struct{ remaining int }
 
-// executeNewWorktreeSession creates a git worktree and spawns a new Claude session in it.
-func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (tea.Model, tea.Cmd) {
-	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		a.copiedMsg = "Not a git repo"
-		return a, nil
-	}
-	repoRoot := strings.TrimSpace(string(out))
-	wtPath := filepath.Join(repoRoot, a.config.WorktreeDir, branch)
-
-	// Try adding worktree
-	if err := exec.Command("git", "-C", repoRoot, "worktree", "add", wtPath, branch).Run(); err != nil {
-		if err2 := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", branch, wtPath).Run(); err2 != nil {
-			a.copiedMsg = "Worktree failed: " + err2.Error()
-			return a, nil
-		}
-	}
-
-	// Spawn new Claude session in the worktree
-	name := filepath.Base(repoRoot) + "/" + branch
-	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNewWithConfig(name, wtPath, a.config.Claude); err != nil {
-			a.copiedMsg = "Spawn failed"
-			return a, nil
-		}
-		a.copiedMsg = fmt.Sprintf("New session → %s/%s", a.config.WorktreeDir, branch)
-		return a, a.delayedRefreshCmd()
-	}
-	cmd, err := a.claudeCmd(wtPath)
-	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
-		return a, nil
-	}
-	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return tea.QuitMsg{}
-	})
-}
-
-func (a *App) executeWorktree(sess session.Session, name string) (tea.Model, tea.Cmd) {
-	// Get repo root
-	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		a.copiedMsg = "Not a git repo"
-		return a, nil
-	}
-	repoRoot := strings.TrimSpace(string(out))
-
-	// Determine branch
-	branch := sess.GitBranch
-	if branch == "" {
-		bOut, err := exec.Command("git", "-C", sess.ProjectPath, "branch", "--show-current").Output()
-		if err != nil {
-			a.copiedMsg = "Cannot determine branch"
-			return a, nil
-		}
-		branch = strings.TrimSpace(string(bOut))
-	}
-
-	wtPath := filepath.Join(repoRoot, a.config.WorktreeDir, name)
-
-	// Try adding worktree on existing branch first; if it fails because
-	// the branch is already checked out, create a new branch from it.
-	if err := exec.Command("git", "-C", repoRoot, "worktree", "add", wtPath, branch).Run(); err != nil {
-		if err2 := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", name, wtPath, branch).Run(); err2 != nil {
-			a.copiedMsg = "Worktree failed: " + err2.Error()
-			return a, nil
-		}
-	}
-
-	// Move session data to the new worktree path
-	oldPath := sess.ProjectPath
-	if err := session.MoveProject(oldPath, wtPath); err != nil {
-		a.copiedMsg = "Move failed: " + err.Error()
-		return a, nil
-	}
-
-	home, _ := os.UserHomeDir()
-	newName := session.ShortenPath(wtPath, home)
-
-	// Update in-memory sessions
-	for i := range a.sessions {
-		if a.sessions[i].ProjectPath == oldPath {
-			a.sessions[i].ProjectPath = wtPath
-			a.sessions[i].ProjectName = newName
-			a.sessions[i].IsWorktree = true
-			oldEncoded := session.EncodeProjectPath(oldPath)
-			newEncoded := session.EncodeProjectPath(wtPath)
-			a.sessions[i].FilePath = strings.Replace(a.sessions[i].FilePath, oldEncoded, newEncoded, 1)
-		}
-	}
-
-	a.rebuildSessionList()
-	a.copiedMsg = fmt.Sprintf("Worktree created → %s/%s", a.config.WorktreeDir, name)
-	return a, nil
-}
-
 // newSession opens a new Claude session (without --resume) in the selected
 // session's project directory, or CWD if no session is selected.
 func (a *App) newSession() (tea.Model, tea.Cmd) {
@@ -4856,63 +4719,6 @@ func (a *App) executeCmdNewSession(input string) (tea.Model, tea.Cmd) {
 	})
 }
 
-// executeCmdWorktreeNew handles "worktree:new <branch>" / "wt:new <branch>".
-// It creates a git worktree for the given branch and opens a new Claude session in it.
-func (a *App) executeCmdWorktreeNew(input string) (tea.Model, tea.Cmd) {
-	parts := strings.Fields(input)
-	if len(parts) < 2 {
-		a.copiedMsg = "Usage: worktree:new <branch>"
-		return a, nil
-	}
-	branch := parts[len(parts)-1]
-
-	sess, ok := a.selectedSession()
-	if !ok || sess.ProjectPath == "" {
-		a.copiedMsg = "No session with project selected"
-		return a, nil
-	}
-
-	// Get repo root
-	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		a.copiedMsg = "Not a git repo"
-		return a, nil
-	}
-	repoRoot := strings.TrimSpace(string(out))
-
-	wtPath := filepath.Join(repoRoot, a.config.WorktreeDir, branch)
-
-	// Try creating worktree: first on existing branch, then create new branch
-	if err := exec.Command("git", "-C", repoRoot, "worktree", "add", wtPath, branch).Run(); err != nil {
-		if err2 := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", branch, wtPath).Run(); err2 != nil {
-			a.copiedMsg = "Worktree failed: " + err2.Error()
-			return a, nil
-		}
-	}
-
-	// Open new Claude session in the worktree
-	windowName := branch
-	if tmux.InTmux() {
-		if err := tmux.NewWindowClaudeNewWithConfig(windowName, wtPath, a.config.Claude); err != nil {
-			a.copiedMsg = "Worktree created but spawn failed"
-		} else {
-			a.copiedMsg = fmt.Sprintf("Worktree + session → %s/%s", a.config.WorktreeDir, branch)
-		}
-		return a, nil
-	}
-
-	// Non-tmux: take over terminal
-	cmd, err := a.claudeCmd(wtPath)
-	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
-		return a, nil
-	}
-	a.copiedMsg = fmt.Sprintf("Worktree created → %s/%s", a.config.WorktreeDir, branch)
-	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return tea.QuitMsg{}
-	})
-}
-
 func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
 	pane, found := tmux.FindPane(projectPath, sessionID...)
 	if !found {
@@ -4928,50 +4734,6 @@ func (a *App) jumpToTmuxPane(projectPath string, sessionID ...string) (tea.Model
 
 // liveInputSentMsg is sent after async tmuxSendKeys completes.
 type liveInputSentMsg struct{ err error }
-
-func (a *App) openLiveInput(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
-	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
-		return a, nil
-	}
-	pane, found := tmux.FindPane(projectPath, sessionID...)
-	if !found || !tmux.HasClaude(pane.PID) {
-		a.copiedMsg = "No live Claude pane"
-		return a, nil
-	}
-	a.liveInputPane = pane
-	a.liveInputProjDir = projectPath
-
-	// If user prefers $EDITOR, skip inline modal and open editor directly
-	if a.editorInput {
-		return a, func() tea.Msg {
-			tmpFile, err := os.CreateTemp("", "ccx-input-*.md")
-			if err != nil {
-				return liveInputSentMsg{err: err}
-			}
-			tmpFile.Close()
-			defer os.Remove(tmpFile.Name())
-
-			editor := os.Getenv("EDITOR")
-			if editor == "" {
-				editor = "vim"
-			}
-			cmd := fmt.Sprintf("cd %s && %s %s", shellescape(projectPath), editor, tmpFile.Name())
-			exec.Command("tmux", "display-popup", "-E", "-w", "80%", "-h", "70%", cmd).Run()
-
-			content, readErr := os.ReadFile(tmpFile.Name())
-			if readErr != nil || len(strings.TrimSpace(string(content))) == 0 {
-				return liveInputSentMsg{err: fmt.Errorf("empty")}
-			}
-			sendText := strings.TrimRight(string(content), "\n")
-			return liveInputSentMsg{err: tmux.SendKeys(pane, sendText)}
-		}
-	}
-
-	a.liveInputModal = newInputModal()
-	a.liveInputActive = true
-	return a, nil
-}
 
 func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 	action := a.liveInputModal.handleKey(key)
