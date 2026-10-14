@@ -56,6 +56,9 @@ func TestZoomedInspectorHelpUsesConfigurableActionBinding(t *testing.T) {
 	app := setupConvApp(t, testEntries(), 120, 30)
 	app.keymap.Conversation.Actions = "A"
 	app.openInspector(inspectorConversation, session.ScopeNode, true)
+	// This checks where the key comes from, not how the footer fits; at 120
+	// columns the focused-pane hints push "actions" past the cut.
+	app.width = 400
 
 	help := stripANSI(app.convHelpLine(""))
 	if !strings.Contains(help, "A:actions") {

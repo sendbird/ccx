@@ -352,7 +352,7 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case a.keymap.Session.Views:
 		a.viewsMenu = true
 		return a, nil
-	case "x":
+	case a.keymap.Session.Actions:
 		a.plgActionsMenu = true
 		return a, nil
 	case " ":
@@ -493,7 +493,7 @@ func (a *App) handleCfgPluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case a.keymap.Session.Views:
 		a.viewsMenu = true
 		return a, nil
-	case "x":
+	case a.keymap.Session.Actions:
 		a.plgActionsMenu = true
 		return a, nil
 	case " ":
@@ -1062,7 +1062,7 @@ func (a *App) handlePluginDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.copyPluginPath()
 	case "o":
 		return a.openPluginShell()
-	case "x":
+	case a.keymap.Session.Actions:
 		a.plgCompActionsMenu = true
 		return a, nil
 	case " ":
