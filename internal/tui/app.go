@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/prefs"
 	"github.com/keyolk/tuikit/toast"
 	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/clauderegistry"
@@ -273,6 +274,11 @@ type App struct {
 
 	// Live input: prefer $EDITOR mode
 	editorInput bool
+
+	// UI state persistence (ui.json via tuikit/prefs); see ui_state.go.
+	uiSaver  prefs.Saver[uiState]
+	lastUI   uiState
+	quitting bool
 
 	// Status toasts (copy confirmations, errors, progress). One source,
 	// "status", so a newer message replaces the shown one; see flash.
@@ -998,7 +1004,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 	}
 
 	// Restore persisted view state (CLI flags override in the apply block below)
-	_, prefs, sc, rc, cc, oc, jc := LoadCCXConfig(configPath())
+	_, saved, sc, rc, cc, oc, jc := LoadCCXConfig(configPath())
 	// Inject Jira credentials from ccx config into the session resolver. Empty
 	// fields fall back to env vars (JIRA_API_TOKEN/JIRA_EMAIL/JIRA_BASE_URL).
 	session.SetJiraAuth(jc.Email, jc.Token, jc.BaseURL)
@@ -1009,7 +1015,12 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		a.config.Open = oc
 	}
 	cliSearch := a.config.SearchQuery
-	a.applyPreferences(prefs)
+	var uiErr error
+	if !a.config.PickMode && persistUIState {
+		saved, uiErr = loadUIState(saved)
+		a.uiSaver = prefs.NewSaver[uiState](prefsApp, prefs.DefaultDelay)
+	}
+	a.applyPreferences(saved)
 	a.shortcuts = sc
 	a.remoteDefaults = rc
 	a.langmap = LoadLangmap(configPath())
@@ -1091,6 +1102,11 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		}
 	}
 
+	// What was just restored is not a change to save back.
+	a.lastUI = uiStateOf(a.capturePreferences())
+	if uiErr != nil {
+		a.flash("UI state not restored: " + uiErr.Error())
+	}
 	return a
 }
 
@@ -1138,11 +1154,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handlers deep in update call a.flash, which never returns a command;
 	// the expiry tick for whatever toast they added is scheduled here.
 	before := a.toasts
+	if cmd, ok := a.handlePrefsMsg(msg); ok {
+		return a, tea.Batch(cmd, toast.Ticks(before, a.toasts))
+	}
 	m, cmd := a.update(msg)
 	if a.state == viewSessions {
 		a.syncSessionSplitLayout()
 	}
-	return m, tea.Batch(cmd, toast.Ticks(before, a.toasts))
+	return m, tea.Batch(cmd, a.saveUIState(), toast.Ticks(before, a.toasts))
 }
 
 func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {

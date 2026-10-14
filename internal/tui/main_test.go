@@ -37,6 +37,10 @@ func TestMain(m *testing.M) {
 	// and any XDG-aware lookup should follow the temp dir too.
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CONFIG_HOME", home+"/.config")
+	// ui.json (tuikit/prefs) follows XDG_STATE_HOME when it is set, which
+	// it may be on a developer machine.
+	os.Setenv("XDG_STATE_HOME", home+"/.local/state")
+	persistUIState = false
 
 	code := m.Run()
 

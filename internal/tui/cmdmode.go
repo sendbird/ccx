@@ -880,7 +880,7 @@ func (a *App) bootstrapAndEditConfig() (tea.Model, tea.Cmd) {
 				Conversation: km.Conversation,
 				Navigation:   km.Navigation,
 			},
-			Preferences: a.capturePreferences(),
+			Preferences: settingsOnly(a.capturePreferences()),
 			Claude: claudecmd.Config{
 				CommandTemplate: claudecmd.DefaultTemplate,
 			},
@@ -890,7 +890,7 @@ func (a *App) bootstrapAndEditConfig() (tea.Model, tea.Cmd) {
 			a.flash("marshal failed: " + err.Error())
 			return a, nil
 		}
-		header := "# ccx configuration\n# Keybindings: session, actions, views, conversation, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Restart ccx after editing keybindings.\n\n"
+		header := "# ccx configuration\n# Keybindings: session, actions, views, conversation, navigation\n# Preferences: worktree_dir, initial_focus (UI state is kept in ~/.local/state/ccx/ui.json)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Restart ccx after editing keybindings.\n\n"
 		if err := os.WriteFile(path, []byte(header+string(data)), 0644); err != nil {
 			a.flash("write failed: " + err.Error())
 			return a, nil
