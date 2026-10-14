@@ -137,7 +137,7 @@ func (d cfgDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 func (a *App) openConfigExplorer() (tea.Model, tea.Cmd) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		a.copiedMsg = "Cannot find home dir"
+		a.flash("Cannot find home dir")
 		return a, nil
 	}
 	claudeDir := filepath.Join(home, ".claude")
@@ -150,7 +150,7 @@ func (a *App) openConfigExplorer() (tea.Model, tea.Cmd) {
 
 	tree, err := session.ScanConfig(claudeDir, projectPath)
 	if err != nil {
-		a.copiedMsg = "Config scan failed"
+		a.flash("Config scan failed")
 		return a, nil
 	}
 
@@ -279,7 +279,7 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Clear delete confirm on any key except d
 	if a.cfgDeleteConfirm && key != "d" {
 		a.cfgDeleteConfirm = false
-		a.copiedMsg = ""
+		a.flash("")
 	}
 
 	// Page cycling ([ / ] / tab / shift+tab / p) is uniform across all config
@@ -397,7 +397,7 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "u":
 		return a.undoCfgDelete()
 	case a.keymap.Session.Refresh:
-		a.copiedMsg = "Refreshing configs…"
+		a.flash("Refreshing configs…")
 		return a.openConfigExplorer()
 	}
 
@@ -1095,28 +1095,28 @@ func injectHooksConfig(srcSettings, dstSettings string) {
 // launchConfigTest launches a sandboxed Claude session using only selected configs.
 func (a *App) launchConfigTest() (tea.Model, tea.Cmd) {
 	if !a.cfgHasSelection() {
-		a.copiedMsg = "No configs selected (space to select)"
+		a.flash("No configs selected (space to select)")
 		return a, nil
 	}
 	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
+		a.flash("Requires tmux")
 		return a, nil
 	}
 
 	items := a.selectedConfigItems()
 	env, err := buildConfigTestEnv(items)
 	if err != nil {
-		a.copiedMsg = "Failed: " + err.Error()
+		a.flash("Failed: " + err.Error())
 		return a, nil
 	}
 
 	script, err := env.ScriptWithConfig(a.config.Claude)
 	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
+		a.flash("Claude command failed: " + err.Error())
 		return a, nil
 	}
 
-	a.copiedMsg = fmt.Sprintf("Testing %d configs…", len(items))
+	a.flash(fmt.Sprintf("Testing %d configs…", len(items)))
 
 	return a, func() tea.Msg {
 		env.RunPopup(script)
@@ -1726,7 +1726,7 @@ func (a *App) startCfgNaming() (tea.Model, tea.Cmd) {
 
 	// Check if this category supports creation
 	if _, ok := cfgTemplates[cat]; !ok {
-		a.copiedMsg = "Cannot create " + session.CategoryLabel(cat) + " items"
+		a.flash("Cannot create " + session.CategoryLabel(cat) + " items")
 		return a, nil
 	}
 
@@ -1799,7 +1799,7 @@ func (a *App) createDraftConfig(name string, cat session.ConfigCategory) (tea.Mo
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		a.copiedMsg = "Cannot find home dir"
+		a.flash("Cannot find home dir")
 		return a, nil
 	}
 
@@ -1820,7 +1820,7 @@ func (a *App) createDraftConfig(name string, cat session.ConfigCategory) (tea.Mo
 		filePath = filepath.Join(dir, name+".md")
 	case cat == session.ConfigProject:
 		if a.cfgTree == nil || a.cfgTree.ProjectPath == "" {
-			a.copiedMsg = "No project selected"
+			a.flash("No project selected")
 			return a, nil
 		}
 		encoded := session.EncodeProjectPath(a.cfgTree.ProjectPath)
@@ -1840,12 +1840,12 @@ func (a *App) createDraftConfig(name string, cat session.ConfigCategory) (tea.Mo
 
 	// Don't overwrite existing
 	if _, err := os.Stat(filePath); err == nil {
-		a.copiedMsg = "Already exists: " + filepath.Base(filePath)
+		a.flash("Already exists: " + filepath.Base(filePath))
 		return a, nil
 	}
 
 	if err := os.WriteFile(filePath, []byte(tmpl.template), tmpl.perm); err != nil {
-		a.copiedMsg = "Create failed: " + err.Error()
+		a.flash("Create failed: " + err.Error())
 		return a, nil
 	}
 
@@ -1894,7 +1894,7 @@ func (a *App) deleteCfgItems() (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if !cfgDeletableCategories[ci.item.Category] {
-			a.copiedMsg = "Cannot delete " + session.CategoryLabel(ci.item.Category) + " items"
+			a.flash("Cannot delete " + session.CategoryLabel(ci.item.Category) + " items")
 			return a, nil
 		}
 		targets = append(targets, ci.item)
@@ -1908,9 +1908,9 @@ func (a *App) deleteCfgItems() (tea.Model, tea.Cmd) {
 	a.cfgDeleteConfirm = true
 	a.cfgActionsMenu = true
 	if len(targets) == 1 {
-		a.copiedMsg = "Delete " + targets[0].Name + "? Press d to confirm"
+		a.flash("Delete " + targets[0].Name + "? Press d to confirm")
 	} else {
-		a.copiedMsg = fmt.Sprintf("Delete %d items? Press d to confirm", len(targets))
+		a.flash(fmt.Sprintf("Delete %d items? Press d to confirm", len(targets)))
 	}
 	return a, nil
 }
@@ -1954,9 +1954,9 @@ func (a *App) executeCfgDelete() (tea.Model, tea.Cmd) {
 	a.clearCfgSelection()
 	a.refreshConfigExplorer()
 	if trashed == 1 {
-		a.copiedMsg = "Deleted " + targets[0].Name + " (u:undo)"
+		a.flash("Deleted " + targets[0].Name + " (u:undo)")
 	} else {
-		a.copiedMsg = fmt.Sprintf("Deleted %d items (u:undo)", trashed)
+		a.flash(fmt.Sprintf("Deleted %d items (u:undo)", trashed))
 	}
 	return a, nil
 }
@@ -2057,7 +2057,7 @@ func removeHookFromSettings(settingsPath, scriptPath, eventType string) error {
 
 func (a *App) undoCfgDelete() (tea.Model, tea.Cmd) {
 	if len(a.cfgTrash) == 0 {
-		a.copiedMsg = "Nothing to undo"
+		a.flash("Nothing to undo")
 		return a, nil
 	}
 
@@ -2068,7 +2068,7 @@ func (a *App) undoCfgDelete() (tea.Model, tea.Cmd) {
 	// Restore: ensure parent dir exists, then move back
 	os.MkdirAll(filepath.Dir(entry.origPath), 0o755)
 	if err := os.Rename(entry.tmpPath, entry.origPath); err != nil {
-		a.copiedMsg = "Undo failed: " + err.Error()
+		a.flash("Undo failed: " + err.Error())
 		return a, nil
 	}
 	// Clean up empty temp dir
@@ -2080,7 +2080,7 @@ func (a *App) undoCfgDelete() (tea.Model, tea.Cmd) {
 	}
 
 	a.refreshConfigExplorer()
-	a.copiedMsg = "Restored " + filepath.Base(entry.origPath)
+	a.flash("Restored " + filepath.Base(entry.origPath))
 	return a, nil
 }
 
@@ -2088,7 +2088,7 @@ func (a *App) undoCfgDelete() (tea.Model, tea.Cmd) {
 
 func (a *App) handleCfgActionsMenu(key string) (tea.Model, tea.Cmd) {
 	a.cfgActionsMenu = false
-	a.copiedMsg = ""
+	a.flash("")
 
 	switch key {
 	case "d":
@@ -2172,13 +2172,13 @@ type cfgProjectEntry struct {
 func (a *App) openCfgProjectPicker() (tea.Model, tea.Cmd) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		a.copiedMsg = "Cannot find home dir"
+		a.flash("Cannot find home dir")
 		return a, nil
 	}
 	claudeDir := filepath.Join(home, ".claude")
 	projects := session.ListProjects(claudeDir)
 	if len(projects) == 0 {
-		a.copiedMsg = "No projects found"
+		a.flash("No projects found")
 		return a, nil
 	}
 
@@ -2265,14 +2265,14 @@ func (a *App) handleCfgProjectPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (a *App) switchCfgProject(projectPath string) (tea.Model, tea.Cmd) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		a.copiedMsg = "Cannot find home dir"
+		a.flash("Cannot find home dir")
 		return a, nil
 	}
 	claudeDir := filepath.Join(home, ".claude")
 
 	tree, err := session.ScanConfig(claudeDir, projectPath)
 	if err != nil {
-		a.copiedMsg = "Config scan failed"
+		a.flash("Config scan failed")
 		return a, nil
 	}
 
@@ -2284,7 +2284,7 @@ func (a *App) switchCfgProject(projectPath string) (tea.Model, tea.Cmd) {
 	a.cfgList = newConfigList(items, listW, contentH)
 	a.cfgSplit.CacheKey = ""
 	a.updateConfigPreview()
-	a.copiedMsg = "Project: " + tree.ProjectName
+	a.flash("Project: " + tree.ProjectName)
 	return a, nil
 }
 

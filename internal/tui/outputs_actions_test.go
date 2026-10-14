@@ -289,7 +289,7 @@ func TestOutputsActionsOnAnEmptyDigestSaysSo(t *testing.T) {
 	if got.actionsMenu {
 		t.Error("x opened a menu for a digest with no rows")
 	}
-	if got.copiedMsg == "" {
+	if got.flashText() == "" {
 		t.Error("x was swallowed silently on an empty digest")
 	}
 }

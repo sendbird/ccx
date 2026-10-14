@@ -243,7 +243,7 @@ func (a *App) handleConversationEnter() (tea.Model, tea.Cmd) {
 		if item.kind == convSessionMeta {
 			target, hasTarget := a.currentMetaTarget()
 			if !hasTarget || target.kind == metaTargetNone || target.kind == metaTargetCron {
-				a.copiedMsg = "No action for this inspector row"
+				a.flash("No action for this inspector row")
 				return a, nil
 			}
 			if (target.kind == metaTargetMemoryFile && a.conv.inspector.MetaDrill == "" && target.fileName != "") ||
@@ -253,7 +253,7 @@ func (a *App) handleConversationEnter() (tea.Model, tea.Cmd) {
 			if handled, m, cmd := a.handleMetaEntryEnter(); handled {
 				return m, cmd
 			}
-			a.copiedMsg = "No action for this inspector row"
+			a.flash("No action for this inspector row")
 			return a, nil
 		}
 
@@ -272,7 +272,7 @@ func (a *App) handleConversationEnter() (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		a.copiedMsg = "No action for this inspector block"
+		a.flash("No action for this inspector block")
 		return a, nil
 	}
 
@@ -387,7 +387,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						return m, cmd
 					}
 				}
-				a.copiedMsg = "no origin turn for this entry"
+				a.flash("no origin turn for this entry")
 				return a, nil
 			}
 			if ok && item.kind != convMsg {
@@ -527,7 +527,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.toggleConvLiveTail()
 	case a.keymap.Session.Refresh:
 		cmd := a.refreshConversation()
-		a.copiedMsg = "Refreshed"
+		a.flash("Refreshed")
 		return a, cmd
 	case a.keymap.Conversation.Edit:
 		return a.openEditMenu(a.currentSess)
@@ -2258,12 +2258,12 @@ func (a *App) toggleConvLiveTail() (tea.Model, tea.Cmd) {
 func (a *App) jumpToOriginMessage() (tea.Model, tea.Cmd) {
 	item, ok := a.selectedConversationItem()
 	if !ok || item.parentIdx < 0 || item.parentIdx >= len(a.conv.items) {
-		a.copiedMsg = "no origin turn found"
+		a.flash("no origin turn found")
 		return a, nil
 	}
 	target := a.conv.items[item.parentIdx]
 	if target.kind != convMsg {
-		a.copiedMsg = "no origin turn found"
+		a.flash("no origin turn found")
 		return a, nil
 	}
 	for i, raw := range a.convList.VisibleItems() {
@@ -2274,7 +2274,7 @@ func (a *App) jumpToOriginMessage() (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 	}
-	a.copiedMsg = "origin turn is hidden by filter"
+	a.flash("origin turn is hidden by filter")
 	return a, nil
 }
 
@@ -3000,7 +3000,7 @@ func extractTaskEntries(entries []session.Entry, taskID string) []session.Entry 
 func (a *App) openCronConversation(cron session.CronItem) (tea.Model, tea.Cmd) {
 	cronEntries := extractCronEntries(a.conv.messages, cron)
 	if len(cronEntries) == 0 {
-		a.copiedMsg = "No entries for cron " + cron.ID
+		a.flash("No entries for cron " + cron.ID)
 		return a, nil
 	}
 
@@ -3041,7 +3041,7 @@ func (a *App) taskConversationData(task session.TaskItem) ([]session.Entry, []me
 func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 	taskEntries, merged, ok := a.taskConversationData(task)
 	if !ok {
-		a.copiedMsg = "No visible entries for task " + task.ID
+		a.flash("No visible entries for task " + task.ID)
 		return a, nil
 	}
 
@@ -3072,7 +3072,7 @@ func (a *App) openTaskConversation(task session.TaskItem) (tea.Model, tea.Cmd) {
 func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd) {
 	entries, err := session.LoadMessages(agent.FilePath)
 	if err != nil || len(entries) == 0 {
-		a.copiedMsg = "No agent messages"
+		a.flash("No agent messages")
 		return a, nil
 	}
 
@@ -3085,7 +3085,7 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 		entries = filterSideQuestionContext(entries)
 	}
 	if len(entries) == 0 {
-		a.copiedMsg = "No agent messages"
+		a.flash("No agent messages")
 		return a, nil
 	}
 
@@ -3137,13 +3137,13 @@ func (a *App) openAgentConversation(agent session.Subagent) (tea.Model, tea.Cmd)
 // openConvAsText exports the conversation as plain text and opens it in $EDITOR.
 func (a *App) openConvAsText() (tea.Model, tea.Cmd) {
 	if len(a.conv.merged) == 0 {
-		a.copiedMsg = "No messages"
+		a.flash("No messages")
 		return a, nil
 	}
 	content := stripANSI(renderAllMessages(a.conv.merged, 80))
 	tmpFile, err := os.CreateTemp("", "ccx-conv-*.txt")
 	if err != nil {
-		a.copiedMsg = "Error: " + err.Error()
+		a.flash("Error: " + err.Error())
 		return a, nil
 	}
 	tmpFile.WriteString(content)

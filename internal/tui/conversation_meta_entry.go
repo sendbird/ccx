@@ -623,13 +623,13 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
 			return true, m, cmd
 		}
-		a.copiedMsg = "No origin turn for this memory"
+		a.flash("No origin turn for this memory")
 		return true, a, nil
 	case metaTargetTodo:
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
 			return true, m, cmd
 		}
-		a.copiedMsg = "No origin turn for this todo"
+		a.flash("No origin turn for this todo")
 		return true, a, nil
 	case metaTargetTask:
 		// Prefer opening the task's own view (matches decision-task Enter); fall
@@ -643,7 +643,7 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 		if m, cmd, ok := a.jumpToMetaTarget(target); ok {
 			return true, m, cmd
 		}
-		a.copiedMsg = "No conversation or origin turn for this task"
+		a.flash("No conversation or origin turn for this task")
 		return true, a, nil
 	case metaTargetPlan:
 		if a.conv.inspector.MetaPlanDrill == "" && target.planKey != "" {
@@ -653,18 +653,18 @@ func (a *App) handleMetaEntryEnter() (bool, tea.Model, tea.Cmd) {
 		return true, a, nil
 	case metaTargetRef:
 		if target.url == "" {
-			a.copiedMsg = "No URL for this reference"
+			a.flash("No URL for this reference")
 			return true, a, nil
 		}
 		if err := a.openInBrowser(target.url); err != nil {
-			a.copiedMsg = "Open failed: " + err.Error()
+			a.flash("Open failed: " + err.Error())
 			return true, a, nil
 		}
-		a.copiedMsg = "Opened " + target.url
+		a.flash("Opened " + target.url)
 		return true, a, nil
 	case metaTargetScratchpad:
 		if target.filePath == "" {
-			a.copiedMsg = "No file path for this scratchpad"
+			a.flash("No file path for this scratchpad")
 			return true, a, nil
 		}
 		m, cmd := a.openInEditor(target.filePath)
@@ -770,7 +770,7 @@ func (a *App) jumpToMetaTarget(target metaEntryTarget) (tea.Model, tea.Cmd, bool
 	if switchedContext {
 		context, ok := a.executionContextForTranscript(transcript)
 		if !ok || !a.activateExecutionContext(context.Key, true) {
-			a.copiedMsg = "origin transcript unavailable"
+			a.flash("origin transcript unavailable")
 			return a, nil, true
 		}
 	}
@@ -778,7 +778,7 @@ func (a *App) jumpToMetaTarget(target metaEntryTarget) (tea.Model, tea.Cmd, bool
 		if switchedContext {
 			a.restoreInspectorFrame(returnFrame)
 		}
-		a.copiedMsg = message
+		a.flash(message)
 		return a, nil, true
 	}
 

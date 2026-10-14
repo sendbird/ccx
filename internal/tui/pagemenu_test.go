@@ -88,7 +88,7 @@ func TestPageMenuSuppressedOnDayRows(t *testing.T) {
 	if got.sessPreviewMode != before {
 		t.Errorf("preview mode changed to %v on a day row", got.sessPreviewMode)
 	}
-	if got.copiedMsg == "" {
+	if got.flashText() == "" {
 		t.Error("p was swallowed silently — the user gets no reason why")
 	}
 }

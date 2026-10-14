@@ -13,24 +13,24 @@ import (
 // into the main (parent) project's memory directory.
 func (a *App) importWorktreeMemory(sess session.Session) (tea.Model, tea.Cmd) {
 	if !sess.IsWorktree {
-		a.copiedMsg = "Not a worktree session"
+		a.flash("Not a worktree session")
 		return a, nil
 	}
 
 	mainPath := session.ResolveMainProjectPath(sess.ProjectPath, a.config.WorktreeDir)
 	if mainPath == sess.ProjectPath {
-		a.copiedMsg = "Cannot resolve main project"
+		a.flash("Cannot resolve main project")
 		return a, nil
 	}
 
 	// List memory files with conflict info
 	files, err := session.ListProjectMemoryConflicts(sess.ProjectPath, mainPath)
 	if err != nil {
-		a.copiedMsg = "Error: " + err.Error()
+		a.flash("Error: " + err.Error())
 		return a, nil
 	}
 	if len(files) == 0 {
-		a.copiedMsg = "No memory files in worktree"
+		a.flash("No memory files in worktree")
 		return a, nil
 	}
 
@@ -72,17 +72,17 @@ func (a *App) importWorktreeMemory(sess session.Session) (tea.Model, tea.Cmd) {
 // removeSessionMemory opens a picker to delete memory files from a session's project.
 func (a *App) removeSessionMemory(sess session.Session) (tea.Model, tea.Cmd) {
 	if !sess.HasMemory {
-		a.copiedMsg = "No memory files"
+		a.flash("No memory files")
 		return a, nil
 	}
 
 	files, err := session.ListProjectMemory(sess.ProjectPath)
 	if err != nil {
-		a.copiedMsg = "Error: " + err.Error()
+		a.flash("Error: " + err.Error())
 		return a, nil
 	}
 	if len(files) == 0 {
-		a.copiedMsg = "No memory files"
+		a.flash("No memory files")
 		return a, nil
 	}
 
@@ -125,13 +125,13 @@ func (a *App) commitMemoryRemove() {
 	a.memRemoveActive = false
 
 	if len(selected) == 0 {
-		a.copiedMsg = "No files selected"
+		a.flash("No files selected")
 		return
 	}
 
 	deleted, err := session.DeleteMemoryFiles(a.memRemoveSrc, selected)
 	if err != nil {
-		a.copiedMsg = fmt.Sprintf("Delete error: %s", err)
+		a.flash(fmt.Sprintf("Delete error: %s", err))
 		return
 	}
 
@@ -139,7 +139,7 @@ func (a *App) commitMemoryRemove() {
 	if len(names) > 50 {
 		names = names[:47] + "..."
 	}
-	a.copiedMsg = fmt.Sprintf("Deleted %d file(s): %s", deleted, names)
+	a.flash(fmt.Sprintf("Deleted %d file(s): %s", deleted, names))
 }
 
 // commitMemoryImport is called when the URL menu is confirmed with memory import active.
@@ -158,18 +158,18 @@ func (a *App) commitMemoryImport() {
 	a.memImportActive = false
 
 	if len(selected) == 0 {
-		a.copiedMsg = "No files selected"
+		a.flash("No files selected")
 		return
 	}
 
 	copied, err := session.ImportMemoryFiles(a.memImportSrc, a.memImportDst, selected)
 	if err != nil {
-		a.copiedMsg = fmt.Sprintf("Import error: %s", err)
+		a.flash(fmt.Sprintf("Import error: %s", err))
 		return
 	}
 
 	shortDst := extract.ShortenPath(a.memImportDst)
-	a.copiedMsg = fmt.Sprintf("Imported %d memory file(s) → %s", copied, shortDst)
+	a.flash(fmt.Sprintf("Imported %d memory file(s) → %s", copied, shortDst))
 
 	// Show details if multiple
 	if copied > 0 {
@@ -177,6 +177,6 @@ func (a *App) commitMemoryImport() {
 		if len(names) > 50 {
 			names = names[:47] + "..."
 		}
-		a.copiedMsg = fmt.Sprintf("Imported %d file(s): %s", copied, names)
+		a.flash(fmt.Sprintf("Imported %d file(s): %s", copied, names))
 	}
 }

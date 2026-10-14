@@ -786,14 +786,14 @@ func (a *App) openSelectedDayOutputTarget() (tea.Model, tea.Cmd, bool) {
 	}
 	if r.out.URL != "" {
 		if err := a.openInBrowser(r.out.URL); err != nil {
-			a.copiedMsg = "Open failed: " + err.Error()
+			a.flash("Open failed: " + err.Error())
 		} else {
-			a.copiedMsg = "Opened " + r.out.Title
+			a.flash("Opened " + r.out.Title)
 		}
 		return a, nil, true
 	}
 	if r.out.Path != "" {
-		a.copiedMsg = r.out.Path
+		a.flash(r.out.Path)
 		return a, nil, true
 	}
 	return a.openSelectedDayOutput()
@@ -810,11 +810,11 @@ func (a *App) copySelectedDayOutput() (tea.Model, tea.Cmd, bool) {
 		target = r.out.Path
 	}
 	if target == "" {
-		a.copiedMsg = "No URL for this output"
+		a.flash("No URL for this output")
 		return a, nil, true
 	}
 	copyToClipboard(target)
-	a.copiedMsg = "Copied " + r.out.Title
+	a.flash("Copied " + r.out.Title)
 	return a, nil, true
 }
 

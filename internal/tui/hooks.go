@@ -52,12 +52,12 @@ func (a *App) handleHooksKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case a.keymap.Session.Refresh:
 		a.hooksVP.SetContent(renderHooksView(a.width))
-		a.copiedMsg = "Refreshed"
+		a.flash("Refreshed")
 		return a, nil
 	case "e":
 		home, err := os.UserHomeDir()
 		if err != nil {
-			a.copiedMsg = "Cannot find home dir"
+			a.flash("Cannot find home dir")
 			return a, nil
 		}
 		return a.openInEditor(filepath.Join(home, ".claude", "settings.json"))

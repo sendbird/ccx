@@ -15,14 +15,14 @@ import (
 func (a *App) startWorktreeAlign() (tea.Model, tea.Cmd) {
 	sess, ok := a.selectedSession()
 	if !ok {
-		a.copiedMsg = "No session selected"
+		a.flash("No session selected")
 		return a, nil
 	}
 
 	// Get repo root
 	out, err := exec.Command("git", "-C", sess.ProjectPath, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		a.copiedMsg = "Not a git repo"
+		a.flash("Not a git repo")
 		return a, nil
 	}
 	repoRoot := strings.TrimSpace(string(out))
@@ -30,14 +30,14 @@ func (a *App) startWorktreeAlign() (tea.Model, tea.Cmd) {
 	// List worktrees
 	worktrees, err := session.ListWorktrees(repoRoot)
 	if err != nil {
-		a.copiedMsg = "Error: " + err.Error()
+		a.flash("Error: " + err.Error())
 		return a, nil
 	}
 
 	// Filter misaligned ones
 	misaligned := session.MisalignedWorktrees(repoRoot, worktrees, a.config.WorktreeDir)
 	if len(misaligned) == 0 {
-		a.copiedMsg = "All worktrees aligned"
+		a.flash("All worktrees aligned")
 		return a, nil
 	}
 
@@ -91,7 +91,7 @@ func (a *App) commitWorktreeAlign() {
 	a.worktreeAlignActive = false
 
 	if len(selected) == 0 {
-		a.copiedMsg = "No worktrees selected"
+		a.flash("No worktrees selected")
 		return
 	}
 
@@ -107,9 +107,9 @@ func (a *App) commitWorktreeAlign() {
 	}
 
 	if lastErr != nil && moved == 0 {
-		a.copiedMsg = fmt.Sprintf("Align failed: %s", lastErr)
+		a.flash(fmt.Sprintf("Align failed: %s", lastErr))
 		return
 	}
 
-	a.copiedMsg = fmt.Sprintf("Aligned %d worktree(s) → %s/", moved, a.config.WorktreeDir)
+	a.flash(fmt.Sprintf("Aligned %d worktree(s) → %s/", moved, a.config.WorktreeDir))
 }

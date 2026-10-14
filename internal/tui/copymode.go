@@ -181,11 +181,11 @@ func (a *App) doCopySelection() {
 	text := strings.TrimRight(strings.Join(selected, "\n"), "\n ")
 	copyToClipboard(text)
 	n := end - start + 1
-	a.copiedMsg = fmt.Sprintf("Copied %d line", n)
+	a.flash(fmt.Sprintf("Copied %d line", n))
 	if n != 1 {
-		a.copiedMsg += "s"
+		a.flashAppend("s")
 	}
-	a.copiedMsg += "!"
+	a.flashAppend("!")
 }
 
 func (a *App) renderCopyMode() {
@@ -223,7 +223,7 @@ func (a *App) renderCopyMode() {
 func (a *App) copyConvSelection() {
 	if text := a.renderedInspectorText(); text != "" {
 		copyToClipboard(text)
-		a.copiedMsg = "Copied inspector!"
+		a.flash("Copied inspector!")
 		return
 	}
 	sp := &a.conv.split
@@ -245,15 +245,15 @@ func (a *App) copyConvSelection() {
 			}
 		}
 		if count == 0 {
-			a.copiedMsg = "Nothing to copy"
+			a.flash("Nothing to copy")
 			return
 		}
 		copyToClipboard(strings.Join(parts, "\n\n"))
-		a.copiedMsg = fmt.Sprintf("Copied %d block", count)
+		a.flash(fmt.Sprintf("Copied %d block", count))
 		if count != 1 {
-			a.copiedMsg += "s"
+			a.flashAppend("s")
 		}
-		a.copiedMsg += "!"
+		a.flashAppend("!")
 		fs.Selected = nil
 		sp.RefreshFoldPreview(a.width, a.splitRatio)
 		return
@@ -262,7 +262,7 @@ func (a *App) copyConvSelection() {
 		text := blockPlainText(fs.Entry.Content[fs.BlockCursor])
 		if text != "" {
 			copyToClipboard(text)
-			a.copiedMsg = "Copied block!"
+			a.flash("Copied block!")
 			return
 		}
 	}
@@ -274,7 +274,7 @@ func (a *App) copyConvSelection() {
 func (a *App) copyConvSelectedMessage() {
 	item, ok := a.selectedConversationItem()
 	if !ok {
-		a.copiedMsg = "Nothing to copy"
+		a.flash("Nothing to copy")
 		return
 	}
 	var entry session.Entry
@@ -284,14 +284,14 @@ func (a *App) copyConvSelectedMessage() {
 	case convAgent:
 		entry = buildAgentPreviewEntry(item.agent)
 	default:
-		a.copiedMsg = "Nothing to copy"
+		a.flash("Nothing to copy")
 		return
 	}
 	text := entryFullText(entry)
 	if text == "" {
-		a.copiedMsg = "Nothing to copy"
+		a.flash("Nothing to copy")
 		return
 	}
 	copyToClipboard(text)
-	a.copiedMsg = "Copied message!"
+	a.flash("Copied message!")
 }

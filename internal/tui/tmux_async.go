@@ -57,7 +57,7 @@ func (a *App) handlePaneJumpFound(msg paneJumpFoundMsg) tea.Cmd {
 		return func() tea.Msg { return paneJumpDoneMsg{err: switchToPane(pane)} }
 	}
 	if msg.resume == nil {
-		a.copiedMsg = "No tmux pane found"
+		a.flash("No tmux pane found")
 		return nil
 	}
 	// Live session without a pane: take over this terminal.
@@ -67,7 +67,7 @@ func (a *App) handlePaneJumpFound(msg paneJumpFoundMsg) tea.Cmd {
 	}
 	cmd, err := a.claudeCmd(dir, "--resume", msg.resume.ID)
 	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
+		a.flash("Claude command failed: " + err.Error())
 		return nil
 	}
 	return tea.ExecProcess(cmd, func(error) tea.Msg { return tea.QuitMsg{} })
@@ -83,7 +83,7 @@ type livePreviewPaneMsg struct {
 
 func (a *App) openLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 	if !sess.IsLive {
-		a.copiedMsg = "not a live session"
+		a.flash("not a live session")
 		return a, nil
 	}
 	a.livePreviewSeq++
@@ -103,7 +103,7 @@ func (a *App) handleLivePreviewPane(msg livePreviewPaneMsg) tea.Cmd {
 		return nil // cursor moved while looking up
 	}
 	if !msg.found {
-		a.copiedMsg = "tmux pane not found"
+		a.flash("tmux pane not found")
 		return nil
 	}
 	a.paneProxy = &paneProxyState{pane: msg.pane, sessID: msg.sessID}
@@ -120,7 +120,7 @@ type bulkInputPanesMsg struct {
 
 func (a *App) bulkInput(selected []session.Session) (tea.Model, tea.Cmd) {
 	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
+		a.flash("Requires tmux")
 		return a, nil
 	}
 	type target struct{ path, id string }
@@ -155,7 +155,7 @@ func (a *App) handleBulkInputPanes(msg bulkInputPanesMsg) {
 		return
 	}
 	if len(msg.panes) == 0 {
-		a.copiedMsg = "No live Claude panes"
+		a.flash("No live Claude panes")
 		return
 	}
 	a.liveInputPanes = msg.panes
@@ -183,10 +183,10 @@ func shareRefSendCmd(target session.Session, prompt, okStatus string) tea.Cmd {
 
 func (a *App) handleShareRefSent(msg shareRefSentMsg) {
 	if msg.err != nil {
-		a.copiedMsg = "Share failed: " + msg.err.Error()
+		a.flash("Share failed: " + msg.err.Error())
 		return
 	}
-	a.copiedMsg = msg.okStatus
+	a.flash(msg.okStatus)
 }
 
 // sendToPanes sends text to every pane and joins the errors so a partial

@@ -184,8 +184,8 @@ func TestOpenLivePreviewNonLiveSession(t *testing.T) {
 	if cmd != nil {
 		t.Error("openLivePreview on non-live session should return nil cmd")
 	}
-	if app.copiedMsg != "not a live session" {
-		t.Errorf("expected 'not a live session' message, got %q", app.copiedMsg)
+	if app.flashText() != "not a live session" {
+		t.Errorf("expected 'not a live session' message, got %q", app.flashText())
 	}
 	if app.sessPreviewMode == sessPreviewLive {
 		t.Error("should not switch to live mode for non-live session")

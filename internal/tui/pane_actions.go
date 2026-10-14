@@ -82,7 +82,7 @@ func (a *App) bulkKill(selected []session.Session) (tea.Model, tea.Cmd) {
 	}
 	a.clearMultiSelection()
 	if len(targets) == 0 {
-		a.copiedMsg = "Killed 0"
+		a.flash("Killed 0")
 		return a, nil
 	}
 	return a, killSessionsCmd(targets, true)
@@ -105,15 +105,15 @@ func (a *App) handleSessionsKilled(msg sessionsKilledMsg) {
 	}
 	switch {
 	case len(msg.errs) > 0 && msg.bulk:
-		a.copiedMsg = fmt.Sprintf("Killed %d, %d failed: %v", len(msg.killed), len(msg.errs), msg.errs[0])
+		a.flash(fmt.Sprintf("Killed %d, %d failed: %v", len(msg.killed), len(msg.errs), msg.errs[0]))
 	case len(msg.errs) > 0:
-		a.copiedMsg = fmt.Sprintf("Kill failed: %v", msg.errs[0])
+		a.flash(fmt.Sprintf("Kill failed: %v", msg.errs[0]))
 	case msg.bulk:
-		a.copiedMsg = fmt.Sprintf("Killed %d", len(msg.killed))
+		a.flash(fmt.Sprintf("Killed %d", len(msg.killed)))
 	case msg.notFound > 0:
-		a.copiedMsg = "No tmux pane found"
+		a.flash("No tmux pane found")
 	default:
-		a.copiedMsg = "Killed"
+		a.flash("Killed")
 	}
 }
 
@@ -127,7 +127,7 @@ type liveInputPaneMsg struct {
 
 func (a *App) openLiveInput(projectPath string, sessionID ...string) (tea.Model, tea.Cmd) {
 	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
+		a.flash("Requires tmux")
 		return a, nil
 	}
 	a.liveInputSeq++
@@ -145,7 +145,7 @@ func (a *App) handleLiveInputPane(msg liveInputPaneMsg) tea.Cmd {
 		return nil
 	}
 	if !msg.ok {
-		a.copiedMsg = "No live Claude pane"
+		a.flash("No live Claude pane")
 		return nil
 	}
 	pane, projectPath := msg.pane, msg.projectPath

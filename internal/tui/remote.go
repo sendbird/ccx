@@ -354,7 +354,7 @@ func (a *App) startRemoteSession(cfg remote.Config) (tea.Model, tea.Cmd) {
 	}
 
 	if a.remoteSession != nil && cfg.PodName == "" {
-		a.copiedMsg = "Remote session already active — use remote.pod_name to reuse a fixed worker pod"
+		a.flash("Remote session already active — use remote.pod_name to reuse a fixed worker pod")
 		return a, nil
 	}
 
@@ -407,7 +407,7 @@ func readSetupStep(podName string, steps <-chan remote.SetupStep) tea.Cmd {
 func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 	if msg.step.Err != nil {
 		errMsg := msg.step.Err.Error()
-		a.copiedMsg = "Remote failed: " + errMsg
+		a.flash("Remote failed: " + errMsg)
 		a.updateRemoteSessionStatus(msg.podName, "failed: "+errMsg)
 		// Show error in progress view
 		a.remoteProgressSteps = append(a.remoteProgressSteps, "FAILED: "+errMsg)
@@ -426,7 +426,7 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 			a.remoteContent = a.buildRemoteProgressView(a.remoteSession, "")
 		}
 		a.updateRemotePreview(msg.podName)
-		a.copiedMsg = "Remote ready — fetching session..."
+		a.flash("Remote ready — fetching session...")
 		// Auto-fetch the remote session JSONL so the preview shows the
 		// conversation content (like a normal session) instead of just the
 		// static progress card.
@@ -453,7 +453,7 @@ func (a *App) handleRemoteSetup(msg remoteSetupMsg) (tea.Model, tea.Cmd) {
 // uses the existing pane proxy to capture it — same as local live preview.
 func (a *App) openRemoteLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
+		a.flash("Requires tmux")
 		return a, nil
 	}
 
@@ -477,7 +477,7 @@ func (a *App) openRemoteLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 		}
 	}
 	if cfg.Context == "" {
-		a.copiedMsg = "No config for remote session"
+		a.flash("No config for remote session")
 		return a, nil
 	}
 
@@ -495,10 +495,10 @@ func (a *App) openRemoteLivePreview(sess session.Session) (tea.Model, tea.Cmd) {
 		shellArg(cfg.Context), shellArg(cfg.Namespace), shellArg(sess.RemotePodName), containerArg, shellArg(cfg.RemoteUser), cfg.WorkDir, claudeCmd)
 
 	windowName := "ccx-remote-" + sess.RemotePodName[:min(8, len(sess.RemotePodName))]
-	a.copiedMsg = fmt.Sprintf("Spawning live → %s/%s...", cfg.Context, sess.RemotePodName)
+	a.flash(fmt.Sprintf("Spawning live → %s/%s...", cfg.Context, sess.RemotePodName))
 	pane, err := tmux.SpawnHiddenWindow(windowName, kubectlCmd)
 	if err != nil {
-		a.copiedMsg = "Spawn failed: " + err.Error()
+		a.flash("Spawn failed: " + err.Error())
 		return a, nil
 	}
 
@@ -540,12 +540,12 @@ func (a *App) fetchRemotePreview(sess session.Session) (tea.Model, tea.Cmd) {
 		}
 	}
 	if cfg.Context == "" {
-		a.copiedMsg = "No config found for remote session"
+		a.flash("No config found for remote session")
 		return a, nil
 	}
 
 	podName := sess.RemotePodName
-	a.copiedMsg = "Fetching session from pod..."
+	a.flash("Fetching session from pod...")
 	return a, func() tea.Msg {
 		t := cfg.BuildTransportForPod(podName)
 		data, err := remote.FetchSessionJSONL(cfg, t)
@@ -574,7 +574,7 @@ func (a *App) autoFetchRemoteSession(podName string) tea.Cmd {
 // handleRemoteFetch processes the fetched JSONL and enables normal preview.
 func (a *App) handleRemoteFetch(msg remoteFetchMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		a.copiedMsg = "Fetch failed: " + msg.err.Error()
+		a.flash("Fetch failed: " + msg.err.Error())
 		return a, nil
 	}
 
@@ -585,7 +585,7 @@ func (a *App) handleRemoteFetch(msg remoteFetchMsg) (tea.Model, tea.Cmd) {
 	}
 	tmpFile, err := os.CreateTemp("", "ccx-remote-*.jsonl")
 	if err != nil {
-		a.copiedMsg = "Temp file failed"
+		a.flash("Temp file failed")
 		return a, nil
 	}
 	tmpFile.Write(msg.data)
@@ -628,15 +628,15 @@ func (a *App) handleRemoteFetch(msg remoteFetchMsg) (tea.Model, tea.Cmd) {
 	a.remoteStreaming = true
 	a.sessSplit.CacheKey = ""
 	a.sessConvCacheID = ""
-	a.copiedMsg = fmt.Sprintf("Loaded %d bytes from pod", len(msg.data))
+	a.flash(fmt.Sprintf("Loaded %d bytes from pod", len(msg.data)))
 	return a, nil
 }
 
 func (a *App) handleRemoteExecDone(msg remoteExecDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		a.copiedMsg = "Remote attach error: " + msg.err.Error()
+		a.flash("Remote attach error: " + msg.err.Error())
 	} else {
-		a.copiedMsg = "Detached from remote — session still running"
+		a.flash("Detached from remote — session still running")
 	}
 	// Re-fetch the session JSONL after detach so the preview shows the latest
 	// conversation content (everything Claude did while attached).
@@ -698,9 +698,9 @@ func (a *App) stopRemoteSessionInternal(pull bool) (tea.Model, tea.Cmd) {
 		if pull && pullDest != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			if err := remote.FetchWorkdirToDirWithTransport(ctx, pullCfg, a.remoteSession.Transport, pullDest); err != nil {
-				a.copiedMsg = "Pull failed, stopping anyway: " + err.Error()
+				a.flash("Pull failed, stopping anyway: " + err.Error())
 			} else {
-				a.copiedMsg = fmt.Sprintf("Pulled workdir → %s, stopped %s", pullDest, podName)
+				a.flash(fmt.Sprintf("Pulled workdir → %s, stopped %s", pullDest, podName))
 			}
 			cancel()
 		}
@@ -736,9 +736,9 @@ func (a *App) stopRemoteSessionInternal(pull bool) (tea.Model, tea.Cmd) {
 						ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 						t := cfg.BuildTransportForPod(podName)
 						if err := remote.FetchWorkdirToDirWithTransport(ctx, pullCfg, t, pullDest); err != nil {
-							a.copiedMsg = "Pull failed, stopping anyway: " + err.Error()
+							a.flash("Pull failed, stopping anyway: " + err.Error())
 						} else {
-							a.copiedMsg = fmt.Sprintf("Pulled workdir → %s, stopped %s", pullDest, podName)
+							a.flash(fmt.Sprintf("Pulled workdir → %s, stopped %s", pullDest, podName))
 						}
 						cancel()
 					}
@@ -751,7 +751,7 @@ func (a *App) stopRemoteSessionInternal(pull bool) (tea.Model, tea.Cmd) {
 			}
 		}
 	} else {
-		a.copiedMsg = "No remote session selected"
+		a.flash("No remote session selected")
 		return a, nil
 	}
 
@@ -765,8 +765,8 @@ func (a *App) stopRemoteSessionInternal(pull bool) (tea.Model, tea.Cmd) {
 	}
 	a.sessions = filtered
 	a.rebuildSessionList()
-	if a.copiedMsg == "" || !strings.HasPrefix(a.copiedMsg, "Pulled") {
-		a.copiedMsg = fmt.Sprintf("Stopped pod %s", podName)
+	if a.flashText() == "" || !strings.HasPrefix(a.flashText(), "Pulled") {
+		a.flash(fmt.Sprintf("Stopped pod %s", podName))
 	}
 	return a, nil
 }
@@ -791,7 +791,7 @@ func (a *App) reconnectRemoteSession() (tea.Model, tea.Cmd) {
 			RemotePodName: saved[0].PodName,
 		})
 	}
-	a.copiedMsg = "No remote session found"
+	a.flash("No remote session found")
 	return a, nil
 }
 
@@ -833,7 +833,7 @@ func (a *App) attachToRemoteSession(sess session.Session) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	a.copiedMsg = "Remote pod not found in saved sessions"
+	a.flash("Remote pod not found in saved sessions")
 	return a, nil
 }
 
@@ -977,28 +977,28 @@ func (a *App) handleRemotePhase(msg remotePhaseMsg) (tea.Model, tea.Cmd) {
 }
 
 // executeCmdRemoteExec runs an ad-hoc command in the selected remote pod and
-// reports the output via copiedMsg. Long output is truncated.
+// reports the output via status toast. Long output is truncated.
 func (a *App) executeCmdRemoteExec(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: remote:exec <command...>"
+		a.flash("Usage: remote:exec <command...>")
 		return a, nil
 	}
 	cmdParts := parts[1:]
 
 	sess, ok := a.selectedSession()
 	if !ok || !sess.IsRemote {
-		a.copiedMsg = "Select a remote session first"
+		a.flash("Select a remote session first")
 		return a, nil
 	}
 
 	cfg, ok := a.resolveRemoteConfig(sess.RemotePodName)
 	if !ok {
-		a.copiedMsg = "No config for remote session"
+		a.flash("No config for remote session")
 		return a, nil
 	}
 
-	a.copiedMsg = fmt.Sprintf("Exec on %s: %s", sess.RemotePodName, strings.Join(cmdParts, " "))
+	a.flash(fmt.Sprintf("Exec on %s: %s", sess.RemotePodName, strings.Join(cmdParts, " ")))
 	pod := sess.RemotePodName
 	return a, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1014,18 +1014,18 @@ func (a *App) handleRemoteExecOutput(msg remoteExecOutputMsg) (tea.Model, tea.Cm
 	if msg.err != nil {
 		out := strings.TrimSpace(string(msg.out))
 		if out != "" {
-			a.copiedMsg = fmt.Sprintf("Exec failed: %s: %s", msg.err.Error(), trimLine(out, 80))
+			a.flash(fmt.Sprintf("Exec failed: %s: %s", msg.err.Error(), trimLine(out, 80)))
 		} else {
-			a.copiedMsg = "Exec failed: " + msg.err.Error()
+			a.flash("Exec failed: " + msg.err.Error())
 		}
 		return a, nil
 	}
 	out := strings.TrimSpace(string(msg.out))
 	if out == "" {
-		a.copiedMsg = "Exec ok (no output)"
+		a.flash("Exec ok (no output)")
 		return a, nil
 	}
-	a.copiedMsg = trimLine(strings.ReplaceAll(out, "\n", " | "), 160)
+	a.flash(trimLine(strings.ReplaceAll(out, "\n", " | "), 160))
 	return a, nil
 }
 
@@ -1058,12 +1058,12 @@ func (a *App) resolveRemoteConfig(podName string) (remote.Config, bool) {
 func (a *App) executeCmdRemotePhase() (tea.Model, tea.Cmd) {
 	sess, ok := a.selectedSession()
 	if !ok || !sess.IsRemote {
-		a.copiedMsg = "Select a remote session first"
+		a.flash("Select a remote session first")
 		return a, nil
 	}
 	cfg, ok := a.resolveRemoteConfig(sess.RemotePodName)
 	if !ok {
-		a.copiedMsg = "No config for remote session"
+		a.flash("No config for remote session")
 		return a, nil
 	}
 	pod := sess.RemotePodName
@@ -1071,7 +1071,7 @@ func (a *App) executeCmdRemotePhase() (tea.Model, tea.Cmd) {
 	if target == "" {
 		target = fmt.Sprintf("%s/%s/%s", cfg.Context, cfg.Namespace, pod)
 	}
-	a.copiedMsg = fmt.Sprintf("Querying %s...", target)
+	a.flash(fmt.Sprintf("Querying %s...", target))
 	return a, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1088,11 +1088,11 @@ func (a *App) executeCmdRemoteLs() (tea.Model, tea.Cmd) {
 	for i, item := range items {
 		if si, ok := item.(sessionItem); ok && si.sess.IsRemote {
 			a.sessionList.Select(i)
-			a.copiedMsg = fmt.Sprintf("Remote: %s", si.sess.RemotePodName)
+			a.flash(fmt.Sprintf("Remote: %s", si.sess.RemotePodName))
 			return a, nil
 		}
 	}
-	a.copiedMsg = "No remote sessions"
+	a.flash("No remote sessions")
 	return a, nil
 }
 
@@ -1117,12 +1117,12 @@ func (a *App) executeCmdRemoteSnapshot(input string) (tea.Model, tea.Cmd) {
 
 	sess, ok := a.selectedSession()
 	if !ok || !sess.IsRemote {
-		a.copiedMsg = "Select a remote session first"
+		a.flash("Select a remote session first")
 		return a, nil
 	}
 	cfg, ok := a.resolveRemoteConfig(sess.RemotePodName)
 	if !ok {
-		a.copiedMsg = "No config for remote session"
+		a.flash("No config for remote session")
 		return a, nil
 	}
 
@@ -1135,7 +1135,7 @@ func (a *App) executeCmdRemoteSnapshot(input string) (tea.Model, tea.Cmd) {
 	}
 
 	pod := sess.RemotePodName
-	a.copiedMsg = fmt.Sprintf("Snapshotting %s...", pod)
+	a.flash(fmt.Sprintf("Snapshotting %s...", pod))
 	return a, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -1146,7 +1146,7 @@ func (a *App) executeCmdRemoteSnapshot(input string) (tea.Model, tea.Cmd) {
 
 func (a *App) handleRemoteSnapshot(msg remoteSnapshotMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		a.copiedMsg = "Snapshot failed: " + msg.err.Error()
+		a.flash("Snapshot failed: " + msg.err.Error())
 		return a, nil
 	}
 	parts := []string{"snapshot " + msg.name}
@@ -1156,7 +1156,7 @@ func (a *App) handleRemoteSnapshot(msg remoteSnapshotMsg) (tea.Model, tea.Cmd) {
 	if msg.meta.HasWorkdir {
 		parts = append(parts, fmt.Sprintf("workdir %s", formatBytes(msg.meta.WorkdirSize)))
 	}
-	a.copiedMsg = strings.Join(parts, " · ")
+	a.flash(strings.Join(parts, " · "))
 	return a, nil
 }
 
@@ -1165,7 +1165,7 @@ func (a *App) handleRemoteSnapshot(msg remoteSnapshotMsg) (tea.Model, tea.Cmd) {
 func (a *App) executeCmdRemoteRestore(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: remote:restore <snapshot-name> [context] [namespace]"
+		a.flash("Usage: remote:restore <snapshot-name> [context] [namespace]")
 		return a, nil
 	}
 	name := parts[1]
@@ -1179,7 +1179,7 @@ func (a *App) executeCmdRemoteRestore(input string) (tea.Model, tea.Cmd) {
 	}
 	sess, steps, err := remote.StartFromSnapshot(name, overrides, a.config.ClaudeDir)
 	if err != nil {
-		a.copiedMsg = "Restore failed: " + err.Error()
+		a.flash("Restore failed: " + err.Error())
 		return a, nil
 	}
 	return a.installRemoteSession(sess, steps)
@@ -1191,17 +1191,17 @@ func (a *App) executeCmdRemoteRestore(input string) (tea.Model, tea.Cmd) {
 func (a *App) executeCmdRemoteFork(input string) (tea.Model, tea.Cmd) {
 	sess, ok := a.selectedSession()
 	if !ok || !sess.IsRemote {
-		a.copiedMsg = "Select a remote session first to fork"
+		a.flash("Select a remote session first to fork")
 		return a, nil
 	}
 	cfg, ok := a.resolveRemoteConfig(sess.RemotePodName)
 	if !ok {
-		a.copiedMsg = "No config for remote session"
+		a.flash("No config for remote session")
 		return a, nil
 	}
 	pod := sess.RemotePodName
 
-	a.copiedMsg = fmt.Sprintf("Forking %s...", pod)
+	a.flash(fmt.Sprintf("Forking %s...", pod))
 	return a, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -1231,7 +1231,7 @@ func (a *App) handleRemoteForkReady(msg remoteForkReadyMsg) (tea.Model, tea.Cmd)
 	overrides := mergeRemoteConfig(a.remoteDefaults, remote.Config{})
 	sess, steps, err := remote.StartFromSnapshot(msg.snapshot, overrides, a.config.ClaudeDir)
 	if err != nil {
-		a.copiedMsg = "Fork restore failed: " + err.Error()
+		a.flash("Fork restore failed: " + err.Error())
 		return a, nil
 	}
 	if msg.cleanup {
@@ -1247,12 +1247,12 @@ func (a *App) executeCmdRemotePull(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	sess, ok := a.selectedSession()
 	if !ok || !sess.IsRemote {
-		a.copiedMsg = "Select a remote session first"
+		a.flash("Select a remote session first")
 		return a, nil
 	}
 	cfg, ok := a.resolveRemoteConfig(sess.RemotePodName)
 	if !ok {
-		a.copiedMsg = "No config for remote session"
+		a.flash("No config for remote session")
 		return a, nil
 	}
 
@@ -1261,12 +1261,12 @@ func (a *App) executeCmdRemotePull(input string) (tea.Model, tea.Cmd) {
 		dest = parts[1]
 	}
 	if dest == "" {
-		a.copiedMsg = "Usage: remote:pull [target-dir]"
+		a.flash("Usage: remote:pull [target-dir]")
 		return a, nil
 	}
 
 	pod := sess.RemotePodName
-	a.copiedMsg = fmt.Sprintf("Pulling workdir %s → %s...", pod, dest)
+	a.flash(fmt.Sprintf("Pulling workdir %s → %s...", pod, dest))
 	return a, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -1283,25 +1283,25 @@ func (a *App) executeCmdRemotePull(input string) (tea.Model, tea.Cmd) {
 func (a *App) executeCmdRemotePullSession() (tea.Model, tea.Cmd) {
 	sess, ok := a.selectedSession()
 	if !ok || !sess.IsRemote {
-		a.copiedMsg = "Select a remote session first"
+		a.flash("Select a remote session first")
 		return a, nil
 	}
 
 	cfg, ok := a.resolveRemoteConfig(sess.RemotePodName)
 	if !ok {
-		a.copiedMsg = "No config for remote session"
+		a.flash("No config for remote session")
 		return a, nil
 	}
 
 	// Determine the local project path to materialize into.
 	localProject := cfg.LocalDir
 	if localProject == "" {
-		a.copiedMsg = "No local_dir configured — cannot determine local project path"
+		a.flash("No local_dir configured — cannot determine local project path")
 		return a, nil
 	}
 
 	pod := sess.RemotePodName
-	a.copiedMsg = fmt.Sprintf("Pulling session %s → local...", pod)
+	a.flash(fmt.Sprintf("Pulling session %s → local...", pod))
 	return a, func() tea.Msg {
 		t := cfg.BuildTransportForPod(pod)
 		data, err := remote.FetchSessionJSONL(cfg, t)
@@ -1326,10 +1326,10 @@ func (a *App) executeCmdRemotePullSession() (tea.Model, tea.Cmd) {
 
 func (a *App) handleRemotePull(msg remotePullMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		a.copiedMsg = "Pull failed: " + msg.err.Error()
+		a.flash("Pull failed: " + msg.err.Error())
 		return a, nil
 	}
-	a.copiedMsg = fmt.Sprintf("Pulled workdir → %s", msg.dest)
+	a.flash(fmt.Sprintf("Pulled workdir → %s", msg.dest))
 	return a, nil
 }
 
@@ -1337,7 +1337,7 @@ func (a *App) handleRemotePull(msg remotePullMsg) (tea.Model, tea.Cmd) {
 // (virtual session, persistence, preview). Shared by restore + fork paths.
 func (a *App) installRemoteSession(sess *remote.Session, steps <-chan remote.SetupStep) (tea.Model, tea.Cmd) {
 	if a.remoteSession != nil {
-		a.copiedMsg = "Remote session already active — :remote:stop first"
+		a.flash("Remote session already active — :remote:stop first")
 		return a, nil
 	}
 	a.remoteSession = sess
@@ -1417,9 +1417,9 @@ func (a *App) installRemoteSession(sess *remote.Session, steps <-chan remote.Set
 
 	a.remoteProgressSteps = nil
 	a.remoteContent = a.buildRemoteProgressView(sess, "Initializing...")
-	a.copiedMsg = fmt.Sprintf("Remote → %s/%s/%s", sess.Config.Context, sess.Config.Namespace, sess.PodName)
+	a.flash(fmt.Sprintf("Remote → %s/%s/%s", sess.Config.Context, sess.Config.Namespace, sess.PodName))
 	if sess.Config.ArchMismatch() {
-		a.copiedMsg += fmt.Sprintf(" [arch %s ≠ host %s]", sess.Config.Arch, remote.HostArch())
+		a.flashAppend(fmt.Sprintf(" [arch %s ≠ host %s]", sess.Config.Arch, remote.HostArch()))
 	}
 
 	if !a.sessSplit.Show {
@@ -1437,7 +1437,7 @@ func (a *App) installRemoteSession(sess *remote.Session, steps <-chan remote.Set
 func (a *App) executeCmdRemoteSnapshots() (tea.Model, tea.Cmd) {
 	snaps := remote.ListSnapshots()
 	if len(snaps) == 0 {
-		a.copiedMsg = "No snapshots"
+		a.flash("No snapshots")
 		return a, nil
 	}
 	var names []string
@@ -1451,7 +1451,7 @@ func (a *App) executeCmdRemoteSnapshots() (tea.Model, tea.Cmd) {
 	if len(snaps) > len(names) {
 		more = fmt.Sprintf(" (+%d more)", len(snaps)-len(names))
 	}
-	a.copiedMsg = "Snapshots: " + strings.Join(names, ", ") + more
+	a.flash("Snapshots: " + strings.Join(names, ", ") + more)
 	return a, nil
 }
 
@@ -1459,37 +1459,37 @@ func (a *App) executeCmdRemoteSnapshots() (tea.Model, tea.Cmd) {
 func (a *App) executeCmdRemoteRmSnap(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: remote:rm-snap <snapshot-name>"
+		a.flash("Usage: remote:rm-snap <snapshot-name>")
 		return a, nil
 	}
 	name := parts[1]
 	if err := remote.DeleteSnapshot(name); err != nil {
-		a.copiedMsg = "Delete failed: " + err.Error()
+		a.flash("Delete failed: " + err.Error())
 		return a, nil
 	}
-	a.copiedMsg = "Deleted snapshot " + name
+	a.flash("Deleted snapshot " + name)
 	return a, nil
 }
 
 func (a *App) executeCmdRemoteExportSnap(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 3 {
-		a.copiedMsg = "Usage: remote:export-snap <snapshot-name> <output.tgz>"
+		a.flash("Usage: remote:export-snap <snapshot-name> <output.tgz>")
 		return a, nil
 	}
 	name, out := parts[1], parts[2]
 	if err := remote.ExportSnapshot(name, out); err != nil {
-		a.copiedMsg = "Export failed: " + err.Error()
+		a.flash("Export failed: " + err.Error())
 		return a, nil
 	}
-	a.copiedMsg = fmt.Sprintf("Exported %s → %s", name, out)
+	a.flash(fmt.Sprintf("Exported %s → %s", name, out))
 	return a, nil
 }
 
 func (a *App) executeCmdRemoteImportSnap(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: remote:import-snap <bundle.tgz> [snapshot-name]"
+		a.flash("Usage: remote:import-snap <bundle.tgz> [snapshot-name]")
 		return a, nil
 	}
 	name := ""
@@ -1498,10 +1498,10 @@ func (a *App) executeCmdRemoteImportSnap(input string) (tea.Model, tea.Cmd) {
 	}
 	meta, err := remote.ImportSnapshot(parts[1], name)
 	if err != nil {
-		a.copiedMsg = "Import failed: " + err.Error()
+		a.flash("Import failed: " + err.Error())
 		return a, nil
 	}
-	a.copiedMsg = "Imported snapshot " + meta.Name
+	a.flash("Imported snapshot " + meta.Name)
 	return a, nil
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/toast"
 	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/extract"
@@ -273,8 +274,9 @@ type App struct {
 	// Live input: prefer $EDITOR mode
 	editorInput bool
 
-	// Content for clipboard/pager
-	copiedMsg string
+	// Status toasts (copy confirmations, errors, progress). One source,
+	// "status", so a newer message replaces the shown one; see flash.
+	toasts toast.Queue
 
 	// Copy mode for the focused conversation inspector
 	copyModeActive bool
@@ -777,7 +779,7 @@ func (a *App) toggleCompletedProjectsFilter() {
 	current := strings.TrimSpace(a.activeFilterValue())
 	if current == "is:done" {
 		a.setSessionListFilter("")
-		a.copiedMsg = "Completed filter cleared"
+		a.flash("Completed filter cleared")
 		return
 	}
 	a.setSessionListFilter("is:done")
@@ -785,10 +787,10 @@ func (a *App) toggleCompletedProjectsFilter() {
 		// Do not strand the user on a confusing blank browser; fall back to the
 		// normal projects view and explain what happened.
 		a.setSessionListFilter("")
-		a.copiedMsg = "No completed projects found"
+		a.flash("No completed projects found")
 		return
 	}
-	a.copiedMsg = "Showing completed projects"
+	a.flash("Showing completed projects")
 }
 
 // stateFilterTokens are the mutually-orthogonal session-state tokens the state
@@ -837,7 +839,7 @@ func (a *App) currentStateFilterSet() map[string]bool {
 func (a *App) applyStateFilterSet(set map[string]bool) {
 	if len(set) == 0 {
 		a.setSessionListFilter("")
-		a.copiedMsg = "State filter cleared — showing all"
+		a.flash("State filter cleared — showing all")
 		return
 	}
 	// Deterministic order for a stable filter string / badge.
@@ -852,10 +854,10 @@ func (a *App) applyStateFilterSet(set map[string]bool) {
 	a.setSessionListFilter(query)
 	if a.visibleProjectBrowserItems() == 0 {
 		a.setSessionListFilter("")
-		a.copiedMsg = "No sessions match " + query + " — showing all"
+		a.flash("No sessions match " + query + " — showing all")
 		return
 	}
-	a.copiedMsg = "State filter: " + query
+	a.flash("State filter: " + query)
 }
 
 // toggleStateFilter flips one state token in the active state filter. A
@@ -1129,11 +1131,18 @@ func (a *App) Init() tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if e, ok := msg.(toast.Expired); ok {
+		a.toasts = toast.Update(a.toasts, e)
+		return a, nil
+	}
+	// Handlers deep in update call a.flash, which never returns a command;
+	// the expiry tick for whatever toast they added is scheduled here.
+	before := a.toasts
 	m, cmd := a.update(msg)
 	if a.state == viewSessions {
 		a.syncSessionSplitLayout()
 	}
-	return m, cmd
+	return m, tea.Batch(cmd, toast.Ticks(before, a.toasts))
 }
 
 func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1256,13 +1265,13 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pluginCmdDoneMsg:
 		if msg.err != nil {
-			a.copiedMsg = "Error: " + msg.err.Error()
+			a.flash("Error: " + msg.err.Error())
 		} else {
 			label := msg.action
 			if len(label) > 0 {
 				label = strings.ToUpper(label[:1]) + label[1:]
 			}
-			a.copiedMsg = label + " done"
+			a.flash(label + " done")
 		}
 		a.clearPlgSelection()
 		// Re-scan plugins to reflect changes
@@ -1283,7 +1292,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case paneJumpDoneMsg:
 		if msg.err != nil {
-			a.copiedMsg = "Switch failed: " + msg.err.Error()
+			a.flash("Switch failed: " + msg.err.Error())
 		}
 		return a, nil
 
@@ -1300,9 +1309,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case liveInputSentMsg:
 		if msg.err != nil {
-			a.copiedMsg = "Send failed: " + msg.err.Error()
+			a.flash("Send failed: " + msg.err.Error())
 		} else {
-			a.copiedMsg = "Sent!"
+			a.flash("Sent!")
 		}
 		return a, nil
 
@@ -1366,7 +1375,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case liveCaptureMsg:
 		if msg.sendErr != nil {
-			a.copiedMsg = "Send failed: " + msg.sendErr.Error()
+			a.flash("Send failed: " + msg.sendErr.Error())
 		}
 		if a.paneProxy == nil || a.sessPreviewMode != sessPreviewLive {
 			return a, nil
@@ -1655,7 +1664,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleMouse(msg)
 
 	case tea.KeyMsg:
-		a.copiedMsg = ""
+		// A key acknowledges a sticky error toast; info toasts expire on
+		// their own tick (tuikit/toast).
+		a.toasts = toast.OnKey(a.toasts)
 		// Pane proxy focused: forward ctrl+c to tmux pane instead of quitting
 		if msg.String() == "ctrl+c" && a.isPaneProxyFocused() {
 			return a, captureAfterKeyCmd(a.paneProxy.pane, "ctrl+c")
@@ -2098,8 +2109,12 @@ func (a *App) View() string {
 		help = "  " + filterBadge.Render("[filtered]") + " " + help
 	}
 
-	if a.copiedMsg != "" {
-		help += "  " + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(a.copiedMsg)
+	if t, ok := a.statusToast(); ok {
+		room := 1 << 20
+		if a.width > 0 {
+			room = max(1, a.width-lipgloss.Width(help)-2)
+		}
+		help += "  " + toast.RenderItem(t, room, toastStyles)
 	}
 
 	help = a.truncateFooter(help)
@@ -2413,7 +2428,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// Focused on a digest with nothing in it. Say so rather than
 				// falling through to the list's session actions, which would act
 				// on a row the user is not looking at.
-				a.copiedMsg = "Nothing produced to act on"
+				a.flash("Nothing produced to act on")
 				return a, nil
 			}
 			a.actionsMenu = true
@@ -2456,7 +2471,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Jump straight to the session's live tmux window (client switch).
 		// Default has no top-level key; the case stays for user-configured bindings.
 		if !a.config.TmuxEnabled || !tmux.InTmux() {
-			a.copiedMsg = "Requires tmux"
+			a.flash("Requires tmux")
 			return a, nil
 		}
 		sess, ok := a.selectedSession()
@@ -2464,7 +2479,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if !sess.IsLive {
-			a.copiedMsg = "Not a live session"
+			a.flash("Not a live session")
 			return a, nil
 		}
 		return a.jumpToTmuxPane(sess.ProjectPath, sess.ID)
@@ -2489,13 +2504,13 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// calls refreshSessionPreviewLive); re-running updateSessionPreview for
 		// them would flash "(connecting…)" and re-find the pane, so skip it.
 		if a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRemote {
-			a.copiedMsg = "Refreshed"
+			a.flash("Refreshed")
 			return a, cmd
 		}
 		session.ClearRefCache()
 		a.invalidateOpenPreviewCaches()
 		previewCmd := a.updateSessionPreview()
-		a.copiedMsg = "Refreshed"
+		a.flash("Refreshed")
 		return a, tea.Batch(cmd, previewCmd)
 	case "n":
 		// Jump to the most recent fleet notification's session.
@@ -2503,9 +2518,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if a.jumpToNotification() {
-			a.copiedMsg = "Jumped to notified session"
+			a.flash("Jumped to notified session")
 		} else {
-			a.copiedMsg = "Notified session not visible"
+			a.flash("Notified session not visible")
 		}
 		return a, nil
 	case km.Session.Views:
@@ -2643,7 +2658,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// mechanisms for one thing must not disagree.
 	if key == km.Session.PageMenu {
 		if !a.rowSupportsPreviewModes() {
-			a.copiedMsg = "This row always shows what it produced"
+			a.flash("This row always shows what it produced")
 			return a, nil
 		}
 		a.sessPageMenu = true
@@ -3012,11 +3027,11 @@ func (a *App) openSelectedRefs() (tea.Model, tea.Cmd, bool) {
 		}
 	}
 	if opened == 0 {
-		a.copiedMsg = "No URL for this reference"
+		a.flash("No URL for this reference")
 	} else if len(refs) == 1 {
-		a.copiedMsg = "Opened " + refs[0].Label
+		a.flash("Opened " + refs[0].Label)
 	} else {
-		a.copiedMsg = fmt.Sprintf("Opened %d reference(s)", opened)
+		a.flash(fmt.Sprintf("Opened %d reference(s)", opened))
 	}
 	return a, nil, true
 }
@@ -3035,14 +3050,14 @@ func (a *App) copySelectedRefs() (tea.Model, tea.Cmd, bool) {
 		}
 	}
 	if len(urls) == 0 {
-		a.copiedMsg = "No URL for this reference"
+		a.flash("No URL for this reference")
 		return a, nil, true
 	}
 	copyToClipboard(strings.Join(urls, "\n"))
 	if len(urls) == 1 {
-		a.copiedMsg = "Copied " + refs[0].Label
+		a.flash("Copied " + refs[0].Label)
 	} else {
-		a.copiedMsg = fmt.Sprintf("Copied %d reference(s)", len(urls))
+		a.flash(fmt.Sprintf("Copied %d reference(s)", len(urls)))
 	}
 	return a, nil, true
 }
@@ -3434,7 +3449,7 @@ func (a *App) handleStateMenu(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "a":
 		a.setSessionListFilter("")
-		a.copiedMsg = "Showing all sessions"
+		a.flash("Showing all sessions")
 		return a, a.updateSessionPreview()
 	case "d":
 		// "Completed-only" filter (formerly the top-level D key), now reached
@@ -3615,7 +3630,7 @@ func (a *App) openConfigExplorerAtPath(path string) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	}
-	a.copiedMsg = "Related config item not found"
+	a.flash("Related config item not found")
 	return m, cmd
 }
 
@@ -3635,7 +3650,7 @@ func (a *App) openPluginExplorerAt(pluginID string) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	}
-	a.copiedMsg = "Related plugin not found"
+	a.flash("Related plugin not found")
 	return m, cmd
 }
 
@@ -3661,7 +3676,7 @@ func (a *App) openPluginComponentAt(pluginID, componentPath, componentType strin
 			return m, cmd
 		}
 	}
-	a.copiedMsg = "Related plugin component not found"
+	a.flash("Related plugin component not found")
 	return m, cmd
 }
 
@@ -3674,7 +3689,7 @@ func (a *App) openRelatedContextNode(node session.ContextNode) (tea.Model, tea.C
 	case "plugin":
 		return a.openPluginExplorerAt(node.RelatedPluginID)
 	default:
-		a.copiedMsg = "No related destination"
+		a.flash("No related destination")
 		return a, nil
 	}
 }
@@ -3704,9 +3719,9 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 			windowName = "claude"
 		}
 		if err := tmux.ResumeInNamedWindow(windowName, dir, sess.ID, a.config.Claude); err != nil {
-			a.copiedMsg = "Spawn failed"
+			a.flash("Spawn failed")
 		} else {
-			a.copiedMsg = "Resumed in " + windowName
+			a.flash("Resumed in " + windowName)
 		}
 		return a, nil
 	}
@@ -3714,7 +3729,7 @@ func (a *App) resumeSession(sess session.Session) (tea.Model, tea.Cmd) {
 	// Non-tmux: take over CSB
 	cmd, err := a.claudeCmd(dir, "--resume", sess.ID)
 	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
+		a.flash("Claude command failed: " + err.Error())
 		return a, nil
 	}
 	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -3728,14 +3743,14 @@ func (a *App) copySelectedSessionPath() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	if sess.FilePath == "" {
-		a.copiedMsg = "No session file"
+		a.flash("No session file")
 		return a, nil
 	}
 	if err := copyToClipboard(sess.FilePath); err != nil {
-		a.copiedMsg = "Copy failed"
+		a.flash("Copy failed")
 		return a, nil
 	}
-	a.copiedMsg = "Session path copied"
+	a.flash("Session path copied")
 	return a, nil
 }
 
@@ -3755,19 +3770,19 @@ func (a *App) openSessionPreviewFullText(visible []mergedMsg) *App {
 func (a *App) copySessionPreviewSelection() {
 	visible := a.convVisibleEntries()
 	if a.sessPreviewMode != sessPreviewConversation || a.sessConvCursor < 0 || a.sessConvCursor >= len(visible) {
-		a.copiedMsg = "Nothing to copy"
+		a.flash("Nothing to copy")
 		return
 	}
 	text := entryFullText(visible[a.sessConvCursor].entry)
 	if text == "" {
-		a.copiedMsg = "Nothing to copy"
+		a.flash("Nothing to copy")
 		return
 	}
 	if err := copyToClipboard(text); err != nil {
-		a.copiedMsg = "Copy failed"
+		a.flash("Copy failed")
 		return
 	}
-	a.copiedMsg = "Copied message!"
+	a.flash("Copied message!")
 }
 
 func (a *App) copySessionAction() (tea.Model, tea.Cmd) {
@@ -3786,16 +3801,16 @@ func (a *App) copySelectedSessionPaths(selected []session.Session) (tea.Model, t
 		}
 	}
 	if len(paths) == 0 {
-		a.copiedMsg = "No session files"
+		a.flash("No session files")
 		return a, nil
 	}
 	if err := copyToClipboard(strings.Join(paths, "\n")); err != nil {
-		a.copiedMsg = "Copy failed"
+		a.flash("Copy failed")
 		return a, nil
 	}
-	a.copiedMsg = fmt.Sprintf("Copied %d session path", len(paths))
+	a.flash(fmt.Sprintf("Copied %d session path", len(paths)))
 	if len(paths) != 1 {
-		a.copiedMsg += "s"
+		a.flashAppend("s")
 	}
 	return a, nil
 }
@@ -3894,13 +3909,13 @@ func (a *App) handleEditMenu(key string) (tea.Model, tea.Cmd) {
 	if key == "t" {
 		return a.openConvAsText()
 	}
-	a.copiedMsg = ""
+	a.flash("")
 	return a, nil
 }
 
 func (a *App) handleViewsMenu(key string) (tea.Model, tea.Cmd) {
 	a.viewsMenu = false
-	a.copiedMsg = ""
+	a.flash("")
 	switch key {
 	case a.keymap.Views.Stats:
 		return a.openGlobalStats()
@@ -3965,7 +3980,7 @@ func (a *App) sessionPreviewActionsActive() bool {
 
 func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	a.actionsMenu = false
-	a.copiedMsg = ""
+	a.flash("")
 	// A focused outputs digest acts on the row under its cursor, not on a
 	// session in the list. Checked before every other arm for the same reason
 	// the `x` case is: the row may also be a project row, whose session actions
@@ -3997,7 +4012,7 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case akm.Delete:
 		if sess.IsLive {
-			a.copiedMsg = "Cannot delete live session"
+			a.flash("Cannot delete live session")
 			return a, nil
 		}
 		sessCopy := sess
@@ -4006,19 +4021,19 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a, nil
 	case akm.Resume:
 		if sess.IsRemote {
-			a.copiedMsg = "Use Enter to attach to remote session"
+			a.flash("Use Enter to attach to remote session")
 			return a, nil
 		}
 		return a.resumeSession(sess)
 	case akm.Edit:
 		if sess.IsRemote {
-			a.copiedMsg = "Edit not available for remote sessions"
+			a.flash("Edit not available for remote sessions")
 			return a, nil
 		}
 		return a.openEditMenu(sess)
 	case akm.CopyPath:
 		if sess.IsRemote {
-			a.copiedMsg = "No local path for remote session"
+			a.flash("No local path for remote session")
 			return a, nil
 		}
 		return a.copySelectedSessionPath()
@@ -4026,15 +4041,15 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.copySessionAction()
 	case akm.Move:
 		if sess.IsRemote {
-			a.copiedMsg = "Move not available for remote sessions"
+			a.flash("Move not available for remote sessions")
 			return a, nil
 		}
 		if sess.ProjectPath == "" {
-			a.copiedMsg = "No project path"
+			a.flash("No project path")
 			return a, nil
 		}
 		if sess.IsLive {
-			a.copiedMsg = "Cannot move live session"
+			a.flash("Cannot move live session")
 			return a, nil
 		}
 		a.moveSess = sess
@@ -4048,7 +4063,7 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a, ti.Cursor.BlinkCmd()
 	case akm.Kill:
 		if !sess.IsLive {
-			a.copiedMsg = "Not a live session"
+			a.flash("Not a live session")
 			return a, nil
 		}
 		return a.killLiveSession(sess)
@@ -4064,21 +4079,21 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.jumpToTmuxPane(sess.ProjectPath, sess.ID)
 	case akm.Worktree:
 		if sess.ProjectPath == "" {
-			a.copiedMsg = "Not a git repo"
+			a.flash("Not a git repo")
 			return a, nil
 		}
 		if sess.IsLive {
-			a.copiedMsg = "Cannot create worktree for live session"
+			a.flash("Cannot create worktree for live session")
 			return a, nil
 		}
 		if sess.IsWorktree {
-			a.copiedMsg = "Already a worktree"
+			a.flash("Already a worktree")
 			return a, nil
 		}
 		gitPath := filepath.Join(sess.ProjectPath, ".git")
 		info, err := os.Stat(gitPath)
 		if err != nil || !info.IsDir() {
-			a.copiedMsg = "Not a git repo"
+			a.flash("Not a git repo")
 			return a, nil
 		}
 		a.worktreeSess = sess
@@ -4119,13 +4134,13 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a.removeSessionMemory(sess)
 	case akm.Fork:
 		if sess.IsRemote {
-			a.copiedMsg = "Fork not available for remote sessions"
+			a.flash("Fork not available for remote sessions")
 			return a, nil
 		}
 		return a.forkSession(sess)
 	case akm.New:
 		if sess.IsRemote {
-			a.copiedMsg = "New session not available from remote row"
+			a.flash("New session not available from remote row")
 			return a, nil
 		}
 		return a.startNewSessionInProject(sess)
@@ -4154,9 +4169,9 @@ func (a *App) forkSession(sess session.Session) (tea.Model, tea.Cmd) {
 		}
 		windowName += "-fork"
 		if err := tmux.NewWindowClaudeWithConfig(windowName, dir, sess.ID, a.config.Claude); err != nil {
-			a.copiedMsg = "Fork failed: " + err.Error()
+			a.flash("Fork failed: " + err.Error())
 		} else {
-			a.copiedMsg = "Forked → " + windowName
+			a.flash("Forked → " + windowName)
 		}
 		return a, nil
 	}
@@ -4164,7 +4179,7 @@ func (a *App) forkSession(sess session.Session) (tea.Model, tea.Cmd) {
 	// Non-tmux: take over terminal
 	cmd, err := a.claudeCmd(dir, "--resume", sess.ID)
 	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
+		a.flash("Claude command failed: " + err.Error())
 		return a, nil
 	}
 	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -4294,16 +4309,16 @@ func (a *App) bulkDelete(selected []session.Session) (tea.Model, tea.Cmd) {
 	a.sessSplit.CacheKey = ""
 	a.clearMultiSelection()
 	if skipped > 0 {
-		a.copiedMsg = fmt.Sprintf("Deleted %d (skipped %d live)", deleted, skipped)
+		a.flash(fmt.Sprintf("Deleted %d (skipped %d live)", deleted, skipped))
 	} else {
-		a.copiedMsg = fmt.Sprintf("Deleted %d", deleted)
+		a.flash(fmt.Sprintf("Deleted %d", deleted))
 	}
 	return a, nil
 }
 
 func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
+		a.flash("Requires tmux")
 		return a, nil
 	}
 	count := 0
@@ -4327,7 +4342,7 @@ func (a *App) bulkResume(selected []session.Session) (tea.Model, tea.Cmd) {
 		}
 	}
 	a.clearMultiSelection()
-	a.copiedMsg = fmt.Sprintf("Resumed %d", count)
+	a.flash(fmt.Sprintf("Resumed %d", count))
 	return a, nil
 }
 
@@ -4371,22 +4386,22 @@ func (a *App) openMessageImage() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	a.copiedMsg = "No image in this message"
+	a.flash("No image in this message")
 	return a, nil
 }
 
 func (a *App) openCachedImage(pasteID int) (tea.Model, tea.Cmd) {
 	p := a.resolveImagePath(pasteID)
 	if p == "" {
-		a.copiedMsg = "Image not found"
+		a.flash("Image not found")
 		return a, nil
 	}
 	c := exec.Command("open", p)
 	if err := c.Start(); err != nil {
-		a.copiedMsg = "Error: " + err.Error()
+		a.flash("Error: " + err.Error())
 		return a, nil
 	}
-	a.copiedMsg = "Opened image #" + fmt.Sprintf("%d", pasteID)
+	a.flash("Opened image #" + fmt.Sprintf("%d", pasteID))
 	return a, nil
 }
 
@@ -4432,7 +4447,7 @@ func (a *App) deleteSession(sess session.Session) (tea.Model, tea.Cmd) {
 		a.sessionList.Select(idx)
 	}
 	a.sessSplit.CacheKey = ""
-	a.copiedMsg = "Deleted"
+	a.flash("Deleted")
 
 	// Async cleanup — file/pod deletion happens in background
 	if sess.IsRemote {
@@ -4495,7 +4510,7 @@ func (a *App) handleMoveInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (a *App) executeMove(sess session.Session, newPath string) (tea.Model, tea.Cmd) {
 	oldPath := sess.ProjectPath
 	if err := session.MoveProject(oldPath, newPath); err != nil {
-		a.copiedMsg = "Move failed: " + err.Error()
+		a.flash("Move failed: " + err.Error())
 		return a, nil
 	}
 
@@ -4523,7 +4538,7 @@ func (a *App) executeMove(sess session.Session, newPath string) (tea.Model, tea.
 	setListItemsPreservingFilter(&a.sessionList, items)
 	a.sessionList.Select(idx)
 	a.sessSplit.CacheKey = ""
-	a.copiedMsg = fmt.Sprintf("Moved → %s", newName)
+	a.flash(fmt.Sprintf("Moved → %s", newName))
 	return a, nil
 }
 
@@ -4596,15 +4611,15 @@ func (a *App) newSessionInDir(dir, name string) (tea.Model, tea.Cmd) {
 	}
 	if tmux.InTmux() {
 		if err := tmux.NewWindowClaudeNewWithConfig(name, dir, a.config.Claude); err != nil {
-			a.copiedMsg = "Spawn failed"
+			a.flash("Spawn failed")
 			return a, nil
 		}
-		a.copiedMsg = "New session → " + name
+		a.flash("New session → " + name)
 		return a, a.delayedRefreshCmd()
 	}
 	cmd, err := a.claudeCmd(dir)
 	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
+		a.flash("Claude command failed: " + err.Error())
 		return a, nil
 	}
 	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -4639,9 +4654,9 @@ func (a *App) newSession() (tea.Model, tea.Cmd) {
 
 	if tmux.InTmux() {
 		if err := tmux.NewWindowClaudeNewWithConfig(windowName, dir, a.config.Claude); err != nil {
-			a.copiedMsg = "Spawn failed"
+			a.flash("Spawn failed")
 		} else {
-			a.copiedMsg = "New session in new window"
+			a.flash("New session in new window")
 		}
 		return a, nil
 	}
@@ -4649,7 +4664,7 @@ func (a *App) newSession() (tea.Model, tea.Cmd) {
 	// Non-tmux: take over terminal
 	cmd, err := a.claudeCmd(dir)
 	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
+		a.flash("Claude command failed: " + err.Error())
 		return a, nil
 	}
 	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -4671,21 +4686,21 @@ func (a *App) executeCmdNewSession(input string) (tea.Model, tea.Cmd) {
 	}
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
-		a.copiedMsg = "Not a directory: " + dir
+		a.flash("Not a directory: " + dir)
 		return a, nil
 	}
 	windowName := filepath.Base(dir)
 	if tmux.InTmux() {
 		if err := tmux.NewWindowClaudeNewWithConfig(windowName, dir, a.config.Claude); err != nil {
-			a.copiedMsg = "Spawn failed"
+			a.flash("Spawn failed")
 		} else {
-			a.copiedMsg = "New session → " + windowName
+			a.flash("New session → " + windowName)
 		}
 		return a, nil
 	}
 	cmd, err := a.claudeCmd(dir)
 	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
+		a.flash("Claude command failed: " + err.Error())
 		return a, nil
 	}
 	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -5042,11 +5057,11 @@ func (a *App) handleLiveTail() {
 func (a *App) toggleLiveTail() (tea.Model, tea.Cmd) {
 	a.liveTail = !a.liveTail
 	if a.liveTail {
-		a.copiedMsg = "Live tail ON"
+		a.flash("Live tail ON")
 		a.handleLiveTail()
 		return a, liveTickCmd()
 	}
-	a.copiedMsg = "Live tail OFF"
+	a.flash("Live tail OFF")
 	return a, nil
 }
 
@@ -5974,7 +5989,7 @@ func (a *App) jumpToSessionEntry(sessID, uuid string) (tea.Model, tea.Cmd) {
 	a.currentSess = sess
 	cmd := a.openConversation(sess)
 	if !a.selectConvEntryByUUID(uuid) {
-		a.copiedMsg = "Entry not found in transcript; opened conversation"
+		a.flash("Entry not found in transcript; opened conversation")
 	}
 	return a, cmd
 }
@@ -8182,7 +8197,7 @@ const initialFocusCWD = "cwd"
 // generic active-sessions-only default. An explicit user filter is left
 // alone.
 //
-// The chosen strategy is surfaced via copiedMsg so it's visible in the status
+// The chosen strategy is surfaced via status toast so it's visible in the status
 // line on startup.
 func (a *App) autoSelectSession() tea.Cmd {
 	visible := a.sessionList.VisibleItems()
@@ -8192,14 +8207,14 @@ func (a *App) autoSelectSession() tea.Cmd {
 			absProj = projPath
 		}
 		if i, ok := firstSessionAtPath(visible, absProj); ok {
-			a.copiedMsg = "Focused: tmux window match"
+			a.flash("Focused: tmux window match")
 			return a.selectAutoSessionAt(visible, i)
 		}
 	}
 
 	if a.config.InitialFocus == initialFocusCWD {
 		if i, ok := autoSelectByCWD(visible); ok {
-			a.copiedMsg = "Focused: CWD search"
+			a.flash("Focused: CWD search")
 			return a.selectAutoSessionAt(visible, i)
 		}
 	}
@@ -8211,7 +8226,7 @@ func (a *App) autoSelectSession() tea.Cmd {
 	}
 
 	// Fallback: ensure cursor isn't parked on a header.
-	a.copiedMsg = "Focused: most recent session"
+	a.flash("Focused: most recent session")
 	a.bumpPastHeader(0, +1)
 	return nil
 }
@@ -8249,7 +8264,7 @@ func (a *App) retryAutoSelectWithFilterCleared() (tea.Cmd, bool) {
 	a.autoStateFilter = false
 	visible := a.sessionList.VisibleItems()
 	if i, ok := firstSessionAtPath(visible, target); ok {
-		a.copiedMsg = "Focused: " + label + " (filter cleared)"
+		a.flash("Focused: " + label + " (filter cleared)")
 		return a.selectAutoSessionAt(visible, i), true
 	}
 	return nil, false

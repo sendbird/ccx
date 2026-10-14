@@ -115,8 +115,8 @@ func TestCompletedProjectsToggleKey(t *testing.T) {
 	if got := strings.TrimSpace(app.activeFilterValue()); got != "is:done" {
 		t.Fatalf("expected s→d to apply is:done filter, got %q", got)
 	}
-	if app.copiedMsg != "Showing completed projects" {
-		t.Fatalf("expected completed filter status message, got %q", app.copiedMsg)
+	if app.flashText() != "Showing completed projects" {
+		t.Fatalf("expected completed filter status message, got %q", app.flashText())
 	}
 	app.stateMenu = true
 	m, _ = app.handleStateMenu("d")
@@ -124,8 +124,8 @@ func TestCompletedProjectsToggleKey(t *testing.T) {
 	if got := strings.TrimSpace(app.activeFilterValue()); got != "" {
 		t.Fatalf("expected second s→d to clear filter, got %q", got)
 	}
-	if app.copiedMsg != "Completed filter cleared" {
-		t.Fatalf("expected clear status message, got %q", app.copiedMsg)
+	if app.flashText() != "Completed filter cleared" {
+		t.Fatalf("expected clear status message, got %q", app.flashText())
 	}
 }
 
@@ -143,8 +143,8 @@ func TestCompletedProjectsToggleFallsBackWhenNoDoneMatches(t *testing.T) {
 	if got := strings.TrimSpace(app.activeFilterValue()); got != "" {
 		t.Fatalf("expected s→d to clear back out when there are no done matches, got %q", got)
 	}
-	if app.copiedMsg != "No completed projects found" {
-		t.Fatalf("expected no-match status message, got %q", app.copiedMsg)
+	if app.flashText() != "No completed projects found" {
+		t.Fatalf("expected no-match status message, got %q", app.flashText())
 	}
 }
 

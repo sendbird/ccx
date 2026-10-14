@@ -282,20 +282,20 @@ func buildCmdRegistry() []cmdEntry {
 		{name: "set:ratio", aliases: []string{"ratio"}, desc: "set split ratio (15-85)", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				// Handled specially in executeCommand for "set:ratio N" syntax
-				a.copiedMsg = "Usage: set:ratio N (15-85)"
+				a.flash("Usage: set:ratio N (15-85)")
 				return a, nil
 			}},
 		{name: "refresh", aliases: []string{"R"}, desc: "refresh sessions", views: cmdSessions,
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				cmd := a.doRefresh()
 				if a.sessPreviewMode == sessPreviewLive || a.sessPreviewMode == sessPreviewRemote {
-					a.copiedMsg = "Refreshed"
+					a.flash("Refreshed")
 					return a, cmd
 				}
 				session.ClearRefCache()
 				a.invalidateOpenPreviewCaches()
 				previewCmd := a.updateSessionPreview()
-				a.copiedMsg = "Refreshed"
+				a.flash("Refreshed")
 				return a, tea.Batch(cmd, previewCmd)
 			}},
 		{name: "filter:done", aliases: []string{"done", "completed"}, desc: "show completed-only projects", views: cmdSessions,
@@ -313,14 +313,14 @@ func buildCmdRegistry() []cmdEntry {
 		// Badges
 		{name: "badge:toggle", aliases: []string{"bt"}, desc: "toggle badge (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK)",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: badge:toggle <KEY> (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK)"
+				a.flash("Usage: badge:toggle <KEY> (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK)")
 				return a, nil
 			}},
 
 		// Worktree
 		{name: "set:worktree-dir", aliases: []string{"wt:dir"}, desc: "set worktree directory name",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = fmt.Sprintf("Usage: set:worktree-dir <name> (current: %s)", a.config.WorktreeDir)
+				a.flash(fmt.Sprintf("Usage: set:worktree-dir <name> (current: %s)", a.config.WorktreeDir))
 				return a, nil
 			}},
 
@@ -332,7 +332,7 @@ func buildCmdRegistry() []cmdEntry {
 		{name: "badge:rm", aliases: []string{"badge:remove"}, desc: "remove badge from all sessions",
 			action: func(a *App) (tea.Model, tea.Cmd) {
 				// Handled specially in executeCommand for "badge:rm NAME" syntax
-				a.copiedMsg = "Usage: badge:rm NAME"
+				a.flash("Usage: badge:rm NAME")
 				return a, nil
 			}},
 
@@ -343,7 +343,7 @@ func buildCmdRegistry() []cmdEntry {
 		// Worktree + new session
 		{name: "worktree:new", aliases: []string{"wt:new"}, desc: "new worktree + session",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: worktree:new <branch>"
+				a.flash("Usage: worktree:new <branch>")
 				return a, nil
 			}},
 
@@ -366,7 +366,7 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemotePhase() }},
 		{name: "remote:exec", aliases: []string{"r:exec"}, desc: "kubectl exec in selected remote pod",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: remote:exec <command...>"
+				a.flash("Usage: remote:exec <command...>")
 				return a, nil
 			}},
 		{name: "remote:snapshot", aliases: []string{"r:snap"}, desc: "save remote workdir + session",
@@ -375,7 +375,7 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteSnapshots() }},
 		{name: "remote:restore", aliases: []string{"r:restore"}, desc: "boot new pod from snapshot",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: remote:restore <snapshot-name> [context] [namespace]"
+				a.flash("Usage: remote:restore <snapshot-name> [context] [namespace]")
 				return a, nil
 			}},
 		{name: "remote:fork", aliases: []string{"r:fork"}, desc: "clone selected pod into a fresh one",
@@ -388,17 +388,17 @@ func buildCmdRegistry() []cmdEntry {
 			action: func(a *App) (tea.Model, tea.Cmd) { return a.executeCmdRemoteStart("remote:sync-up") }},
 		{name: "remote:rm-snap", aliases: []string{"r:rm-snap"}, desc: "delete a saved snapshot",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: remote:rm-snap <snapshot-name>"
+				a.flash("Usage: remote:rm-snap <snapshot-name>")
 				return a, nil
 			}},
 		{name: "remote:export-snap", aliases: []string{"r:export-snap"}, desc: "export snapshot as tar.gz",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: remote:export-snap <snapshot-name> <output.tgz>"
+				a.flash("Usage: remote:export-snap <snapshot-name> <output.tgz>")
 				return a, nil
 			}},
 		{name: "remote:import-snap", aliases: []string{"r:import-snap"}, desc: "import snapshot tar.gz",
 			action: func(a *App) (tea.Model, tea.Cmd) {
-				a.copiedMsg = "Usage: remote:import-snap <bundle.tgz> [snapshot-name]"
+				a.flash("Usage: remote:import-snap <bundle.tgz> [snapshot-name]")
 				return a, nil
 			}},
 	}
@@ -688,7 +688,7 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 	for _, part := range parts {
 		entry, ok := a.findCmdEntry(part)
 		if !ok {
-			a.copiedMsg = "Unknown command: " + part
+			a.flash("Unknown command: " + part)
 			return a, tea.Batch(cmds...)
 		}
 		_, cmd := entry.action(a)
@@ -718,14 +718,14 @@ func (a *App) findCmdEntry(lower string) (cmdEntry, bool) {
 func (a *App) executeCmdSetRatio(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: set:ratio N"
+		a.flash("Usage: set:ratio N")
 		return a, nil
 	}
 	// Handle "set:ratio 50" or "set:ratio50" (no space after colon)
 	valStr := parts[len(parts)-1]
 	n, err := strconv.Atoi(valStr)
 	if err != nil {
-		a.copiedMsg = "Invalid ratio: " + valStr
+		a.flash("Invalid ratio: " + valStr)
 		return a, nil
 	}
 	if n < 15 {
@@ -739,7 +739,7 @@ func (a *App) executeCmdSetRatio(input string) (tea.Model, tea.Cmd) {
 		contentH := max(a.height-3, 1)
 		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
 	}
-	a.copiedMsg = fmt.Sprintf("Ratio: %d%%", n)
+	a.flash(fmt.Sprintf("Ratio: %d%%", n))
 	return a, nil
 }
 
@@ -747,25 +747,25 @@ func (a *App) executeCmdSetRatio(input string) (tea.Model, tea.Cmd) {
 func (a *App) executeCmdBadgeRm(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: badge:rm NAME"
+		a.flash("Usage: badge:rm NAME")
 		return a, nil
 	}
 
 	badgeName := strings.TrimSpace(parts[len(parts)-1])
 	if badgeName == "" {
-		a.copiedMsg = "Badge name cannot be empty"
+		a.flash("Badge name cannot be empty")
 		return a, nil
 	}
 
 	count := a.badgeStore.RemoveBadgeFromAll(badgeName)
 	if count == 0 {
-		a.copiedMsg = fmt.Sprintf("Badge '%s' not found", badgeName)
+		a.flash(fmt.Sprintf("Badge '%s' not found", badgeName))
 		return a, nil
 	}
 
 	// Save to disk
 	if err := a.badgeStore.Save(); err != nil {
-		a.copiedMsg = "Failed to save: " + err.Error()
+		a.flash("Failed to save: " + err.Error())
 		return a, nil
 	}
 
@@ -788,7 +788,7 @@ func (a *App) executeCmdBadgeRm(input string) (tea.Model, tea.Cmd) {
 	// Update tag list
 	a.tagList = a.badgeStore.AllBadges()
 
-	a.copiedMsg = fmt.Sprintf("Removed '%s' from %d session(s)", badgeName, count)
+	a.flash(fmt.Sprintf("Removed '%s' from %d session(s)", badgeName, count))
 	return a, nil
 }
 
@@ -796,21 +796,21 @@ func (a *App) executeCmdBadgeRm(input string) (tea.Model, tea.Cmd) {
 func (a *App) executeCmdBadgeToggle(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: badge:toggle <KEY> (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK)"
+		a.flash("Usage: badge:toggle <KEY> (HERE,LIVE,BUSY,BG,WAIT,DONE,STUCK)")
 		return a, nil
 	}
 	key := strings.ToUpper(parts[len(parts)-1])
 	valid := map[string]bool{"HERE": true, "LIVE": true, "BUSY": true, "BG": true, "WAIT": true, "DONE": true, "STUCK": true}
 	if !valid[key] {
-		a.copiedMsg = "Unknown badge: " + key
+		a.flash("Unknown badge: " + key)
 		return a, nil
 	}
 	if a.hiddenBadges[key] {
 		delete(a.hiddenBadges, key)
-		a.copiedMsg = fmt.Sprintf("Badge [%s] shown", key)
+		a.flash(fmt.Sprintf("Badge [%s] shown", key))
 	} else {
 		a.hiddenBadges[key] = true
-		a.copiedMsg = fmt.Sprintf("Badge [%s] hidden", key)
+		a.flash(fmt.Sprintf("Badge [%s] hidden", key))
 	}
 	a.rebuildSessionList()
 	return a, nil
@@ -820,17 +820,17 @@ func (a *App) executeCmdBadgeToggle(input string) (tea.Model, tea.Cmd) {
 func (a *App) executeCmdSetWorktreeDir(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = fmt.Sprintf("Usage: set:worktree-dir <name> (current: %s)", a.config.WorktreeDir)
+		a.flash(fmt.Sprintf("Usage: set:worktree-dir <name> (current: %s)", a.config.WorktreeDir))
 		return a, nil
 	}
 	name := parts[len(parts)-1]
 	// Basic validation
 	if strings.Contains(name, "/") || strings.Contains(name, "..") {
-		a.copiedMsg = "Invalid directory name"
+		a.flash("Invalid directory name")
 		return a, nil
 	}
 	a.config.WorktreeDir = name
-	a.copiedMsg = fmt.Sprintf("Worktree dir: %s", name)
+	a.flash(fmt.Sprintf("Worktree dir: %s", name))
 	return a, nil
 }
 
@@ -887,12 +887,12 @@ func (a *App) bootstrapAndEditConfig() (tea.Model, tea.Cmd) {
 		}
 		data, err := yaml.Marshal(cfg)
 		if err != nil {
-			a.copiedMsg = "marshal failed: " + err.Error()
+			a.flash("marshal failed: " + err.Error())
 			return a, nil
 		}
 		header := "# ccx configuration\n# Keybindings: session, actions, views, conversation, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Restart ccx after editing keybindings.\n\n"
 		if err := os.WriteFile(path, []byte(header+string(data)), 0644); err != nil {
-			a.copiedMsg = "write failed: " + err.Error()
+			a.flash("write failed: " + err.Error())
 			return a, nil
 		}
 	}

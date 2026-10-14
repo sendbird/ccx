@@ -181,7 +181,7 @@ func TestMetaJumpFallsBackToEntryIndex(t *testing.T) {
 	if !app.conv.inspector.Zoom {
 		t.Fatal("entry-index fallback jump should open the inspector zoomed (turn found)")
 	}
-	if app.copiedMsg == "origin turn not found" {
+	if app.flashText() == "origin turn not found" {
 		t.Fatal("entry-index fallback should have located the origin turn")
 	}
 }

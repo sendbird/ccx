@@ -60,7 +60,7 @@ func TestSessionMetaRefsRowIncludesArtifactAndEnterOpensURL(t *testing.T) {
 	app.conv.split.Folds.BlockCursor = artCursor
 	app = pressKey(app, "enter")
 	if opened == "" {
-		t.Fatalf("enter on artifact row did not open URL; copiedMsg=%q", app.copiedMsg)
+		t.Fatalf("enter on artifact row did not open URL; status toast=%q", app.flashText())
 	}
 	if !strings.Contains(opened, "claude.ai/code/artifact/") {
 		t.Errorf("opened URL %q is not the artifact URL", opened)

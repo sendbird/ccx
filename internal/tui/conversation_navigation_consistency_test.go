@@ -53,8 +53,8 @@ func TestInspectorEnterOnNonActionableMetaRowIsNoop(t *testing.T) {
 	if app.conv.inspector.Zoom != beforeZoom {
 		t.Fatal("non-actionable Enter changed zoom")
 	}
-	if !strings.Contains(app.copiedMsg, "No action") {
-		t.Fatalf("non-actionable Enter gave no feedback: %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "No action") {
+		t.Fatalf("non-actionable Enter gave no feedback: %q", app.flashText())
 	}
 }
 
@@ -265,8 +265,8 @@ func TestFailedAgentDrilldownRollsBackNavigationFrame(t *testing.T) {
 	if got := len(app.conv.inspector.History); got != beforeHistory {
 		t.Fatalf("failed drilldown changed inspector history: got %d want %d", got, beforeHistory)
 	}
-	if !strings.Contains(app.copiedMsg, "No agent messages") {
-		t.Fatalf("failed drilldown gave no feedback: %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "No agent messages") {
+		t.Fatalf("failed drilldown gave no feedback: %q", app.flashText())
 	}
 }
 
@@ -331,8 +331,8 @@ func TestFilteredEmptyAgentDrilldownRollsBackNavigationFrame(t *testing.T) {
 	if got := app.selectedConversationItemID(); got != beforeID {
 		t.Fatalf("filtered-empty drilldown moved selection to %q, want %q", got, beforeID)
 	}
-	if !strings.Contains(app.copiedMsg, "No agent messages") {
-		t.Fatalf("filtered-empty drilldown gave no feedback: %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "No agent messages") {
+		t.Fatalf("filtered-empty drilldown gave no feedback: %q", app.flashText())
 	}
 }
 
@@ -356,8 +356,8 @@ func TestMemoryDetailWithoutOriginDisablesEnterAndShowsFeedback(t *testing.T) {
 		t.Fatalf("originless memory detail advertised Enter: %+v", action)
 	}
 	app = pressKey(app, "enter")
-	if !strings.Contains(app.copiedMsg, "No origin turn") {
-		t.Fatalf("originless memory Enter gave no feedback: %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "No origin turn") {
+		t.Fatalf("originless memory Enter gave no feedback: %q", app.flashText())
 	}
 }
 
@@ -391,8 +391,8 @@ func TestTaskWithoutOriginDoesNotJumpToFirstTurn(t *testing.T) {
 	if got := app.selectedConversationItemID(); got != before {
 		t.Fatalf("originless task jumped to %q, want to remain at %q", got, before)
 	}
-	if !strings.Contains(app.copiedMsg, "No conversation or origin turn") {
-		t.Fatalf("originless task Enter gave no feedback: %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "No conversation or origin turn") {
+		t.Fatalf("originless task Enter gave no feedback: %q", app.flashText())
 	}
 }
 
@@ -451,8 +451,8 @@ func TestTaskWithoutVisibleTurnsRollsBackNavigationFrame(t *testing.T) {
 	if got := app.selectedConversationItemID(); got != beforeID {
 		t.Fatalf("invisible task moved selection to %q, want %q", got, beforeID)
 	}
-	if !strings.Contains(app.copiedMsg, "No visible entries") {
-		t.Fatalf("invisible task gave no feedback: %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "No visible entries") {
+		t.Fatalf("invisible task gave no feedback: %q", app.flashText())
 	}
 }
 
@@ -672,8 +672,8 @@ func TestFilteredOriginJumpHonorsVisibleItems(t *testing.T) {
 	if got := app.selectedConversationItemID(); got != before {
 		t.Fatalf("hidden origin jump moved selection to %q, want %q", got, before)
 	}
-	if !strings.Contains(app.copiedMsg, "hidden by filter") {
-		t.Fatalf("hidden origin jump feedback = %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "hidden by filter") {
+		t.Fatalf("hidden origin jump feedback = %q", app.flashText())
 	}
 
 	app.resetActiveFilter()

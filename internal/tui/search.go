@@ -226,7 +226,7 @@ func (a *App) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			sess = *item.result.Session
 		}
 		if sess.IsRemote {
-			a.copiedMsg = "Use Enter to attach to remote session"
+			a.flash("Use Enter to attach to remote session")
 			return a, nil
 		}
 		a.exitSearchMode()

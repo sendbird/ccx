@@ -218,8 +218,8 @@ func TestAutoSelectSession_ClearsAutoFilterWhenItHidesCWDMatch(t *testing.T) {
 	if !ok || sel.ID != "cwd-sess" {
 		t.Fatalf("expected cwd-sess to be auto-selected, got %+v (ok=%v)", sel, ok)
 	}
-	if !strings.Contains(app.copiedMsg, "filter cleared") {
-		t.Fatalf("expected status message to mention the filter was cleared, got %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "filter cleared") {
+		t.Fatalf("expected status message to mention the filter was cleared, got %q", app.flashText())
 	}
 }
 
@@ -259,8 +259,8 @@ func TestAutoSelectSession_RespectsExplicitUserFilter(t *testing.T) {
 	if !ok || sel.ID != "distractor" {
 		t.Fatalf("expected fallback to the visible distractor session, got %+v (ok=%v)", sel, ok)
 	}
-	if app.copiedMsg != "Focused: most recent session" {
-		t.Fatalf("expected fallback status message, got %q", app.copiedMsg)
+	if app.flashText() != "Focused: most recent session" {
+		t.Fatalf("expected fallback status message, got %q", app.flashText())
 	}
 }
 

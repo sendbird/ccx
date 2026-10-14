@@ -51,8 +51,8 @@ func TestJumpToTmuxPaneNotFound(t *testing.T) {
 	a := newTestApp(fakeSessions())
 	_, cmd := a.jumpToTmuxPane("/p", "id1")
 	a.Update(cmd())
-	if a.copiedMsg != "No tmux pane found" {
-		t.Fatalf("copiedMsg = %q", a.copiedMsg)
+	if a.flashText() != "No tmux pane found" {
+		t.Fatalf("status toast = %q", a.flashText())
 	}
 }
 
@@ -108,14 +108,14 @@ func TestShareRefSendReportsSendError(t *testing.T) {
 	stubPaneIO(t, errors.New("can't find pane"))
 	a := newTestApp(fakeSessions())
 	a.Update(shareRefSendCmd(a.sessions[0], "prompt", "Shared x")())
-	if !strings.Contains(a.copiedMsg, "Share failed") || !strings.Contains(a.copiedMsg, "can't find pane") {
-		t.Fatalf("copiedMsg = %q", a.copiedMsg)
+	if !strings.Contains(a.flashText(), "Share failed") || !strings.Contains(a.flashText(), "can't find pane") {
+		t.Fatalf("status toast = %q", a.flashText())
 	}
 
 	stubPaneIO(t, nil)
 	a.Update(shareRefSendCmd(a.sessions[0], "prompt", "Shared x")())
-	if a.copiedMsg != "Shared x" {
-		t.Fatalf("copiedMsg = %q, want %q", a.copiedMsg, "Shared x")
+	if a.flashText() != "Shared x" {
+		t.Fatalf("status toast = %q, want %q", a.flashText(), "Shared x")
 	}
 }
 
@@ -134,7 +134,7 @@ func TestSendToPanesReportsEveryFailure(t *testing.T) {
 func TestLiveCaptureSurfacesSendError(t *testing.T) {
 	a := newTestApp(fakeSessions())
 	a.Update(liveCaptureMsg{content: "x", sendErr: errors.New("no server")})
-	if !strings.Contains(a.copiedMsg, "no server") {
-		t.Fatalf("copiedMsg = %q", a.copiedMsg)
+	if !strings.Contains(a.flashText(), "no server") {
+		t.Fatalf("status toast = %q", a.flashText())
 	}
 }

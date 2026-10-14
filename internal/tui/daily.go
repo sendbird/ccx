@@ -384,13 +384,13 @@ func (a *App) toggleDailyView() tea.Cmd {
 		a.dailyPreviewMode = a.sessPreviewMode
 		a.sessGroupMode = a.preDailyGroupMode
 		a.sessPreviewMode = a.browserPreviewMode
-		a.copiedMsg = "Grouping: " + groupModeString(a.sessGroupMode)
+		a.flash("Grouping: " + groupModeString(a.sessGroupMode))
 	} else {
 		a.browserPreviewMode = a.sessPreviewMode
 		a.preDailyGroupMode = a.sessGroupMode
 		a.sessGroupMode = groupDaily
 		a.sessPreviewMode = a.dailyPreviewMode
-		a.copiedMsg = "Daily view"
+		a.flash("Daily view")
 	}
 	a.revealAnchor(anchor, a.sessGroupMode)
 	a.closePaneProxy()
