@@ -47,7 +47,7 @@ func TestConversationHelpUsesConfigurablePreviewCopyBinding(t *testing.T) {
 	app.updateConvPreview()
 
 	help := stripANSI(app.convHelpLine(""))
-	if !strings.Contains(help, "ctrl+c:copy") {
+	if !strings.Contains(help, "ctrl+c copy") {
 		t.Fatalf("expected custom preview copy binding in help, got %q", help)
 	}
 }
@@ -61,10 +61,10 @@ func TestZoomedInspectorHelpUsesConfigurableActionBinding(t *testing.T) {
 	app.width = 400
 
 	help := stripANSI(app.convHelpLine(""))
-	if !strings.Contains(help, "A:actions") {
+	if !strings.Contains(help, "A actions") {
 		t.Fatalf("expected configurable actions binding in inspector help, got %q", help)
 	}
-	if !strings.Contains(help, "z:zoom") {
+	if !strings.Contains(help, "z zoom") {
 		t.Fatalf("expected zoom control in inspector help, got %q", help)
 	}
 }

@@ -360,7 +360,7 @@ func TestExecutionRailAgentEscDoesNotPretendParent(t *testing.T) {
 	if !app.activateExecutionContext(executionContextKey(parentPath), false) {
 		t.Fatal("failed to activate parent execution context")
 	}
-	if strings.Contains(stripANSI(app.convHelpLine("")), "esc:parent") {
+	if strings.Contains(stripANSI(app.convHelpLine("")), "esc parent") {
 		t.Fatal("sibling execution context advertised a nonexistent parent route")
 	}
 

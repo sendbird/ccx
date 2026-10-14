@@ -8,9 +8,11 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
+	github.com/keyolk/tuikit v0.0.0-20261014182304-74b15dc0eda3
 	github.com/mattn/go-runewidth v0.0.19
 	golang.org/x/term v0.41.0
 	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.57.0
 )
 
 require (
@@ -41,5 +43,4 @@ require (
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.57.0 // indirect
 )

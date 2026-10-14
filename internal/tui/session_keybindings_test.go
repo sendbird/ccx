@@ -95,7 +95,7 @@ func TestSessionsHelpShowsNavigationAndPreviewTab(t *testing.T) {
 	// Footer is concise: core actions + the ?:help affordance. The full key
 	// list moved into the "?" overlay.
 	help := stripANSI(app.sessHelpLine())
-	for _, want := range []string{"↵:open", "?:help", "q:quit"} {
+	for _, want := range []string{"↵ open", "? help", "q quit"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("expected sessions footer to contain %q, got %q", want, help)
 		}

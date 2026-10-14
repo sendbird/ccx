@@ -37,21 +37,21 @@ func TestHelpOverlayOpensAndClosesGlobally(t *testing.T) {
 }
 
 // TestFootersEndWithHelpAffordance verifies each view's concise footer advertises
-// the ?:help key.
+// the ? help key.
 func TestFootersEndWithHelpAffordance(t *testing.T) {
 	app := newConfiguredTestApp([]session.Session{{ID: "s1", ShortID: "s1", ProjectName: "p"}}, Config{})
 
-	if got := stripANSI(app.sessHelpLine()); !strings.Contains(got, "?:help") {
-		t.Errorf("sessions footer missing ?:help: %q", got)
+	if got := stripANSI(app.sessHelpLine()); !strings.Contains(got, "? help") {
+		t.Errorf("sessions footer missing ? help: %q", got)
 	}
-	if got := stripANSI(app.convHelpLine("")); !strings.Contains(got, "?:help") {
-		t.Errorf("conversation footer missing ?:help: %q", got)
+	if got := stripANSI(app.convHelpLine("")); !strings.Contains(got, "? help") {
+		t.Errorf("conversation footer missing ? help: %q", got)
 	}
-	if got := stripANSI(app.configHelpLine()); !strings.Contains(got, "?:help") {
-		t.Errorf("config footer missing ?:help: %q", got)
+	if got := stripANSI(app.configHelpLine()); !strings.Contains(got, "? help") {
+		t.Errorf("config footer missing ? help: %q", got)
 	}
-	if got := stripANSI(app.pluginsHelpLine()); !strings.Contains(got, "?:help") {
-		t.Errorf("plugins footer missing ?:help: %q", got)
+	if got := stripANSI(app.pluginsHelpLine()); !strings.Contains(got, "? help") {
+		t.Errorf("plugins footer missing ? help: %q", got)
 	}
 }
 

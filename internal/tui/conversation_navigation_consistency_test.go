@@ -301,12 +301,12 @@ func TestHiddenConversationHelpShowsEscDestination(t *testing.T) {
 	app := setupConvApp(t, testEntries(), 120, 30)
 	app.conv.split.Show = false
 	app.state = viewConversation
-	if help := stripANSI(app.convHelpLine("")); !strings.Contains(help, "esc:sessions") {
+	if help := stripANSI(app.convHelpLine("")); !strings.Contains(help, "esc sessions") {
 		t.Fatalf("root hidden-pane help missing sessions destination: %q", help)
 	}
 
 	app.pushNavFrame()
-	if help := stripANSI(app.convHelpLine("")); !strings.Contains(help, "esc:parent") {
+	if help := stripANSI(app.convHelpLine("")); !strings.Contains(help, "esc parent") {
 		t.Fatalf("nested hidden-pane help missing parent destination: %q", help)
 	}
 }
@@ -411,7 +411,7 @@ func TestAppliedBlockFilterHelpMatchesFirstEsc(t *testing.T) {
 	app.conv.split.Folds.BlockVisible = applyBlockFilter("tool", app.conv.split.Folds.Entry)
 
 	help := stripANSI(app.convHelpLine(""))
-	if !strings.Contains(help, "esc:clear filter") {
+	if !strings.Contains(help, "esc clear filter") {
 		t.Fatalf("applied filter help does not describe first Esc: %q", help)
 	}
 	app = pressKey(app, "esc")

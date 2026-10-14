@@ -1,6 +1,9 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/keys"
+)
 
 // defaultHangulToLatin maps Hangul jamo produced by the 2-set (두벌식) Korean
 // layout to the Latin key at the same physical position on a US QWERTY
@@ -8,21 +11,21 @@ import tea "github.com/charmbracelet/bubbletea"
 // the OS input source is Korean, without switching back to English — mirroring
 // Vim's `langmap`.
 //
+// The table itself lives in tuikit/keys (keys.Latin), shared with the other
+// TUIs, so this only enumerates it. The enumeration covers the whole Hangul
+// Compatibility Jamo block, so a jamo the kit learns to map shows up here
+// without a code change.
+//
 // Users can override or extend this (e.g. for 세벌식, pinyin, kana) via the
 // `langmap` section in ~/.config/ccx/config.yaml; see ResolveLangmap.
 func defaultHangulToLatin() map[rune]string {
-	return map[rune]string{
-		// lowercase row (unshifted jamo → lowercase Latin)
-		'ㅂ': "q", 'ㅈ': "w", 'ㄷ': "e", 'ㄱ': "r", 'ㅅ': "t",
-		'ㅛ': "y", 'ㅕ': "u", 'ㅑ': "i", 'ㅐ': "o", 'ㅔ': "p",
-		'ㅁ': "a", 'ㄴ': "s", 'ㅇ': "d", 'ㄹ': "f", 'ㅎ': "g",
-		'ㅗ': "h", 'ㅓ': "j", 'ㅏ': "k", 'ㅣ': "l",
-		'ㅋ': "z", 'ㅌ': "x", 'ㅊ': "c", 'ㅍ': "v", 'ㅠ': "b",
-		'ㅜ': "n", 'ㅡ': "m",
-		// shifted jamo → uppercase Latin (double consonants + ㅒㅖ)
-		'ㅃ': "Q", 'ㅉ': "W", 'ㄸ': "E", 'ㄲ': "R", 'ㅆ': "T",
-		'ㅒ': "O", 'ㅖ': "P",
+	m := make(map[rune]string)
+	for r := rune(0x3131); r <= 0x318E; r++ {
+		if latin, ok := keys.Latin(r); ok {
+			m[r] = string(latin)
+		}
 	}
+	return m
 }
 
 // ResolveLangmap builds the effective source-rune → Latin-key map: the built-in
