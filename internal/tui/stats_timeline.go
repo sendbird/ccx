@@ -5,9 +5,14 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/keyolk/tuikit/chart"
 )
 
-var sparkChars = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+// chartLook draws ccx's sparklines: block ramp, or the equal-width ASCII
+// ramp under a CJK locale (or CCX_ASCII), where block elements are East Asian
+// ambiguous and draw two cells (tuikit/chart).
+var chartLook = chart.Look{Glyphs: chart.DetectGlyphs("ccx")}
 
 func histogramBar(value, maxVal, width int) string {
 	if width <= 0 {
@@ -29,11 +34,12 @@ func histogramBar(value, maxVal, width int) string {
 func dualSparkline(a, b []int, maxWidth int) string {
 	left := sparkline(a, maxWidth)
 	right := sparkline(b, maxWidth)
+	floor := chartLook.Glyphs.Levels[0]
 	if left == "" {
-		left = strings.Repeat(string(sparkChars[0]), min(len(b), maxWidth))
+		left = strings.Repeat(floor, min(len(b), maxWidth))
 	}
 	if right == "" {
-		right = strings.Repeat(string(sparkChars[0]), min(len(a), maxWidth))
+		right = strings.Repeat(floor, min(len(a), maxWidth))
 	}
 	if len(left) == 0 {
 		return ""
@@ -41,41 +47,31 @@ func dualSparkline(a, b []int, maxWidth int) string {
 	return left + " · " + right
 }
 
+// sparkline draws values on a zero baseline, one cell per value up to
+// maxWidth (a shorter series stays short, so text after it does not move).
+//
+// tuikit/chart.Sparkline buckets a long series so every cell covers an equal
+// share. The old ceil-sized buckets left fewer cells than the width and a
+// last bucket averaging a partial tail, and maxWidth 0 divided by zero.
 func sparkline(values []int, maxWidth int) string {
-	if len(values) == 0 {
+	if len(values) == 0 || maxWidth <= 0 {
 		return ""
 	}
-	// Downsample if too many points
-	if len(values) > maxWidth {
-		bucketSize := (len(values) + maxWidth - 1) / maxWidth
-		var ds []int
-		for i := 0; i < len(values); i += bucketSize {
-			sum, count := 0, 0
-			for j := i; j < min(i+bucketSize, len(values)); j++ {
-				sum += values[j]
-				count++
-			}
-			ds = append(ds, sum/max(count, 1))
-		}
-		values = ds
+	fs := make([]float64, len(values))
+	peak := 0
+	for i, v := range values {
+		fs[i] = float64(v)
+		peak = max(peak, v)
 	}
-	// Find max
-	maxVal := 0
-	for _, v := range values {
-		if v > maxVal {
-			maxVal = v
-		}
+	o := chart.SparkOpts{Look: chartLook, Min: chart.Fixed(0)}
+	if peak <= 0 {
+		// The kit draws a constant series at mid-level; an idle series
+		// should sit on the floor.
+		o.Max = chart.Fixed(1)
 	}
-	if maxVal == 0 {
-		return strings.Repeat(string(sparkChars[0]), len(values))
-	}
-	var sb strings.Builder
-	for _, v := range values {
-		idx := v * (len(sparkChars) - 1) / maxVal
-		sb.WriteRune(sparkChars[idx])
-	}
-	return sb.String()
+	return chart.Sparkline(fs, min(len(values), maxWidth), o)
 }
+
 func hasNonZero(vals []int) bool {
 	for _, v := range vals {
 		if v > 0 {
