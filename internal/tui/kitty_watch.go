@@ -3,57 +3,63 @@ package tui
 import (
 	"fmt"
 	"os"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	tk "github.com/keyolk/tuikit/kitty"
 
 	"github.com/sendbird/ccx/internal/kitty"
 )
 
-// kittyVisibilityMsg reports that our tmux pane's visibility changed.
-type kittyVisibilityMsg struct{ visible bool }
+// kittyPaneMsg carries a tmux pane query result. watch marks the visibility
+// watcher's own answer, which is re-armed; one-off queries (resize, focus,
+// blur) only update the recorded pane, so they never start a second watcher.
+type kittyPaneMsg struct {
+	tk.PaneMsg
+	watch bool
+}
 
-// kittyWatchInterval is how often the watcher polls tmux. tmux does not
-// forward focus-out events on window switch, so we have to poll; 250ms feels
-// responsive without thrashing the tmux control channel.
-const kittyWatchInterval = 250 * time.Millisecond
+// kittyWatchCmd arms tuikit's pane watcher, which polls off the UI loop and
+// returns only when the pane moved or was hidden or shown; an idle app gets
+// no messages (ccx#175, now kitty.WatchPane).
+func kittyWatchCmd(last tk.PaneMsg) tea.Cmd {
+	return wrapPaneCmd(kitty.WatchCmd(last), true)
+}
 
-// kittyWatchCmd polls probe off the UI loop and returns only when the
-// visibility differs from last. The previous design delivered a tick message
-// to Update every 250ms and ran `tmux display-message` synchronously there,
-// which blocked input handling and forced a full View() four times a second
-// even when nothing changed. Here the steady state produces no messages.
-func kittyWatchCmd(last bool, probe func() bool, every time.Duration) tea.Cmd {
+// kittyPaneQueryCmd asks tmux about our pane once, off the UI loop.
+func kittyPaneQueryCmd() tea.Cmd {
+	return wrapPaneCmd(kitty.PaneCmd(), false)
+}
+
+func wrapPaneCmd(cmd tea.Cmd, watch bool) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
 	return func() tea.Msg {
-		for {
-			time.Sleep(every)
-			if v := probe(); v != last {
-				return kittyVisibilityMsg{visible: v}
-			}
+		if m, ok := cmd().(tk.PaneMsg); ok {
+			return kittyPaneMsg{PaneMsg: m, watch: watch}
 		}
+		return nil
 	}
 }
 
-// startKittyWatch arms the watcher against the real tmux probe.
-func startKittyWatch(last bool) tea.Cmd {
-	return kittyWatchCmd(last, kitty.PaneVisible, kittyWatchInterval)
-}
-
-// handleKittyVisibility applies a visibility transition and re-arms the
-// watcher with the newly observed value.
-func (a *App) handleKittyVisibility(msg kittyVisibilityMsg) tea.Cmd {
-	if !msg.visible && a.termFocused {
+// handleKittyPane records the pane geometry for image placement and applies
+// a visibility transition; the watcher is re-armed with its own answer.
+func (a *App) handleKittyPane(msg kittyPaneMsg) tea.Cmd {
+	kitty.SetPane(msg.Pane)
+	if !msg.Pane.Visible && a.termFocused {
 		a.termFocused = false
 		// tmux stops forwarding our pane's passthrough output once the
 		// window switches away, so clear immediately instead of waiting
 		// for the next render.
-		if kitty.Supported() {
-			fmt.Fprint(os.Stdout, kitty.ClearImages())
+		if s := kitty.ClearImages(); s != "" {
+			fmt.Fprint(os.Stdout, s)
 			_ = os.Stdout.Sync()
 		}
-	} else if msg.visible && !a.termFocused {
+	} else if msg.Pane.Visible && !a.termFocused && msg.watch {
 		a.termFocused = true
-		kitty.InvalidatePaneOffset()
 	}
-	return startKittyWatch(msg.visible)
+	if msg.watch {
+		return kittyWatchCmd(msg.PaneMsg)
+	}
+	return nil
 }

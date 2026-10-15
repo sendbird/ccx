@@ -24,7 +24,7 @@ func stubTmux(t *testing.T, found bool, sendErr error) (finds, sends *int) {
 		return tmux.Pane{Session: "s", Window: "1", Pane: "0", PID: 42}, found
 	}
 	paneHasClaude = func(int) bool { return true }
-	sendInterruptK = func(string) error {
+	sendInterruptK = func(tmux.Pane) error {
 		*sends++
 		return sendErr
 	}
@@ -47,8 +47,8 @@ func TestKillLiveSessionRunsTmuxOffUpdateAndReportsSendError(t *testing.T) {
 	if *sends != 2 {
 		t.Fatalf("sends = %d, want 2 (Ctrl-C twice)", *sends)
 	}
-	if !strings.Contains(a.copiedMsg, "Kill failed") || !strings.Contains(a.copiedMsg, "no server running") {
-		t.Fatalf("send-keys error not surfaced: %q", a.copiedMsg)
+	if !strings.Contains(a.flashText(), "Kill failed") || !strings.Contains(a.flashText(), "no server running") {
+		t.Fatalf("send-keys error not surfaced: %q", a.flashText())
 	}
 }
 
@@ -61,15 +61,15 @@ func TestBulkKillCountsOnlySuccessfulKills(t *testing.T) {
 	}
 	_, cmd := a.bulkKill(live)
 	a.Update(cmd())
-	if a.copiedMsg != "Killed 2" {
-		t.Fatalf("copiedMsg = %q, want %q", a.copiedMsg, "Killed 2")
+	if a.flashText() != "Killed 2" {
+		t.Fatalf("status toast = %q, want %q", a.flashText(), "Killed 2")
 	}
 
 	stubTmux(t, true, errors.New("boom"))
 	_, cmd = a.bulkKill(live)
 	a.Update(cmd())
-	if !strings.HasPrefix(a.copiedMsg, "Killed 0, 2 failed") {
-		t.Fatalf("copiedMsg = %q, want failure count", a.copiedMsg)
+	if !strings.HasPrefix(a.flashText(), "Killed 0, 2 failed") {
+		t.Fatalf("status toast = %q, want failure count", a.flashText())
 	}
 }
 

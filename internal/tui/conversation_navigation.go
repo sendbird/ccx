@@ -393,14 +393,14 @@ func (a *App) switchConversationRegion() bool {
 	if a.conv.contextActive {
 		body := a.convList.VisibleItems()
 		if len(body) == 0 {
-			a.copiedMsg = "No conversation items"
+			a.flash("No conversation items")
 			return false
 		}
 		index := min(max(a.convList.Index(), 0), len(body)-1)
 		a.selectConvBody(index)
 	} else {
 		if len(a.conv.contextItems) == 0 {
-			a.copiedMsg = "No pinned items"
+			a.flash("No pinned items")
 			return false
 		}
 		index := min(max(a.conv.contextIndex, 0), len(a.conv.contextItems)-1)

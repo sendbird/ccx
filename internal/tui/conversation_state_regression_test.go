@@ -144,7 +144,7 @@ func TestSummaryOnlyWorkflowAgentEnterOpensInspector(t *testing.T) {
 	if !app.conv.inspector.Zoom || app.conv.inspector.Tab != inspectorOverview {
 		t.Fatalf("summary-only enter did not open overview: %+v", app.conv.inspector)
 	}
-	if app.copiedMsg == "No agent messages" {
+	if app.flashText() == "No agent messages" {
 		t.Fatal("summary-only enter attempted transcript drill-down")
 	}
 }

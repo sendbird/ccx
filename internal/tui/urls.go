@@ -124,9 +124,9 @@ func (a *App) updateChangeDiffPreview() {
 func (a *App) openURLMenuFromItems(items []extract.Item, scope string) (tea.Model, tea.Cmd) {
 	if len(items) == 0 {
 		if strings.Contains(scope, "files") || strings.Contains(scope, "changes") {
-			a.copiedMsg = "No files found"
+			a.flash("No files found")
 		} else {
-			a.copiedMsg = "No URLs found"
+			a.flash("No URLs found")
 		}
 		return a, nil
 	}
@@ -290,7 +290,7 @@ func (a *App) handleURLMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				opened++
 			}
 		}
-		a.copiedMsg = fmt.Sprintf("Opened %d URL(s)", opened)
+		a.flash(fmt.Sprintf("Opened %d URL(s)", opened))
 		return a, nil
 	case "y":
 		urls := a.selectedURLs()
@@ -298,7 +298,7 @@ func (a *App) handleURLMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		copyToClipboard(strings.Join(urls, "\n"))
-		a.copiedMsg = fmt.Sprintf("Copied %d URL(s)", len(urls))
+		a.flash(fmt.Sprintf("Copied %d URL(s)", len(urls)))
 		a.closeURLMenu()
 		return a, nil
 	}

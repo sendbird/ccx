@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/keys"
 )
 
 // One binding table drives dispatch, footers, action hint boxes and the "?"
@@ -142,22 +142,63 @@ func (km *Keymap) bindingKey(scope, name string) string {
 	return ""
 }
 
-// Conflicts reports keys bound to more than one action in the same scope.
-// Dispatch is a switch over these keys, so the second binding would be dead.
-func (km *Keymap) Conflicts() []string {
-	seen := map[string]string{} // scope+key -> first name
-	var out []string
+// kitStacks are the dispatch scopes as tuikit contexts. Each scope is its own
+// switch (the actions menu, the views menu, …), so each is its own stack:
+// the same key in two scopes is not a conflict.
+var kitStacks = [][]keys.Ctx{{"session"}, {"actions"}, {"views"}, {"conversation"}, {"preview"}}
+
+// bindingField returns a pointer to the Keymap field for scope/name, or nil.
+func (km *Keymap) bindingField(scope, name string) *string {
+	v, ok := km.scopeStruct(scope)
+	if !ok {
+		return nil
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).Tag.Get("yaml") == name && t.Field(i).Type.Kind() == reflect.String {
+			return v.Field(i).Addr().Interface().(*string)
+		}
+	}
+	return nil
+}
+
+// kitKeymap is the binding table as a tuikit keys.Keymap: one binding per
+// bound table entry, keyed by the current (possibly user-overridden) key plus
+// any live legacy alias, so tuikit's checks see exactly what dispatch sees.
+func (km *Keymap) kitKeymap() keys.Keymap {
+	aliases := km.legacyAliases()
+	bs := make([]keys.Binding, 0, len(bindingTable))
 	for _, b := range bindingTable {
 		k := km.bindingKey(b.scope, b.name)
 		if k == "" {
 			continue
 		}
-		id := b.scope + "\x00" + k
-		if prev, dup := seen[id]; dup {
-			out = append(out, fmt.Sprintf("%s: %q bound to both %s and %s", b.scope, k, prev, b.name))
-			continue
+		ks := []string{k}
+		field := km.bindingField(b.scope, b.name)
+		for _, al := range aliases[b.scope] {
+			if al.current == field && al.old != k && km.resolveLegacyKey(b.scope, al.old) == k {
+				ks = append(ks, al.old)
+			}
 		}
-		seen[id] = b.name
+		bs = append(bs, keys.Binding{
+			Action: b.scope + "." + b.name,
+			Keys:   ks,
+			Ctx:    keys.Ctx(b.scope),
+			Help:   b.help,
+			Short:  b.label,
+		})
+	}
+	return keys.New(bs...)
+}
+
+// Conflicts reports keys bound to more than one action in the same scope
+// (dispatch is a switch over these keys, so the second binding would be dead)
+// and actions none of whose keys a 2-set Korean layout can type. The checks
+// are tuikit's keys.Keymap.Conflicts over kitKeymap.
+func (km *Keymap) Conflicts() []string {
+	var out []string
+	for _, c := range km.kitKeymap().Conflicts(kitStacks...) {
+		out = append(out, c.String())
 	}
 	sort.Strings(out)
 	return out
@@ -225,14 +266,17 @@ func renderHint(h footerHint) string {
 	if h.label == "" {
 		return helpKeyStyle.Render(h.key)
 	}
-	return helpKeyStyle.Render(h.key) + helpStyle.Render(":"+h.label)
+	return helpKeyStyle.Render(h.key) + " " + helpStyle.Render(h.label)
 }
+
+// footerStyle draws footers with ccx's key/description colors. Keys arrive
+// already display-named (footerHint.key), so Names is not consulted.
+var footerStyle = keys.FooterStyle{Key: helpKeyStyle, Desc: helpStyle, More: helpStyle}
 
 // footer renders hints after prefix (already-rendered badges/prompt), then
 // the help and quit hints. Hints are given in priority order: when the line
-// does not fit a.width, unpinned hints are dropped from the end (display
-// order is kept) and "…" marks the cut, so help/quit and pinned hints stay
-// visible.
+// does not fit a.width, unpinned hints are dropped from the end and an
+// ellipsis marks the cut, so help/quit and pinned hints stay visible.
 func (a *App) footer(prefix string, hints ...footerHint) string {
 	var live []footerHint
 	for _, h := range hints {
@@ -244,45 +288,30 @@ func (a *App) footer(prefix string, hints ...footerHint) string {
 	return renderFooter(prefix, live, a.width)
 }
 
+// renderFooter lays hints out with tuikit's keys.Footer, which owns the
+// dropping order, the ellipsis (~ under a CJK locale) and the hard width cap.
+// The hints are ad-hoc (structural keys, per-view labels), so each becomes a
+// one-off binding in a private context; its priority is its position, and
+// its key is a unique placeholder so two hints showing the same key cannot
+// shadow each other — KeyLabel carries what is displayed.
 func renderFooter(prefix string, hints []footerHint, width int) string {
-	render := func(hs []footerHint, cut bool) string {
-		parts := make([]string, 0, len(hs)+1)
-		for _, h := range hs {
-			parts = append(parts, renderHint(h))
-		}
-		if cut {
-			// The ellipsis goes where hints were dropped: before the
-			// trailing run of pinned hints.
-			n := len(hs)
-			for n > 0 && hs[n-1].pinned {
-				n--
-			}
-			parts = append(parts[:n], append([]string{helpStyle.Render("…")}, parts[n:]...)...)
-		}
-		return prefix + "  " + strings.Join(parts, " ")
+	bs := make([]keys.Binding, 0, len(hints))
+	for i, h := range hints {
+		bs = append(bs, keys.Binding{
+			Action:   fmt.Sprintf("hint%d", i),
+			Keys:     []string{fmt.Sprintf("\x00hint%d", i)},
+			KeyLabel: h.key,
+			Ctx:      "footer",
+			Help:     h.label,
+			Footer:   i + 1,
+			Pinned:   h.pinned,
+		})
 	}
-	out := render(hints, false)
-	if width <= 0 || lipgloss.Width(out) <= width {
-		return out
+	avail := 1 << 20 // no width yet (first frame): never cut
+	if width > 0 {
+		avail = max(1, width-lipgloss.Width(prefix)-2)
 	}
-	kept := append([]footerHint(nil), hints...)
-	for {
-		drop := -1
-		for i := len(kept) - 1; i >= 0; i-- {
-			if !kept[i].pinned {
-				drop = i
-				break
-			}
-		}
-		if drop < 0 {
-			return out // only pinned hints left; truncateFooter clips the rest
-		}
-		kept = append(kept[:drop], kept[drop+1:]...)
-		out = render(kept, true)
-		if lipgloss.Width(out) <= width {
-			return out
-		}
-	}
+	return prefix + "  " + keys.New(bs...).Footer([]keys.Ctx{"footer"}, avail, keys.Opts{}, footerStyle)
 }
 
 // helpRowFor is a "?" overlay row for a table binding.

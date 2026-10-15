@@ -1,8 +1,11 @@
 package tmux
 
 import (
+	"fmt"
 	"os"
 	"testing"
+
+	tk "github.com/keyolk/tuikit/tmux"
 )
 
 // The tmux queries that mean "the window ccx runs in" must resolve against our
@@ -14,20 +17,15 @@ import (
 // CurrentWindowKey must agree with it rather than falling back to the
 // client-active window whenever our pane is resolvable.
 func TestCurrentWindowKeyPrefersOwnPane(t *testing.T) {
-	if !InTmux() {
-		t.Skip("not running inside tmux")
-	}
-	panes, err := ListPanes()
-	if err != nil || len(panes) == 0 {
-		t.Skip("cannot list tmux panes")
-	}
-	own := findPaneByPID(panes, ownPanePID(panes))
-	if own == nil {
-		t.Skip("own pane not resolvable (wrapped beyond the visible process tree)")
-	}
-	want := own.Session + "|" + own.Window
-	if got := CurrentWindowKey(); got != want {
-		t.Fatalf("CurrentWindowKey() = %q, want %q (our own pane's window, not the client's active one)", got, want)
+	t.Setenv("TMUX", "/tmp/fake,1,0")
+	// Our process sits under pane %2 (window 4); the client is looking at
+	// window 1. The key must name window 4.
+	f := tk.NewFake().On("list-panes",
+		paneRow("%1", "@1", 1, 0, 888, "work", "front", "/a", "zsh")+
+			paneRow("%2", "@4", 4, 0, 777, "work", "back", "/b", "fish"), nil)
+	withFake(t, f, fmt.Sprintf("%d 777 ccx\n777 1 fish\n888 1 zsh\n", os.Getpid()))
+	if got := CurrentWindowKey(); got != "work|4" {
+		t.Fatalf("CurrentWindowKey() = %q, want our own pane's window work|4", got)
 	}
 }
 

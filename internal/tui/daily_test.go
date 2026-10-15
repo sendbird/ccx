@@ -434,8 +434,8 @@ func TestOutputsCopyPutsURLBeforePath(t *testing.T) {
 	if _, _, handled := app.copySelectedOutput(); !handled {
 		t.Fatal("expected copy to be handled")
 	}
-	if !strings.Contains(app.copiedMsg, "sendbird/ccx#3") {
-		t.Fatalf("expected a copy confirmation naming the ref, got %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "sendbird/ccx#3") {
+		t.Fatalf("expected a copy confirmation naming the ref, got %q", app.flashText())
 	}
 }
 
@@ -718,6 +718,9 @@ func TestDayRollupFillsFromExtractAlone(t *testing.T) {
 // A day with hundreds of outputs re-renders on every cursor keypress. Measure
 // that a keypress stays well inside a frame budget.
 func TestDayCursorMoveCost(t *testing.T) {
+	if raceEnabled {
+		t.Skip("wall-clock frame budget is meaningless under -race")
+	}
 	var refs []session.SessionRef
 	for i := 0; i < 500; i++ {
 		refs = append(refs, session.SessionRef{

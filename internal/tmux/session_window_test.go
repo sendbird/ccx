@@ -27,7 +27,7 @@ func TestClaudeSessionsInWindowSeparatesPanesSharingACwd(t *testing.T) {
 	}
 	ppidOf := map[int]int{101: 100, 201: 200, 302: 299, 299: 300, 100: 1, 200: 1, 300: 1}
 
-	got := claudeSessionsInWindow(panes, live, "local", "5", ppidOf)
+	got := claudeSessionsInWindow(panes, live, "local", "5", procsOf(ppidOf))
 
 	want := []string{"sess-a", "sess-b", "sess-c"}
 	if !slices.Equal(got, want) {
@@ -51,7 +51,7 @@ func TestClaudeSessionsInWindowExcludesOtherWindows(t *testing.T) {
 	}
 	ppidOf := map[int]int{101: 100, 201: 200, 301: 300, 999: 1, 100: 1, 200: 1, 300: 1}
 
-	got := claudeSessionsInWindow(panes, live, "local", "5", ppidOf)
+	got := claudeSessionsInWindow(panes, live, "local", "5", procsOf(ppidOf))
 
 	if !slices.Equal(got, []string{"mine"}) {
 		t.Errorf("claudeSessionsInWindow = %v, want [mine]", got)
@@ -69,7 +69,7 @@ func TestClaudeSessionsInWindowDedupesBySessionID(t *testing.T) {
 	}
 	ppidOf := map[int]int{101: 100, 102: 100, 103: 100, 100: 1}
 
-	got := claudeSessionsInWindow(panes, live, "local", "5", ppidOf)
+	got := claudeSessionsInWindow(panes, live, "local", "5", procsOf(ppidOf))
 
 	if !slices.Equal(got, []string{"dup"}) {
 		t.Errorf("claudeSessionsInWindow = %v, want [dup]", got)

@@ -64,7 +64,7 @@ func TestSessionMetaRefsRowListsRefAndEnterOpensURL(t *testing.T) {
 	app.conv.split.Folds.BlockCursor = refCursor
 	app = pressKey(app, "enter")
 	if opened == "" {
-		t.Fatalf("enter on ref row did not open a URL; copiedMsg=%q", app.copiedMsg)
+		t.Fatalf("enter on ref row did not open a URL; status toast=%q", app.flashText())
 	}
 	if !strings.Contains(opened, "pull/106") {
 		t.Errorf("opened URL %q does not contain the PR path", opened)

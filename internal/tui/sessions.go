@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -248,22 +249,13 @@ func treeConnector(depth int, last bool) (prefix string, width int) {
 	return "├─ ", 3 // "├─ " is 3 cells wide
 }
 
-// truncCells truncates s to a display-cell budget.
-//
-// It replaces byte slicing (s[:maxW-3]), which measured multibyte names in
-// bytes against a cell budget and could cut mid-rune, and which panicked
-// outright for maxW < 4 — s[:1-3] is s[:-2].
+// truncCells truncates s to a display-cell budget, measured the way lipgloss
+// draws (tuikit/render), with "..." when there is room for it.
 func truncCells(s string, maxW int) string {
-	if maxW <= 0 {
-		return ""
-	}
-	if runewidth.StringWidth(s) <= maxW {
-		return s
-	}
 	if maxW <= 3 {
-		return runewidth.Truncate(s, maxW, "")
+		return render.TruncateMarker(s, maxW, "")
 	}
-	return runewidth.Truncate(s, maxW, "...")
+	return render.TruncateMarker(s, maxW, "...")
 }
 
 func (p projectItem) FilterValue() string {
@@ -2111,53 +2103,11 @@ func renderFullTextModal(bg, text string, scroll, screenW, screenH int) string {
 }
 
 // overlayCenter places fg (the modal) centered on top of bg, preserving bg
-// content outside the modal area.
+// content outside the modal area. tuikit/render.Center fits bg to exactly
+// width×height first and splices without growing a line, even when a wide
+// character sits on the modal's edge.
 func overlayCenter(bg, fg string, width, height int) string {
-	bgLines := strings.Split(bg, "\n")
-	fgLines := strings.Split(fg, "\n")
-
-	// Pad bg to full height
-	for len(bgLines) < height {
-		bgLines = append(bgLines, "")
-	}
-
-	fgH := len(fgLines)
-	fgW := 0
-	for _, l := range fgLines {
-		if w := lipgloss.Width(l); w > fgW {
-			fgW = w
-		}
-	}
-
-	// Center offsets. Pull startX left if the modal would overflow the right
-	// edge, so its right border is never truncated by overlayLine. (Only when
-	// the modal is genuinely wider than the screen does clamping to 0 still
-	// leave an overflow, which overlayLine then trims as a last resort.)
-	startY := (height - fgH) / 2
-	startX := (width - fgW) / 2
-	if startX < 0 {
-		startX = 0
-	}
-	if startX+fgW > width {
-		startX = max(width-fgW, 0)
-	}
-	if startY < 0 {
-		startY = 0
-	}
-
-	for i, fgLine := range fgLines {
-		bgIdx := startY + i
-		if bgIdx >= len(bgLines) {
-			break
-		}
-		bgLines[bgIdx] = overlayLine(bgLines[bgIdx], fgLine, startX, width)
-	}
-
-	// Trim to height
-	if len(bgLines) > height {
-		bgLines = bgLines[:height]
-	}
-	return strings.Join(bgLines, "\n")
+	return render.Center(bg, fg, width, height)
 }
 
 // placeHintBox overlays hint box lines onto the bottom of content,

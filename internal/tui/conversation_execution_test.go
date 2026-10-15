@@ -143,8 +143,8 @@ func TestExecutionContextMenuMainHasNoOrigin(t *testing.T) {
 	}
 	app = pressKey(app, "x")
 	app = pressKey(app, "enter")
-	if app.copiedMsg != "No spawn origin for this context" {
-		t.Fatalf("main origin jump feedback = %q", app.copiedMsg)
+	if app.flashText() != "No spawn origin for this context" {
+		t.Fatalf("main origin jump feedback = %q", app.flashText())
 	}
 }
 
@@ -360,7 +360,7 @@ func TestExecutionRailAgentEscDoesNotPretendParent(t *testing.T) {
 	if !app.activateExecutionContext(executionContextKey(parentPath), false) {
 		t.Fatal("failed to activate parent execution context")
 	}
-	if strings.Contains(stripANSI(app.convHelpLine("")), "esc:parent") {
+	if strings.Contains(stripANSI(app.convHelpLine("")), "esc parent") {
 		t.Fatal("sibling execution context advertised a nonexistent parent route")
 	}
 
@@ -475,8 +475,8 @@ func TestFailedCrossContextJumpRestoresResourceFrame(t *testing.T) {
 	if len(app.conv.inspector.History) != 0 {
 		t.Fatalf("failed jump left history depth %d", len(app.conv.inspector.History))
 	}
-	if app.copiedMsg != "origin turn not found" {
-		t.Fatalf("failed jump feedback = %q", app.copiedMsg)
+	if app.flashText() != "origin turn not found" {
+		t.Fatalf("failed jump feedback = %q", app.flashText())
 	}
 }
 

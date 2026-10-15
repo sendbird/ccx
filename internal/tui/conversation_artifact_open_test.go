@@ -91,8 +91,8 @@ func TestHandleMetaEntryEnterScratchpadMissingPath(t *testing.T) {
 	}}
 	app.conv.split.Folds.BlockCursor = 1
 	handled, _, _ := app.handleMetaEntryEnter()
-	if !handled || app.copiedMsg == "" {
-		t.Fatalf("expected handled with an error message, got handled=%v msg=%q", handled, app.copiedMsg)
+	if !handled || app.flashText() == "" {
+		t.Fatalf("expected handled with an error message, got handled=%v msg=%q", handled, app.flashText())
 	}
 }
 

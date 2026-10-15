@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 )
 
 // Every string field of the keymap sections must have exactly one table
@@ -118,12 +119,13 @@ func keysOf(m map[string]bool) []string {
 	return out
 }
 
-// footerTokens returns the "key" part of each key:label token.
+// footerTokens returns the "key" part of each "key label" hint; hints are
+// separated by two spaces (tuikit's footer separator).
 func footerTokens(s string) []string {
 	var out []string
-	for _, tok := range strings.Fields(stripANSI(s)) {
-		if i := strings.Index(tok, ":"); i > 0 {
-			out = append(out, tok[:i])
+	for _, hint := range strings.Split(stripANSI(s), "  ") {
+		if k, _, ok := strings.Cut(strings.TrimSpace(hint), " "); ok && k != "" {
+			out = append(out, k)
 		}
 	}
 	return out
@@ -139,7 +141,11 @@ func TestSessionFooterKeysAppearInHelp(t *testing.T) {
 			help[strings.TrimSpace(k)] = true
 		}
 	}
-	for _, k := range footerTokens(a.sessHelpLine()) {
+	toks := footerTokens(a.sessHelpLine())
+	if len(toks) < 3 {
+		t.Fatalf("footer parsed into %v; the token format changed", toks)
+	}
+	for _, k := range toks {
 		if !help[k] {
 			t.Errorf("footer key %q is not in the ? overlay", k)
 		}
@@ -150,7 +156,7 @@ func TestFooterDropsLowPriorityHintsAndPinsHelpQuit(t *testing.T) {
 	a := newTestApp(fakeSessions())
 	a.width = 400
 	wide := stripANSI(a.sessHelpLine())
-	if strings.Contains(wide, "…") {
+	if strings.Contains(wide, render.Ellipsis()) {
 		t.Fatalf("wide footer should not be cut: %q", wide)
 	}
 
@@ -160,21 +166,21 @@ func TestFooterDropsLowPriorityHintsAndPinsHelpQuit(t *testing.T) {
 	if w := lipgloss.Width(narrow); w > a.width {
 		t.Fatalf("footer width %d > %d: %q", w, a.width, plain)
 	}
-	if !strings.Contains(plain, "…") {
-		t.Fatalf("cut footer should show …: %q", plain)
+	if !strings.Contains(plain, render.Ellipsis()) {
+		t.Fatalf("cut footer should show the ellipsis: %q", plain)
 	}
-	if !strings.HasSuffix(plain, "?:help q:quit") {
+	if !strings.HasSuffix(plain, "? help  q quit") {
 		t.Fatalf("help/quit not pinned at the end: %q", plain)
 	}
 	// Highest-priority hint survives.
-	if !strings.Contains(plain, "↵:open") {
+	if !strings.Contains(plain, "↵ open") {
 		t.Fatalf("first hint dropped before lower ones: %q", plain)
 	}
 }
 
 func TestFooterKeepsPinnedHint(t *testing.T) {
 	out := stripANSI(renderFooter("", []footerHint{fh("a", "one"), fh("b", "two"), fh("esc", "back").keep(), fh("?", "help").keep()}, 22))
-	if !strings.Contains(out, "esc:back") || strings.Contains(out, "b:two") {
+	if !strings.Contains(out, "esc back") || strings.Contains(out, "b two") {
 		t.Fatalf("pinned hint dropped or low hint kept: %q", out)
 	}
 }
@@ -188,7 +194,7 @@ func TestKeymapOverrideReachesFooterHelpAndDispatch(t *testing.T) {
 
 	a.state = viewGlobalStats
 	a.globalStatsLoading = false
-	if got := stripANSI(a.View()); !strings.Contains(got, "m:page") || !strings.Contains(got, "w:views") {
+	if got := stripANSI(a.View()); !strings.Contains(got, "m page") || !strings.Contains(got, "w views") {
 		t.Fatalf("stats footer did not follow the override: %q", got[max(0, len(got)-200):])
 	}
 	a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
@@ -224,8 +230,20 @@ func TestMenuFootersUseBoundKeys(t *testing.T) {
 	a := newTestApp(fakeSessions())
 	a.stateMenu = true
 	got := stripANSI(a.View())
-	want := displayKey(a.keymap.Session.StateMenu) + ":states"
+	want := displayKey(a.keymap.Session.StateMenu) + " states"
 	if !strings.Contains(got, want) {
 		t.Fatalf("state menu footer missing %q", want)
+	}
+}
+
+// Conflicts runs tuikit's checks, which add Korean reachability to the
+// duplicate check: an action bound only to an uppercase letter a 2-set layout
+// cannot type is reported, and a legacy alias does not count as a duplicate.
+func TestConflictsReportsKeysUnreachableUnderKorean(t *testing.T) {
+	km := DefaultKeymap()
+	km.Actions.Fork = "F" // ㄹ with or without Shift is "f"
+	c := km.Conflicts()
+	if len(c) != 1 || !strings.Contains(c[0], "actions.fork") {
+		t.Fatalf("Conflicts() = %v, want actions.fork unreachable", c)
 	}
 }

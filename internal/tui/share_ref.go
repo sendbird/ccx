@@ -34,12 +34,12 @@ const (
 func (a *App) openShareRef() (tea.Model, tea.Cmd) {
 	sess, ok := a.selectedSession()
 	if !ok {
-		a.copiedMsg = "No session selected"
+		a.flash("No session selected")
 		return a, nil
 	}
 	items := gatherShareRefItems(sess)
 	if len(items) == 0 {
-		a.copiedMsg = "Nothing shareable (no memory/scratchpad/plan)"
+		a.flash("Nothing shareable (no memory/scratchpad/plan)")
 		return a, nil
 	}
 	a.shareRefMenu = true
@@ -148,7 +148,7 @@ func (a *App) confirmShareRef() (tea.Model, tea.Cmd) {
 		// Move to target-selection stage.
 		targets := a.gatherShareRefTargets(a.shareRefSrcID)
 		if len(targets) == 0 {
-			a.copiedMsg = "No other live sessions to share to"
+			a.flash("No other live sessions to share to")
 			a.shareRefMenu = false
 			return a, nil
 		}
@@ -173,13 +173,13 @@ func (a *App) confirmShareRef() (tea.Model, tea.Cmd) {
 		}
 	}
 	if target.ID == "" {
-		a.copiedMsg = "Target session not found"
+		a.flash("Target session not found")
 		return a, nil
 	}
 
 	prompt := buildShareRefPrompt(a.shareRefSrcShort, pickedItem)
 	label := fmt.Sprintf("@%s → %s", filepath.Base(pickedItem.Path), shortSessionLabel(target))
-	a.copiedMsg = "Sharing " + label + "…"
+	a.flash("Sharing " + label + "…")
 	return a, shareRefSendCmd(target, prompt, "Shared "+label)
 }
 

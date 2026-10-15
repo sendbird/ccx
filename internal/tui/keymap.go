@@ -4,6 +4,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/keys"
 	"gopkg.in/yaml.v3"
 )
 
@@ -318,12 +319,12 @@ func DefaultKeymap() Keymap {
 // actions to a case pair ("f"/"F") is therefore a latent bug: under a Korean
 // IME both presses land on whichever case the switch tests first.
 //
-// Derived from the langmap rather than hardcoded so the two cannot drift.
+// Asks tuikit/keys, which owns the jamo table, so the two cannot drift.
 func cjkReachableUpper() map[string]bool {
 	out := make(map[string]bool)
-	for _, latin := range defaultHangulToLatin() {
-		if len(latin) == 1 && latin[0] >= 'A' && latin[0] <= 'Z' {
-			out[latin] = true
+	for c := 'A'; c <= 'Z'; c++ {
+		if keys.ReachableUnderCJK(string(c)) {
+			out[string(c)] = true
 		}
 	}
 	return out
@@ -649,30 +650,18 @@ func (km *Keymap) TranslateNav(key string, msg tea.KeyMsg) (string, tea.KeyMsg) 
 	return "", msg
 }
 
+// keyNames is how ccx displays keys: tuikit's glyph names (enter → ↵, left →
+// ←), with ccx's long-standing short spellings kept for the keys users already
+// read in every footer.
+var keyNames = keys.Names{Glyphs: true}.
+	With(" ", "sp").
+	With("tab", "tab").
+	With("shift+tab", "S-tab").
+	With("ctrl+g", "^G")
+
 // displayKey converts internal key names to human-readable display strings.
 func displayKey(key string) string {
-	switch key {
-	case " ":
-		return "sp"
-	case "enter":
-		return "↵"
-	case "esc":
-		return "esc"
-	case "tab":
-		return "tab"
-	case "shift+tab":
-		return "S-tab"
-	case "left":
-		return "←"
-	case "right":
-		return "→"
-	case ":":
-		return ":"
-	case "ctrl+g":
-		return "^G"
-	default:
-		return key
-	}
+	return keyNames.Name(key)
 }
 
 // isNavKey returns true if the key message is a navigation key (arrows, pgup/pgdn, home/end).

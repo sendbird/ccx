@@ -241,7 +241,7 @@ func (a *App) openPluginExplorer() (tea.Model, tea.Cmd) {
 	if claudeDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			a.copiedMsg = "Cannot find home dir"
+			a.flash("Cannot find home dir")
 			return a, nil
 		}
 		claudeDir = filepath.Join(home, ".claude")
@@ -249,7 +249,7 @@ func (a *App) openPluginExplorer() (tea.Model, tea.Cmd) {
 
 	tree, err := session.ScanPlugins(claudeDir)
 	if err != nil {
-		a.copiedMsg = "Plugin scan failed: " + err.Error()
+		a.flash("Plugin scan failed: " + err.Error())
 		return a, nil
 	}
 
@@ -381,7 +381,7 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case a.keymap.Session.Refresh:
-		a.copiedMsg = "Refreshing plugins…"
+		a.flash("Refreshing plugins…")
 		return a.openPluginExplorer()
 	}
 
@@ -521,7 +521,7 @@ func (a *App) handleCfgPluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case a.keymap.Session.Refresh:
-		a.copiedMsg = "Refreshing plugins…"
+		a.flash("Refreshing plugins…")
 		return a.openPluginExplorer()
 	}
 
@@ -1149,14 +1149,14 @@ func (a *App) copyPluginPath() (tea.Model, tea.Cmd) {
 	p := a.plgDetailPlugin
 	path := p.Install.InstallPath
 	if path == "" {
-		a.copiedMsg = "No install path"
+		a.flash("No install path")
 		return a, nil
 	}
 	if err := copyToClipboard(path); err != nil {
-		a.copiedMsg = "Copy failed"
+		a.flash("Copy failed")
 		return a, nil
 	}
-	a.copiedMsg = "Copied: " + path
+	a.flash("Copied: " + path)
 	return a, nil
 }
 
@@ -1165,7 +1165,7 @@ func (a *App) openPluginShell() (tea.Model, tea.Cmd) {
 	p := a.plgDetailPlugin
 	path := p.Install.InstallPath
 	if path == "" {
-		a.copiedMsg = "No install path"
+		a.flash("No install path")
 		return a, nil
 	}
 	shell := os.Getenv("SHELL")
@@ -1208,11 +1208,11 @@ func (a *App) editPluginComponent() (tea.Model, tea.Cmd) {
 	}
 
 	if ci.subPlugin != nil {
-		a.copiedMsg = "Sub-plugin (no single file to edit)"
+		a.flash("Sub-plugin (no single file to edit)")
 		return a, nil
 	}
 	if ci.comp.Path == "" {
-		a.copiedMsg = "No file path"
+		a.flash("No file path")
 		return a, nil
 	}
 
@@ -1491,7 +1491,10 @@ func (a *App) plgSearchNext(dir int) {
 
 // --- Plugin selection & test ---
 
-type pluginTestDoneMsg struct{ tmpDir string }
+type pluginTestDoneMsg struct {
+	tmpDir string
+	err    error
+}
 
 func (a *App) plgHasSelection() bool {
 	return len(a.plgSelectedSet) > 0
@@ -1549,14 +1552,14 @@ func (a *App) handlePlgActionsMenu(key string) (tea.Model, tea.Cmd) {
 		}
 		path := targets[0].Install.InstallPath
 		if path == "" {
-			a.copiedMsg = "No install path"
+			a.flash("No install path")
 			return a, nil
 		}
 		if err := copyToClipboard(path); err != nil {
-			a.copiedMsg = "Copy failed"
+			a.flash("Copy failed")
 			return a, nil
 		}
-		a.copiedMsg = "Copied: " + path
+		a.flash("Copied: " + path)
 		return a, nil
 	case "o":
 		a.plgActionsMenu = false
@@ -1566,7 +1569,7 @@ func (a *App) handlePlgActionsMenu(key string) (tea.Model, tea.Cmd) {
 		}
 		path := targets[0].Install.InstallPath
 		if path == "" {
-			a.copiedMsg = "No install path"
+			a.flash("No install path")
 			return a, nil
 		}
 		shell := os.Getenv("SHELL")
@@ -1589,9 +1592,9 @@ func (a *App) handlePlgActionsMenu(key string) (tea.Model, tea.Cmd) {
 		a.plgUninstallConfirm = true
 		targets := a.plgActionTargets()
 		if len(targets) == 1 {
-			a.copiedMsg = "Uninstall " + targets[0].Name + "? Press x to confirm"
+			a.flash("Uninstall " + targets[0].Name + "? Press x to confirm")
 		} else {
-			a.copiedMsg = fmt.Sprintf("Uninstall %d plugins? Press x to confirm", len(targets))
+			a.flash(fmt.Sprintf("Uninstall %d plugins? Press x to confirm", len(targets)))
 		}
 		return a, nil
 	default:
@@ -1620,7 +1623,7 @@ func (a *App) togglePluginEnabled(enable bool) (tea.Model, tea.Cmd) {
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		a.copiedMsg = "Error: " + err.Error()
+		a.flash("Error: " + err.Error())
 		return a, nil
 	}
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
@@ -1653,7 +1656,7 @@ func (a *App) togglePluginEnabled(enable bool) (tea.Model, tea.Cmd) {
 	settings["enabledPlugins"] = raw
 	out, _ := json.MarshalIndent(settings, "", "  ")
 	if err := os.WriteFile(settingsPath, out, 0o644); err != nil {
-		a.copiedMsg = "Write failed: " + err.Error()
+		a.flash("Write failed: " + err.Error())
 		return a, nil
 	}
 
@@ -1668,7 +1671,7 @@ func (a *App) togglePluginEnabled(enable bool) (tea.Model, tea.Cmd) {
 	if !enable {
 		action = "Disabled"
 	}
-	a.copiedMsg = fmt.Sprintf("%s %s", action, strings.Join(names, ", "))
+	a.flash(fmt.Sprintf("%s %s", action, strings.Join(names, ", ")))
 	a.clearPlgSelection()
 	a.rebuildPlgList()
 	return a, nil
@@ -1694,7 +1697,7 @@ func (a *App) runPluginCmd(action string) (tea.Model, tea.Cmd) {
 		}
 	}
 	if len(ids) == 0 {
-		a.copiedMsg = "No installed plugins to " + action
+		a.flash("No installed plugins to " + action)
 		return a, nil
 	}
 
@@ -1702,7 +1705,7 @@ func (a *App) runPluginCmd(action string) (tea.Model, tea.Cmd) {
 	if len(label) > 0 {
 		label = strings.ToUpper(label[:1]) + label[1:]
 	}
-	a.copiedMsg = fmt.Sprintf("%sing %d plugin(s)…", label, len(ids))
+	a.flash(fmt.Sprintf("%sing %d plugin(s)…", label, len(ids)))
 
 	return a, func() tea.Msg {
 		var lastErr error
@@ -1734,11 +1737,11 @@ func (a *App) runPluginInstall() (tea.Model, tea.Cmd) {
 		}
 	}
 	if len(ids) == 0 {
-		a.copiedMsg = "Already installed"
+		a.flash("Already installed")
 		return a, nil
 	}
 
-	a.copiedMsg = fmt.Sprintf("Installing %d plugin(s)…", len(ids))
+	a.flash(fmt.Sprintf("Installing %d plugin(s)…", len(ids)))
 
 	return a, func() tea.Msg {
 		var lastErr error
@@ -1787,31 +1790,31 @@ func (a *App) renderPlgActionsHintBox() string {
 // launchPluginTest launches a sandboxed Claude session with only selected plugins active.
 func (a *App) launchPluginTest() (tea.Model, tea.Cmd) {
 	if !a.plgHasSelection() {
-		a.copiedMsg = "No plugins selected (space to select)"
+		a.flash("No plugins selected (space to select)")
 		return a, nil
 	}
 	if !tmux.InTmux() {
-		a.copiedMsg = "Requires tmux"
+		a.flash("Requires tmux")
 		return a, nil
 	}
 
 	plugins := a.selectedPlugins()
 	env, err := buildPluginTestEnv(plugins)
 	if err != nil {
-		a.copiedMsg = "Failed: " + err.Error()
+		a.flash("Failed: " + err.Error())
 		return a, nil
 	}
 
 	script, err := env.ScriptWithConfig(a.config.Claude)
 	if err != nil {
-		a.copiedMsg = "Claude command failed: " + err.Error()
+		a.flash("Claude command failed: " + err.Error())
 		return a, nil
 	}
-	a.copiedMsg = fmt.Sprintf("Testing %d plugins…", len(plugins))
+	a.flash(fmt.Sprintf("Testing %d plugins…", len(plugins)))
 
 	return a, func() tea.Msg {
-		env.RunPopup(script)
-		return pluginTestDoneMsg{tmpDir: env.HomeDir}
+		err := env.RunPopup(script)
+		return pluginTestDoneMsg{tmpDir: env.HomeDir, err: err}
 	}
 }
 

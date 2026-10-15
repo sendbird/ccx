@@ -228,15 +228,23 @@ func SavePreferences(prefs Preferences, open opener.Config, claude claudecmd.Con
 		}
 	}
 
-	cfg.Preferences = prefs
+	// Only settings go here; the UI state lives in ui.json (uiState). Its
+	// fields are dropped from the file, which also finishes moving the
+	// values an older build wrote here.
+	cfg.Preferences = settingsOnly(prefs)
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return
 	}
 
-	header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: preferences section (auto-saved on quit)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Open: command_template controls how URLs open; {{url}} expands to the URL (empty = OS default open/xdg-open).\n# Jira: email/token/base_url for PR/Jira ref status resolution; empty fields fall back to JIRA_API_TOKEN/JIRA_EMAIL/JIRA_BASE_URL env vars.\n# Langmap: map CJK input-source keys to Latin shortcut keys, e.g. langmap: {\"\\u3142\": q}; built-in Korean 2-set default, empty value removes a mapping.\n\n"
+	header := "# ccx configuration\n# Keybindings: session, actions, views, navigation\n# Preferences: worktree_dir, initial_focus (UI state is kept in ~/.local/state/ccx/ui.json)\n# Claude: command_template controls local Claude launches; {{args}} expands to ccx-provided args.\n# Open: command_template controls how URLs open; {{url}} expands to the URL (empty = OS default open/xdg-open).\n# Jira: email/token/base_url for PR/Jira ref status resolution; empty fields fall back to JIRA_API_TOKEN/JIRA_EMAIL/JIRA_BASE_URL env vars.\n# Langmap: map CJK input-source keys to Latin shortcut keys, e.g. langmap: {\"\\u3142\": q}; built-in Korean 2-set default, empty value removes a mapping.\n\n"
 	os.WriteFile(path, []byte(header+string(data)), 0644)
+}
+
+// settingsOnly keeps the Preferences fields a person edits.
+func settingsOnly(p Preferences) Preferences {
+	return Preferences{WorktreeDir: p.WorktreeDir, InitialFocus: p.InitialFocus}
 }
 
 // fillKeymapDefaults fills empty keymap fields with default values.
@@ -528,12 +536,19 @@ func viewStateString(state viewState) string {
 	return ""
 }
 
-// quit saves preferences and returns tea.Quit.
+// quit writes settings to config.yaml and flushes the UI state to ui.json;
+// tea.Quit follows once that write reports back (handlePrefsMsg), so the
+// state is on disk before the program exits.
 func (a *App) quit() (tea.Model, tea.Cmd) {
-	if !a.config.PickMode {
-		SavePreferences(a.capturePreferences(), a.config.Open, a.config.Claude)
+	if a.config.PickMode {
+		return a, tea.Quit
 	}
-	return a, tea.Quit
+	p := a.capturePreferences()
+	SavePreferences(p, a.config.Open, a.config.Claude)
+	a.quitting = true
+	var cmd tea.Cmd
+	a.uiSaver, cmd = a.uiSaver.FlushWith(uiStateOf(p))
+	return a, cmd
 }
 
 // capturePreferences snapshots the current app state for persistence.

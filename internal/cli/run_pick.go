@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/clauderegistry"
+	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/session"
 	"github.com/sendbird/ccx/internal/tmux"
 	"github.com/sendbird/ccx/internal/tui"
@@ -63,6 +64,8 @@ func RunPickSessionTUI(claudeDir, search string, multi bool) PickSessionExitCode
 		Open:        oc,
 	})
 
+	// Detect Kitty graphics once, before the program: it may query tmux.
+	kitty.Init(tmux.Client())
 	p := tea.NewProgram(app,
 		tea.WithAltScreen(),
 		tea.WithOutput(os.Stderr),

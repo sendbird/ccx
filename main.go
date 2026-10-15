@@ -13,6 +13,7 @@ import (
 	"github.com/sendbird/ccx/internal/cli"
 	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tmux"
 	"github.com/sendbird/ccx/internal/tui"
 	"gopkg.in/yaml.v3"
 )
@@ -337,6 +338,8 @@ func main() {
 		Claude:       cc,
 		Open:         oc,
 	})
+	// Detect Kitty graphics once, before the program: it may query tmux.
+	kitty.Init(tmux.Client())
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

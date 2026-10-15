@@ -21,7 +21,7 @@ import (
 
 // worktreeDoneMsg is the outcome of an async worktree action.
 type worktreeDoneMsg struct {
-	status  string // shown via copiedMsg
+	status  string // shown via status toast
 	refresh bool   // a new Claude window was spawned; poll for its session file
 	execDir string // non-tmux: take over the terminal with Claude in this dir
 	move    *worktreeMove
@@ -85,7 +85,7 @@ func newWorktreeSessionCmd(projectPath, worktreeDir, branch, windowName string,
 
 // executeNewWorktreeSession creates a git worktree and spawns a new Claude session in it.
 func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (tea.Model, tea.Cmd) {
-	a.copiedMsg = "Creating worktree…"
+	a.flash("Creating worktree…")
 	return a, newWorktreeSessionCmd(sess.ProjectPath, a.config.WorktreeDir, branch, "", a.config.Claude,
 		fmt.Sprintf("New session → %s/%s", a.config.WorktreeDir, branch), "Spawn failed", "")
 }
@@ -95,17 +95,17 @@ func (a *App) executeNewWorktreeSession(sess session.Session, branch string) (te
 func (a *App) executeCmdWorktreeNew(input string) (tea.Model, tea.Cmd) {
 	parts := strings.Fields(input)
 	if len(parts) < 2 {
-		a.copiedMsg = "Usage: worktree:new <branch>"
+		a.flash("Usage: worktree:new <branch>")
 		return a, nil
 	}
 	branch := parts[len(parts)-1]
 
 	sess, ok := a.selectedSession()
 	if !ok || sess.ProjectPath == "" {
-		a.copiedMsg = "No session with project selected"
+		a.flash("No session with project selected")
 		return a, nil
 	}
-	a.copiedMsg = "Creating worktree…"
+	a.flash("Creating worktree…")
 	return a, newWorktreeSessionCmd(sess.ProjectPath, a.config.WorktreeDir, branch, branch, a.config.Claude,
 		fmt.Sprintf("Worktree + session → %s/%s", a.config.WorktreeDir, branch),
 		"Worktree created but spawn failed",
@@ -115,7 +115,7 @@ func (a *App) executeCmdWorktreeNew(input string) (tea.Model, tea.Cmd) {
 // executeWorktree moves the session's project into a new worktree named name.
 func (a *App) executeWorktree(sess session.Session, name string) (tea.Model, tea.Cmd) {
 	projectPath, branch, worktreeDir := sess.ProjectPath, sess.GitBranch, a.config.WorktreeDir
-	a.copiedMsg = "Creating worktree…"
+	a.flash("Creating worktree…")
 	return a, func() tea.Msg {
 		repoRoot, err := gitRepoRoot(projectPath)
 		if err != nil {
@@ -145,7 +145,7 @@ func (a *App) executeWorktree(sess session.Session, name string) (tea.Model, tea
 }
 
 func (a *App) handleWorktreeDone(msg worktreeDoneMsg) tea.Cmd {
-	a.copiedMsg = msg.status
+	a.flash(msg.status)
 	if mv := msg.move; mv != nil {
 		home, _ := os.UserHomeDir()
 		newName := session.ShortenPath(mv.newPath, home)
@@ -169,7 +169,7 @@ func (a *App) handleWorktreeDone(msg worktreeDoneMsg) tea.Cmd {
 	if msg.execDir != "" {
 		cmd, err := a.claudeCmd(msg.execDir)
 		if err != nil {
-			a.copiedMsg = "Claude command failed: " + err.Error()
+			a.flash("Claude command failed: " + err.Error())
 			return nil
 		}
 		return tea.ExecProcess(cmd, func(err error) tea.Msg {

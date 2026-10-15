@@ -308,8 +308,8 @@ func TestRefsPreviewYCopiesSelected(t *testing.T) {
 
 	m, _, _ := a.copySelectedRefs()
 	got := m.(*App)
-	if !strings.Contains(got.copiedMsg, "2") {
-		t.Errorf("expected copiedMsg to mention 2 refs, got %q", got.copiedMsg)
+	if !strings.Contains(got.flashText(), "2") {
+		t.Errorf("expected status toast to mention 2 refs, got %q", got.flashText())
 	}
 
 	// No selection: falls back to the cursor item.
@@ -317,8 +317,8 @@ func TestRefsPreviewYCopiesSelected(t *testing.T) {
 	a.sessRefsCursor = 1
 	m2, _, _ := a.copySelectedRefs()
 	got2 := m2.(*App)
-	if !strings.Contains(got2.copiedMsg, refs[1].Label) {
-		t.Errorf("expected copiedMsg to mention cursor ref %q, got %q", refs[1].Label, got2.copiedMsg)
+	if !strings.Contains(got2.flashText(), refs[1].Label) {
+		t.Errorf("expected status toast to mention cursor ref %q, got %q", refs[1].Label, got2.flashText())
 	}
 }
 

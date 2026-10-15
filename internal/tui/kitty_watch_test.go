@@ -2,49 +2,46 @@ package tui
 
 import (
 	"testing"
-	"time"
+
+	tk "github.com/keyolk/tuikit/kitty"
+
+	"github.com/sendbird/ccx/internal/kitty"
 )
 
-// The watcher must stay silent while visibility is unchanged and only emit a
-// message on a transition, so an idle app gets no 250ms Update/View churn.
-func TestKittyWatchEmitsOnlyOnTransition(t *testing.T) {
-	seq := []bool{true, true, true, false}
-	calls := 0
-	probe := func() bool {
-		v := seq[min(calls, len(seq)-1)]
-		calls++
-		return v
-	}
-	msg := kittyWatchCmd(true, probe, time.Millisecond)()
-	vm, ok := msg.(kittyVisibilityMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want kittyVisibilityMsg", msg)
-	}
-	if vm.visible {
-		t.Fatal("expected visible=false transition")
-	}
-	if calls != 4 {
-		t.Fatalf("probe calls = %d, want 4 (unchanged polls must not return)", calls)
-	}
-}
-
-func TestKittyVisibilityMsgTogglesFocusAndRearms(t *testing.T) {
+func TestKittyPaneMsgTogglesFocusAndRearmsOnlyTheWatcher(t *testing.T) {
+	// Supported outside tmux: the watcher probe answers without running tmux.
+	kitty.SetCaps(tk.Caps{Supported: true}, nil)
+	t.Cleanup(func() { kitty.SetCaps(tk.Caps{}, nil) })
 	a := newTestApp(fakeSessions())
 	a.termFocused = true
 
-	_, cmd := a.Update(kittyVisibilityMsg{visible: false})
+	hidden := tk.PaneMsg{Pane: tk.Pane{Visible: false, Top: 2, Left: 3}}
+	if cmd := a.handleKittyPane(kittyPaneMsg{PaneMsg: hidden, watch: true}); cmd == nil {
+		t.Fatal("watcher must be re-armed")
+	}
 	if a.termFocused {
 		t.Fatal("hidden pane should clear termFocused")
 	}
-	if cmd == nil {
-		t.Fatal("watcher must be re-armed")
+	if p := kitty.Pane(); p.Top != 2 || p.Left != 3 {
+		t.Fatalf("pane geometry not recorded: %+v", p)
 	}
 
-	_, cmd = a.Update(kittyVisibilityMsg{visible: true})
-	if !a.termFocused {
-		t.Fatal("visible pane should restore termFocused")
+	shown := tk.PaneMsg{Pane: tk.Pane{Visible: true}}
+	if cmd := a.handleKittyPane(kittyPaneMsg{PaneMsg: shown}); cmd != nil {
+		t.Fatal("a one-off query must not start a second watcher")
 	}
-	if cmd == nil {
-		t.Fatal("watcher must be re-armed")
+	if a.termFocused {
+		t.Fatal("a one-off query should not restore focus; FocusMsg does")
+	}
+	a.handleKittyPane(kittyPaneMsg{PaneMsg: shown, watch: true})
+	if !a.termFocused {
+		t.Fatal("visible pane from the watcher should restore termFocused")
+	}
+}
+
+// Without Init (tests, unsupported terminals) nothing polls tmux.
+func TestKittyCommandsAreNilWhenUnsupported(t *testing.T) {
+	if kittyWatchCmd(tk.PaneMsg{}) != nil || kittyPaneQueryCmd() != nil {
+		t.Fatal("unsupported terminal armed a tmux query")
 	}
 }

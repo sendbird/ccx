@@ -102,8 +102,8 @@ func TestDayPreviewEnterJumpsToFirstMention(t *testing.T) {
 	}
 	// The jump landed if the selected conversation row covers entry u2 — and
 	// jumpToSessionEntry says so out loud when it does not.
-	if strings.Contains(got.copiedMsg, "not found") {
-		t.Fatalf("jump missed the entry: %q", got.copiedMsg)
+	if strings.Contains(got.flashText(), "not found") {
+		t.Fatalf("jump missed the entry: %q", got.flashText())
 	}
 	if uuid := selectedConvEntryUUID(got); uuid != "u2" {
 		t.Errorf("cursor landed on entry %q, want the first mention u2", uuid)
@@ -271,8 +271,8 @@ func TestDayPreviewCopyFallsBackToPath(t *testing.T) {
 	app.dayOutputsCursor = 0
 
 	m, _, _ := app.copySelectedDayOutput()
-	if got := m.(*App).copiedMsg; !strings.Contains(got, "some-plan") {
-		t.Errorf("copiedMsg = %q, want the plan copied via its path", got)
+	if got := m.(*App).flashText(); !strings.Contains(got, "some-plan") {
+		t.Errorf("status toast = %q, want the plan copied via its path", got)
 	}
 }
 
@@ -1120,6 +1120,9 @@ func TestDayScratchpadStaysBoundedAndCompletes(t *testing.T) {
 // sessions have no scratchpad, so it never exercises this path. Cursor movement
 // must stay inside the frame budget once the rows are actually there.
 func TestDayCursorMoveCostWithScratchpad(t *testing.T) {
+	if raceEnabled {
+		t.Skip("wall-clock frame budget is meaningless under -race")
+	}
 	base := t.TempDir()
 	t.Cleanup(session.SetScratchpadBaseOverride(base))
 

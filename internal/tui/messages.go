@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	"github.com/keyolk/tuikit/render"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/session"
 )
@@ -847,13 +848,8 @@ func (w *nlWriter) WriteString(s string) {
 }
 
 // padToWidth pads a line with spaces so background color fills the full width.
-// Uses lipgloss.Width for ANSI-aware measurement.
 func padToWidth(line string, width int) string {
-	visible := lipgloss.Width(line)
-	if visible >= width {
-		return line
-	}
-	return line + strings.Repeat(" ", width-visible)
+	return render.PadRight(line, width)
 }
 
 // applyBgToLine applies the selected-block background to a line that may

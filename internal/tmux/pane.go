@@ -1,21 +1,28 @@
 package tmux
 
 import (
+	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	tk "github.com/keyolk/tuikit/tmux"
+
 	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/clauderegistry"
 )
 
-// Pane represents a tmux pane with its metadata.
+// Pane represents a tmux pane with its metadata. Session, Window and Pane are
+// the human-facing name and indexes ("main", "3", "0"); every tmux call
+// targets PaneID / WindowID instead, since an index can be renumbered under
+// us and tuikit/tmux refuses anything but an ID.
 type Pane struct {
 	PaneID     string
+	WindowID   string
 	Command    string
 	Session    string
 	Window     string
@@ -24,6 +31,49 @@ type Pane struct {
 	PID        int
 	Path       string
 }
+
+// tmux calls go through a tuikit/tmux Client and process walks through a
+// tuikit/tmux Procs snapshot. Both are package state so the many call sites
+// keep their signatures; tests swap them for a Fake and a canned ps table,
+// so no test can reach the real tmux server or process table.
+var (
+	clientMu sync.Mutex
+	client   = tk.New(nil) // outside tmux every call fails with ErrNotInTmux
+	psSource tk.PSSource   // nil is the real ps
+)
+
+// SetClient replaces the tmux client (tests: tk.Client{Runner: tk.NewFake()}).
+func SetClient(c tk.Client) {
+	clientMu.Lock()
+	client = c
+	clientMu.Unlock()
+}
+
+// SetProcSource replaces where process snapshots come from and drops the
+// cached one.
+func SetProcSource(src tk.PSSource) {
+	clientMu.Lock()
+	psSource = src
+	clientMu.Unlock()
+	procTreeMu.Lock()
+	procTreeVal = nil
+	procTreeMu.Unlock()
+}
+
+// Client returns the tmux client in use.
+func Client() tk.Client {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	return client
+}
+
+func procSource() tk.PSSource {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	return psSource
+}
+
+func bg() context.Context { return context.Background() }
 
 // InTmux returns true if the process is running inside a tmux session.
 func InTmux() bool {
@@ -91,50 +141,50 @@ func FindPane(projectPath string, sessionID ...string) (Pane, bool) {
 	return Pane{}, false
 }
 
+// fromKit converts a tuikit pane. tuikit parses every free-text field by its
+// length, so a cwd or window name containing "|" (the old format separator),
+// a tab or Hangul can no longer shift the columns after it.
+func fromKit(p tk.Pane) Pane {
+	return Pane{
+		PaneID:     p.ID,
+		WindowID:   p.WindowID,
+		Command:    p.Command,
+		Session:    p.SessionName,
+		Window:     strconv.Itoa(p.WindowIndex),
+		WindowName: p.WindowName,
+		Pane:       strconv.Itoa(p.PaneIndex),
+		PID:        p.PID,
+		Path:       p.Cwd,
+	}
+}
+
 // ListPanes returns all tmux panes across all sessions and windows.
 func ListPanes() ([]Pane, error) {
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{pane_id}|#{pane_current_command}|#{session_name}|#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_path}|#{window_name}",
-	).Output()
+	kp, err := Client().Panes(bg(), tk.PaneFilter{})
 	if err != nil {
 		return nil, err
 	}
-
-	var panes []Pane
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "|", 8)
-		if len(parts) < 7 {
-			continue
-		}
-		pid, _ := strconv.Atoi(parts[5])
-		p := Pane{
-			PaneID:  parts[0],
-			Command: parts[1],
-			Session: parts[2],
-			Window:  parts[3],
-			Pane:    parts[4],
-			PID:     pid,
-			Path:    parts[6],
-		}
-		if len(parts) >= 8 {
-			p.WindowName = parts[7]
-		}
-		panes = append(panes, p)
+	panes := make([]Pane, 0, len(kp))
+	for _, p := range kp {
+		panes = append(panes, fromKit(p))
 	}
 	return panes, nil
 }
 
-// HasClaudeSession checks if a pane's shell has a claude child process
-// running the specific session ID (matches --resume <id> in args).
+// HasClaudeSession checks if a pane's shell has a claude process running the
+// specific session ID (its args carry the ID) anywhere under it — like
+// HasClaude, not only as a direct child, so a wrapped claude counts.
 func HasClaudeSession(shellPID int, sessionID string) bool {
 	if shellPID == 0 || sessionID == "" {
 		return false
 	}
-	out, err := exec.Command("pgrep", "-P", strconv.Itoa(shellPID), "-af", "claude").Output()
-	if err != nil {
+	procs, ok := loadProcs()
+	if !ok {
 		return false
 	}
-	return strings.Contains(string(out), sessionID)
+	return procs.HasDescendant(shellPID, func(p tk.Proc) bool {
+		return strings.Contains(p.Command, "claude") && strings.Contains(p.Command, sessionID)
+	})
 }
 
 // HasClaude checks if a pane's shell has a claude process anywhere in its
@@ -150,214 +200,82 @@ func HasClaude(shellPID int) bool {
 	if shellPID == 0 {
 		return false
 	}
-	// One `ps` snapshot answers both the direct-child and the subtree question,
-	// so there is no cheaper "fast path" to try first — spawning a pgrep per
-	// pane was the expensive part. Fall back to pgrep only if the snapshot is
-	// unavailable.
-	if tree, ok := loadProcTree(); ok {
-		return tree.hasClaudeUnder(shellPID)
+	procs, ok := loadProcs()
+	if !ok {
+		return false
 	}
-	if out, err := exec.Command("pgrep", "-P", strconv.Itoa(shellPID), "-f", "claude").Output(); err == nil {
-		return len(strings.TrimSpace(string(out))) > 0
-	}
-	return false
+	return procs.HasDescendant(shellPID, isClaude)
 }
 
-// procTree is a snapshot of the process table: pid → command, plus the child
-// index needed to walk a subtree.
-type procTree struct {
-	cmd      map[int]string
-	children map[int][]int
-}
+func isClaude(p tk.Proc) bool { return strings.Contains(p.Command, "claude") }
 
-// loadProcTree reads and parses `ps -e` once. Building this costs ~100ms on a
-// busy machine, and the old code paid it separately for every pane examined —
-// scanning a window with two Claude panes read the whole process table twice.
-// The snapshot is memoized for the same short window as the pane scan that
-// drives it, so one startup pays for one `ps`.
-func loadProcTree() (*procTree, bool) {
+// loadProcs reads the process table once (tuikit/tmux Procs). Building it
+// costs ~100ms on a busy machine, and the old code paid it separately for
+// every pane examined — scanning a window with two Claude panes read the
+// whole process table twice. The snapshot is memoized for the same short
+// window as the pane scan that drives it, so one startup pays for one `ps`.
+func loadProcs() (tk.Procs, bool) {
 	procTreeMu.Lock()
 	defer procTreeMu.Unlock()
 	if procTreeVal != nil && time.Since(procTreeAt) <= windowClaudesTTL {
 		return procTreeVal, true
 	}
-
-	out, err := exec.Command("ps", "-e", "-o", "pid=,ppid=,command=").Output()
+	procs, err := tk.ReadProcs(bg(), procSource())
 	if err != nil {
 		return nil, false
 	}
-	t := &procTree{cmd: make(map[int]string), children: make(map[int][]int)}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		pid, err1 := strconv.Atoi(fields[0])
-		ppid, err2 := strconv.Atoi(fields[1])
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		t.cmd[pid] = strings.Join(fields[2:], " ")
-		t.children[ppid] = append(t.children[ppid], pid)
-	}
-	procTreeVal, procTreeAt = t, time.Now()
-	return t, true
+	procTreeVal, procTreeAt = procs, time.Now()
+	return procs, true
 }
 
 var (
 	procTreeMu  sync.Mutex
-	procTreeVal *procTree
+	procTreeVal tk.Procs
 	procTreeAt  time.Time
 )
 
-// hasClaudeUnder reports whether any descendant of shellPID is (or wraps) a
-// claude process. BFS over the snapshot — no subprocesses.
-func (t *procTree) hasClaudeUnder(shellPID int) bool {
-	queue := append([]int(nil), t.children[shellPID]...)
-	visited := make(map[int]bool)
-	for len(queue) > 0 {
-		pid := queue[0]
-		queue = queue[1:]
-		if visited[pid] {
-			continue
-		}
-		visited[pid] = true
-		if strings.Contains(t.cmd[pid], "claude") {
-			return true
-		}
-		queue = append(queue, t.children[pid]...)
-	}
-	return false
-}
-
-// SwitchToPane switches the tmux client to the given pane.
+// SwitchToPane switches the tmux client to the given pane: switch-client
+// only when it is in another session, then select-window, then select-pane
+// (tuikit/tmux Jump).
 func SwitchToPane(p Pane) error {
-	target := p.Session + ":" + p.Window + "." + p.Pane
-
-	// If the pane is in a different tmux session, switch the client first.
-	out, _ := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
-	currentSession := strings.TrimSpace(string(out))
-	if currentSession != "" && currentSession != p.Session {
-		exec.Command("tmux", "switch-client", "-t", p.Session).Run()
-	}
-
-	// Select the window (in case it's in a different tmux window)
-	exec.Command("tmux", "select-window", "-t", p.Session+":"+p.Window).Run()
-	return exec.Command("tmux", "select-pane", "-t", target).Run()
+	return Client().Jump(bg(), p.PaneID)
 }
 
-// TeaKeyToTmux maps a Bubble Tea key string to tmux send-keys argument(s).
-// Returns (tmuxKey, literal). If literal is true, use send-keys -l.
-func TeaKeyToTmux(key string) (string, bool) {
-	switch key {
-	case "enter":
-		return "Enter", false
-	case "backspace":
-		return "BSpace", false
-	case "tab":
-		return "Tab", false
-	case "space", " ":
-		return "Space", false
-	case "up":
-		return "Up", false
-	case "down":
-		return "Down", false
-	case "left":
-		return "Left", false
-	case "right":
-		return "Right", false
-	case "home":
-		return "Home", false
-	case "end":
-		return "End", false
-	case "pgup":
-		return "PageUp", false
-	case "pgdown":
-		return "PageDown", false
-	case "delete":
-		return "DC", false
-	case "esc":
-		return "Escape", false
-	case "ctrl+c":
-		return "C-c", false
-	case "ctrl+d":
-		return "C-d", false
-	case "ctrl+z":
-		return "C-z", false
-	case "ctrl+l":
-		return "C-l", false
-	case "ctrl+a":
-		return "C-a", false
-	case "ctrl+e":
-		return "C-e", false
-	case "ctrl+r":
-		return "C-r", false
-	case "ctrl+w":
-		return "C-w", false
-	case "ctrl+u":
-		return "C-u", false
-	case "ctrl+k":
-		return "C-k", false
-	case "ctrl+p":
-		return "C-p", false
-	case "ctrl+n":
-		return "C-n", false
-	default:
-		// Single printable rune → send literally
-		if len(key) == 1 {
-			return key, true
-		}
-		return "", false
-	}
-}
-
-// SendSingleKey sends a single key event to a tmux pane.
-func SendSingleKey(p Pane, key string) error {
-	tmuxKey, literal := TeaKeyToTmux(key)
-	if tmuxKey == "" {
-		return nil // unsupported key, ignore
-	}
-	target := p.Session + ":" + p.Window + "." + p.Pane
-	if literal {
-		return exec.Command("tmux", "send-keys", "-l", "-t", target, tmuxKey).Run()
-	}
-	return exec.Command("tmux", "send-keys", "-t", target, tmuxKey).Run()
+// SendKeyMsg forwards one key press to a pane. Typed text — one rune or a
+// batch, Korean included — goes with -l; named keys and ctrl chords by
+// their tmux names (tuikit/tmux TeaKeyToTmux). The old string mapper took
+// any one-byte key as text and dropped the rest, so a Hangul syllable
+// typed into a live preview never reached the pane.
+func SendKeyMsg(p Pane, msg tea.KeyMsg) error {
+	return Client().SendKeyMsg(bg(), p.PaneID, msg)
 }
 
 // SendLiteralKeys sends raw text literally to a tmux pane without appending
 // Enter. Useful for bracketed paste / multi-rune input forwarded through a
 // proxied preview pane.
 func SendLiteralKeys(p Pane, text string) error {
-	target := p.Session + ":" + p.Window + "." + p.Pane
-	return exec.Command("tmux", "send-keys", "-l", "-t", target, text).Run()
+	return Client().SendLiteral(bg(), p.PaneID, text)
 }
 
-// SendKeys sends text input to a tmux pane followed by Enter to submit.
-// Uses -l for the text (literal, no key-name interpretation) then a separate
-// send-keys for Enter so it's treated as a keypress.
+// SendKeys sends text input to a tmux pane followed by Enter to submit:
+// the text with -l (no key-name interpretation), then Enter as a key.
 func SendKeys(p Pane, keys string) error {
-	target := p.Session + ":" + p.Window + "." + p.Pane
-	// Send text literally (no special key interpretation)
-	if err := exec.Command("tmux", "send-keys", "-l", "-t", target, keys).Run(); err != nil {
-		return err
-	}
-	// Send Enter as a key to submit
-	return exec.Command("tmux", "send-keys", "-t", target, "Enter").Run()
+	return Client().SendLine(bg(), p.PaneID, keys)
 }
 
-// CapturePane captures the visible content of a tmux pane.
+// SendInterrupt sends Ctrl-C to a pane.
+func SendInterrupt(p Pane) error {
+	return Client().SendKeys(bg(), p.PaneID, "C-c")
+}
+
+// CapturePane captures the visible content of a tmux pane, with escapes.
 // Does NOT include scrollback.
 func CapturePane(p Pane) (string, error) {
-	target := p.Session + ":" + p.Window + "." + p.Pane
-	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-t", target).Output()
+	out, err := Client().CapturePane(bg(), p.PaneID, tk.CaptureOpts{Escapes: true})
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	return strings.TrimRight(out, "\n"), nil
 }
 
 // NewWindowClaude creates a new tmux window with the given name,
@@ -371,8 +289,8 @@ func NewWindowClaudeWithConfig(windowName, dir, sessionID string, cfg claudecmd.
 	if err != nil {
 		return err
 	}
-	return exec.Command("tmux", "new-window", "-d",
-		"-n", windowName, cmd).Run()
+	_, err = Client().NewWindow(bg(), "", tk.WindowOpts{Name: windowName, Command: tk.Command{Shell: cmd}})
+	return err
 }
 
 // NewWindowClaudeNew creates a new tmux window with the given name,
@@ -386,58 +304,48 @@ func NewWindowClaudeNewWithConfig(windowName, dir string, cfg claudecmd.Config) 
 	if err != nil {
 		return err
 	}
-	return exec.Command("tmux", "new-window", "-d",
-		"-n", windowName, cmd).Run()
+	_, err = Client().NewWindow(bg(), "", tk.WindowOpts{Name: windowName, Command: tk.Command{Shell: cmd}})
+	return err
 }
 
 func ClaudeWindowShellCommand(dir string, cfg claudecmd.Config, args ...string) (string, error) {
 	return claudecmd.ShellCommand(cfg, dir, args...)
 }
 
-// SpawnHiddenWindow creates a hidden tmux window running the given command
-// and returns the Pane reference for capture-pane. The window is created
-// with -d (detached) so it doesn't steal focus.
+// SpawnHiddenWindow creates a detached tmux window running the given command
+// and returns its pane for capture-pane. Only PaneID and WindowName are set;
+// every later call targets the ID.
 func SpawnHiddenWindow(windowName, shellCmd string) (Pane, error) {
-	// Create window and get its pane ID
-	out, err := exec.Command("tmux", "new-window", "-d", "-P",
-		"-F", "#{session_name}:#{window_index}.#{pane_index}",
-		"-n", windowName, shellCmd).Output()
+	id, err := Client().NewWindow(bg(), "", tk.WindowOpts{Name: windowName, Command: tk.Command{Shell: shellCmd}})
 	if err != nil {
 		return Pane{}, err
 	}
-	target := strings.TrimSpace(string(out))
-	parts := strings.SplitN(target, ":", 2)
-	if len(parts) != 2 {
-		return Pane{}, exec.ErrNotFound
-	}
-	sess := parts[0]
-	winPane := strings.SplitN(parts[1], ".", 2)
-	if len(winPane) != 2 {
-		return Pane{}, exec.ErrNotFound
-	}
-	return Pane{
-		Session:    sess,
-		Window:     winPane[0],
-		WindowName: windowName,
-		Pane:       winPane[1],
-	}, nil
+	return Pane{PaneID: id, WindowName: windowName}, nil
 }
 
 // PaneCursorCol returns the cursor column position in the pane.
 func PaneCursorCol(p Pane) (int, error) {
-	target := p.Session + ":" + p.Window + "." + p.Pane
-	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{cursor_x}").Output()
+	out, err := Client().DisplayMessage(bg(), p.PaneID, "#{cursor_x}")
 	if err != nil {
 		return -1, err
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	return n, err
+	return strconv.Atoi(strings.TrimSpace(out))
 }
 
 // KillWindow kills the tmux window containing the given pane.
 func KillWindow(p Pane) error {
-	target := p.Session + ":" + p.Window
-	return exec.Command("tmux", "kill-window", "-t", target).Run()
+	target := p.WindowID
+	if target == "" {
+		target = p.PaneID // tmux resolves a pane to its window
+	}
+	return Client().KillWindow(bg(), target)
+}
+
+// DisplayPopup runs shellCmd in a tmux popup of the given size and waits
+// for it to close. It waits on a person (an editor), so the call has no
+// timeout.
+func DisplayPopup(width, height, shellCmd string) error {
+	return Client().DisplayPopup(tk.Interactive(bg()), "", tk.PopupOpts{Width: width, Height: height, Command: tk.Command{Shell: shellCmd}})
 }
 
 // CurrentWindowClaudes returns project paths of Claude processes running in
@@ -468,7 +376,7 @@ func CurrentWindowClaudes() []string {
 	// Pin "our" window by walking this process's own PPID chain to the tmux
 	// pane that hosts it. That pane's session|window is the window whose
 	// Claude panes we want — independent of which window the client shows.
-	mySession, myWindow := clientActiveWindow()
+	mySession, myWindow := clientActiveWindow(panes)
 	if own := findPaneByPID(panes, ownPanePID(panes)); own != nil {
 		mySession, myWindow = own.Session, own.Window
 	}
@@ -560,17 +468,17 @@ func findPaneByPID(panes []Pane, panePID int) *Pane {
 
 // clientActiveWindow returns the session|window the tmux client currently
 // shows, as a fallback when ownPanePID can't attribute this process to a pane.
-func clientActiveWindow() (session, window string) {
-	out, err := exec.Command("tmux", "display-message", "-p",
-		"#{session_name}|#{window_index}").Output()
+func clientActiveWindow(panes []Pane) (session, window string) {
+	loc, err := Client().Current(bg())
 	if err != nil {
 		return "", ""
 	}
-	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 2)
-	if len(parts) < 2 {
-		return "", ""
+	for _, p := range panes {
+		if p.PaneID == loc.PaneID {
+			return p.Session, p.Window
+		}
 	}
-	return parts[0], parts[1]
+	return "", ""
 }
 
 // CurrentWindowClaudeSessionIDs returns the session IDs of live Claude
@@ -591,19 +499,20 @@ func CurrentWindowClaudeSessionIDs(live []clauderegistry.LiveSession) []string {
 		return nil
 	}
 
-	mySession, myWindow := clientActiveWindow()
+	mySession, myWindow := clientActiveWindow(panes)
 	if own := findPaneByPID(panes, ownPanePID(panes)); own != nil {
 		mySession, myWindow = own.Session, own.Window
 	}
 
-	return claudeSessionsInWindow(panes, live, mySession, myWindow, batchPPIDMap())
+	procs, _ := loadProcs()
+	return claudeSessionsInWindow(panes, live, mySession, myWindow, procs)
 }
 
 // claudeSessionsInWindow attributes each live registry entry to the pane that
 // owns its process and returns the session IDs landing in the named window,
 // in registry order. Pure function over its inputs so the attribution logic is
 // testable without a live tmux or process tree.
-func claudeSessionsInWindow(panes []Pane, live []clauderegistry.LiveSession, session, window string, ppidOf map[int]int) []string {
+func claudeSessionsInWindow(panes []Pane, live []clauderegistry.LiveSession, session, window string, procs tk.Procs) []string {
 	inWindow := make(map[int]bool, len(panes))
 	panePIDs := make(map[int]bool, len(panes))
 	for _, p := range panes {
@@ -616,7 +525,7 @@ func claudeSessionsInWindow(panes []Pane, live []clauderegistry.LiveSession, ses
 	var ids []string
 	seen := make(map[string]bool, len(live))
 	for _, l := range live {
-		panePID := walkToPane(l.PID, panePIDs, ppidOf)
+		panePID := walkToPane(l.PID, panePIDs, procs)
 		if panePID == 0 || !inWindow[panePID] || l.SessionID == "" || seen[l.SessionID] {
 			continue
 		}
@@ -634,7 +543,8 @@ func ownPanePID(panes []Pane) int {
 	for _, p := range panes {
 		panePIDs[p.PID] = true
 	}
-	return walkToPane(os.Getpid(), panePIDs, batchPPIDMap())
+	procs, _ := loadProcs()
+	return walkToPane(os.Getpid(), panePIDs, procs)
 }
 
 // CurrentWindowKey returns "session_name|window_index" for the tmux window
@@ -655,7 +565,8 @@ func CurrentWindowKey() string {
 		}
 	}
 	// Fall back to the client-active window when our pane can't be resolved.
-	session, window := clientActiveWindow()
+	panes, _ := ListPanes()
+	session, window := clientActiveWindow(panes)
 	if session == "" {
 		return ""
 	}
@@ -665,48 +576,29 @@ func CurrentWindowKey() string {
 // MoveWithAndSwitchPane moves the current pane (CSB) to the target's tmux window
 // as a side-by-side split, then focuses the target pane.
 func MoveWithAndSwitchPane(target Pane) error {
+	c := Client()
 	// Target our own pane explicitly: without -t, tmux reports the pane the
 	// client is looking at, and we would join *that* pane into the target
 	// window instead of ours.
-	args := []string{"display-message", "-p"}
-	if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
-		args = append(args, "-t", paneID)
+	self := tk.PaneFromEnv(os.Getenv)
+	if self == "" {
+		return SwitchToPane(target)
 	}
-	args = append(args, "#{pane_id}|#{session_name}:#{window_index}")
-	out, err := exec.Command("tmux", args...).Output()
+	myWindow, err := c.DisplayMessage(bg(), self, "#{window_id}")
 	if err != nil {
 		return SwitchToPane(target)
 	}
-	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 2)
-	if len(parts) < 2 {
+	if err := c.SelectWindow(bg(), target.WindowID); err != nil {
 		return SwitchToPane(target)
 	}
-	myPaneID := parts[0]
-	myWindow := parts[1]
-	targetWindow := target.Session + ":" + target.Window
-
-	// Select target window first
-	exec.Command("tmux", "select-window", "-t", targetWindow).Run()
-
-	// Move CSB pane to target window if in a different window
-	if myWindow != targetWindow {
-		exec.Command("tmux", "join-pane",
-			"-s", myPaneID, "-t", target.PaneID,
-			"-h", "-l", "30%").Run()
+	// Move CSB pane to target window if in a different window. join-pane has
+	// no typed call; both targets are IDs.
+	if strings.TrimSpace(myWindow) != target.WindowID {
+		if _, err := c.Run("join-pane", "-s", self, "-t", target.PaneID, "-h", "-l", "30%"); err != nil {
+			return err
+		}
 	}
-
-	// Focus the target pane
-	return exec.Command("tmux", "select-pane", "-t", target.PaneID).Run()
-}
-
-// PromptAndSend opens a tmux command-prompt that sends the typed text
-// to the target pane followed by Enter so Claude submits.
-func PromptAndSend(p Pane, promptText string) error {
-	target := p.Session + ":" + p.Window + "." + p.Pane
-	// Use -l for literal text, then a separate send-keys for Enter.
-	// tmux command-prompt runs the command string in tmux's command mode.
-	sendCmd := "send-keys -l -t " + target + " '%1' \\; send-keys -t " + target + " Enter"
-	return exec.Command("tmux", "command-prompt", "-p", promptText, sendCmd).Run()
+	return c.SelectPane(bg(), target.PaneID)
 }
 
 // ShellQuote wraps a string in single quotes for safe shell embedding.

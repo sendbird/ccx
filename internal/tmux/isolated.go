@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	tk "github.com/keyolk/tuikit/tmux"
+
 	"github.com/sendbird/ccx/internal/claudecmd"
 )
 
@@ -99,10 +101,12 @@ func (e *IsolatedEnv) ScriptWithConfig(cfg claudecmd.Config, extraArgs ...string
 
 // RunPopup launches the script in a tmux display-popup with a nested tmux
 // session for scrollback support. Blocks until the popup exits.
-func (e *IsolatedEnv) RunPopup(script string) {
+func (e *IsolatedEnv) RunPopup(script string) error {
 	// Write script to file to avoid quoting issues with nested tmux
 	scriptPath := filepath.Join(e.HomeDir, "run.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/bash\n"+script+"\n"), 0o755)
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\n"+script+"\n"), 0o755); err != nil {
+		return err
+	}
 
 	// Nested tmux session enables mouse scroll and scrollback in the popup.
 	// status off hides the inner status bar; mouse on enables scroll.
@@ -111,8 +115,10 @@ func (e *IsolatedEnv) RunPopup(script string) {
 		"tmux new-session -s %s 'bash %s' \\; set status off \\; set mouse on",
 		ShellQuote(sessionName), ShellQuote(scriptPath),
 	)
-	exec.Command("tmux", "display-popup", "-E", "-w", "90%", "-h", "80%",
-		"bash", "-c", nestedCmd).Run()
+	return Client().DisplayPopup(tk.Interactive(bg()), "", tk.PopupOpts{
+		Width: "90%", Height: "80%",
+		Command: tk.Command{Argv: []string{"bash", "-c", nestedCmd}},
+	})
 }
 
 // Cleanup removes the temp directory.

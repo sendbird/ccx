@@ -333,7 +333,7 @@ func (a *App) restoreExecutionViewState(key string, isMain bool) {
 func (a *App) activateExecutionContext(key string, restore bool) bool {
 	context := a.executionContextByKey(key)
 	if context.Key == "" {
-		a.copiedMsg = "Execution context is unavailable"
+		a.flash("Execution context is unavailable")
 		return false
 	}
 	if context.Key == a.conv.execution.ActiveKey {
@@ -343,7 +343,7 @@ func (a *App) activateExecutionContext(key string, restore bool) bool {
 
 	entries, err := session.LoadMessages(context.Key)
 	if err != nil || len(entries) == 0 {
-		a.copiedMsg = "No messages in execution context"
+		a.flash("No messages in execution context")
 		return false
 	}
 	if context.Agent.ID != "" {
@@ -353,7 +353,7 @@ func (a *App) activateExecutionContext(key string, restore bool) bool {
 		}
 	}
 	if len(entries) == 0 {
-		a.copiedMsg = "No messages in execution context"
+		a.flash("No messages in execution context")
 		return false
 	}
 
@@ -595,7 +595,7 @@ func (a *App) jumpToExecutionOrigin() (tea.Model, tea.Cmd) {
 	context := a.cursorExecutionContext()
 	origin, ok := a.executionContextOrigin(context)
 	if !ok {
-		a.copiedMsg = "No spawn origin for this context"
+		a.flash("No spawn origin for this context")
 		return a, nil
 	}
 	target := metaEntryTarget{
@@ -608,7 +608,7 @@ func (a *App) jumpToExecutionOrigin() (tea.Model, tea.Cmd) {
 	if m, cmd, handled := a.jumpToMetaTarget(target); handled {
 		return m, cmd
 	}
-	a.copiedMsg = "Origin turn is not available"
+	a.flash("Origin turn is not available")
 	return a, nil
 }
 

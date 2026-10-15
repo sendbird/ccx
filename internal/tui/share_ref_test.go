@@ -21,7 +21,7 @@ func TestOpenShareRef_NoShareable(t *testing.T) {
 	if a.shareRefMenu {
 		t.Fatalf("expected menu closed when nothing shareable, got open")
 	}
-	if a.copiedMsg == "" {
+	if a.flashText() == "" {
 		t.Errorf("expected a toast explaining nothing to share")
 	}
 }

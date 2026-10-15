@@ -1,124 +1,145 @@
+// Package kitty is ccx's thin layer over tuikit/kitty.
+//
+// ccx draws an inline image by appending cursor-placed, file-transmitted
+// Kitty graphics sequences to the frame (DisplayImage / PlaceImage) and
+// clearing them on the next frame. tuikit/kitty supplies the parts that used
+// to be hand-rolled here: terminal detection (also behind tmux), the escape
+// builders with tmux passthrough wrapping, the pane query, the visibility
+// watcher and the allow-passthrough promotion.
+//
+// Detection runs tmux, so it happens once, in Init, before a program starts.
+// Until then (and in tests, which never call Init) the terminal counts as
+// unsupported: nothing here runs tmux or emits a sequence. The detected Caps
+// and the last known pane geometry are package state because every view that
+// draws an image reads them, and threading them through each model would
+// change many signatures for no behavioural gain.
 package kitty
 
 import (
-	"encoding/base64"
-	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"os"
-	"os/exec"
-	"strings"
 	"sync"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	tk "github.com/keyolk/tuikit/kitty"
 )
+
+// imageID is the one image ccx shows at a time.
+const imageID = 1
+
+// WatchInterval is how often the visibility watcher polls tmux. tmux does not
+// forward focus-out on a window switch, so polling is the only signal; 250ms
+// feels responsive without thrashing the tmux control channel.
+const WatchInterval = 250 * time.Millisecond
 
 var (
-	supported     bool
-	supportedOnce sync.Once
+	mu    sync.Mutex
+	caps  tk.Caps
+	tmux  tk.TmuxQuerier
+	pane  = tk.Pane{Visible: true}
+	inits sync.Once
 )
 
-// Supported returns true if the terminal supports Kitty graphics protocol.
-// Checks environment variables and tmux outer terminal hints.
-// Cached for the session lifetime.
-//
-// When running inside tmux with Kitty support, this function also promotes
-// the tmux `allow-passthrough` option to `all` if it is currently `on`.
-// Without `all`, tmux drops any passthrough sequences emitted from an
-// inactive (hidden) pane, which means a Kitty image placed while the pane
-// is visible stays stuck on screen after the user switches tmux windows:
-// our clear sequence can never reach the terminal from the hidden pane.
-func Supported() bool {
-	supportedOnce.Do(func() {
-		// Explicit user override
-		if os.Getenv("CCX_KITTY") == "1" {
-			supported = true
-			ensureTmuxAllowPassthrough()
-			return
-		}
-		if os.Getenv("CCX_KITTY") == "0" {
-			supported = false
-			return
-		}
-		term := os.Getenv("TERM")
-		termProg := os.Getenv("TERM_PROGRAM")
-		// Known Kitty-compatible terminals
-		switch {
-		case termProg == "kitty":
-			supported = true
-		case termProg == "WezTerm":
-			supported = true
-		case termProg == "ghostty":
-			supported = true
-		case strings.HasPrefix(term, "xterm-kitty"):
-			supported = true
-		}
-		// Kitty-specific env vars that may survive tmux
-		if !supported {
-			if os.Getenv("KITTY_WINDOW_ID") != "" || os.Getenv("KITTY_PID") != "" {
-				supported = true
+// Init detects the terminal with the real environment, asking tmux through
+// q (ccx passes its tuikit/tmux Client, which satisfies tk.TmuxQuerier).
+// CCX_KITTY ("1"/"0") forces the answer, as before. Call it from main before
+// the program starts; later calls are no-ops.
+func Init(q tk.TmuxQuerier) {
+	inits.Do(func() {
+		env := func(k string) string {
+			if k == tk.OverrideEnv {
+				return os.Getenv("CCX_KITTY")
 			}
+			return os.Getenv(k)
 		}
-		// Inside tmux: check if the outer terminal is Kitty-compatible.
-		// tmux stores the original TERM in its socket environment.
-		if !supported && os.Getenv("TMUX") != "" {
-			supported = detectKittyViaTmux()
-		}
-		if supported {
-			ensureTmuxAllowPassthrough()
-		}
+		SetCaps(tk.Detect(env, q), q)
 	})
-	return supported
 }
 
-// detectKittyViaTmux checks tmux's server environment for Kitty indicators.
-func detectKittyViaTmux() bool {
-	out, err := exec.Command("tmux", "show-environment", "-g", "TERM_PROGRAM").Output()
-	if err == nil {
-		val := strings.TrimSpace(string(out))
-		// Format: TERM_PROGRAM=kitty or -TERM_PROGRAM (unset)
-		if strings.HasPrefix(val, "TERM_PROGRAM=") {
-			prog := strings.TrimPrefix(val, "TERM_PROGRAM=")
-			if prog == "kitty" || prog == "WezTerm" || prog == "ghostty" {
-				return true
-			}
-		}
-	}
-	// Also check KITTY_WINDOW_ID in tmux environment
-	out, err = exec.Command("tmux", "show-environment", "-g", "KITTY_WINDOW_ID").Output()
-	if err == nil {
-		val := strings.TrimSpace(string(out))
-		if strings.HasPrefix(val, "KITTY_WINDOW_ID=") {
-			return true
-		}
-	}
-	return false
+// SetCaps installs detected capabilities and the tmux querier used for pane
+// queries. Tests use it to turn graphics on without a terminal or tmux.
+func SetCaps(c tk.Caps, q tk.TmuxQuerier) {
+	mu.Lock()
+	defer mu.Unlock()
+	caps, tmux = c, q
+	pane = tk.Pane{Visible: true}
 }
 
-// ensureTmuxAllowPassthrough promotes tmux's `allow-passthrough` option from
-// `on` to `all`. The two settings differ in how tmux handles DCS passthrough
-// from a HIDDEN pane: `on` drops the sequence entirely, while `all` lets it
-// through. Without `all`, a Kitty image placed by ccx while its pane is the
-// active one stays visible on the terminal after the user switches to a
-// different tmux window — we can't emit the clear sequence from an invisible
-// pane. Promoting the option unblocks that clear path.
-//
-// No-op when not inside tmux or when the option is already `all`. Best-effort
-// — we swallow errors because Kitty rendering still works if the user
-// manually handles this, and we don't want to surface a fatal error.
-func ensureTmuxAllowPassthrough() {
-	if os.Getenv("TMUX") == "" {
-		return
+// Current returns the installed capabilities.
+func Current() tk.Caps {
+	mu.Lock()
+	defer mu.Unlock()
+	return caps
+}
+
+// Supported reports whether the terminal speaks the Kitty graphics protocol.
+func Supported() bool { return Current().Supported }
+
+// EnsurePassthroughCmd promotes tmux's allow-passthrough to "all" off the UI
+// loop (nil when there is nothing to do). With "on", tmux drops passthrough
+// from a hidden pane, so an image placed while ccx's window was visible stays
+// on screen after a window switch: the clear can never get through.
+func EnsurePassthroughCmd() tea.Cmd {
+	mu.Lock()
+	c, q := caps, tmux
+	mu.Unlock()
+	if q == nil {
+		return nil
 	}
-	out, err := exec.Command("tmux", "show-options", "-gv", "allow-passthrough").Output()
-	if err != nil {
-		return
+	return tk.EnsurePassthroughCmd(c, q)
+}
+
+// SetPane records the pane geometry and visibility from a pane query, so
+// PlaceImage can turn pane coordinates into terminal coordinates without
+// running tmux in View.
+func SetPane(p tk.Pane) {
+	mu.Lock()
+	defer mu.Unlock()
+	pane = p
+}
+
+// Pane is the last recorded pane state (visible at 0,0 until a query lands).
+func Pane() tk.Pane {
+	mu.Lock()
+	defer mu.Unlock()
+	return pane
+}
+
+// probe queries our own pane by id. Outside tmux it reports visible at 0,0.
+func probe() (tk.Pane, error) {
+	mu.Lock()
+	c, q := caps, tmux
+	mu.Unlock()
+	if q == nil || !c.InTmux {
+		return tk.Pane{Visible: true}, nil
 	}
-	current := strings.TrimSpace(string(out))
-	if current == "all" {
-		return
+	return tk.QueryPane(q, c.Pane)
+}
+
+// PaneCmd queries the pane once, off the UI loop, and reports a
+// tk.PaneMsg. It replaces the old cached offset's invalidation: the caller
+// records the answer with SetPane.
+func PaneCmd() tea.Cmd {
+	if !Supported() {
+		return nil
 	}
-	_ = exec.Command("tmux", "set-option", "-g", "allow-passthrough", "all").Run()
+	return func() tea.Msg {
+		p, err := probe()
+		return tk.PaneMsg{Pane: p, Err: err}
+	}
+}
+
+// WatchCmd polls the pane and returns only when the answer differs from
+// last, so an idle app gets no messages. Re-arm it with the message it got.
+func WatchCmd(last tk.PaneMsg) tea.Cmd {
+	if !Supported() {
+		return nil
+	}
+	return tk.WatchPane(last, probe, WatchInterval)
 }
 
 // ImageSize returns the pixel dimensions of an image file.
@@ -136,171 +157,52 @@ func ImageSize(path string) (width, height int) {
 	return cfg.Width, cfg.Height
 }
 
-// FitSize computes cell dimensions that fit within maxCols x maxRows
-// while preserving the image's aspect ratio.
-// Assumes ~2:1 cell aspect ratio (cells are roughly twice as tall as wide).
+// FitSize computes cell dimensions that fit within maxCols x maxRows while
+// preserving the image's aspect ratio, for the default cell (twice as tall
+// as wide). An unknown image size gets the whole box.
 func FitSize(imgW, imgH, maxCols, maxRows int) (cols, rows int) {
-	if imgW <= 0 || imgH <= 0 || maxCols <= 0 || maxRows <= 0 {
+	if maxCols <= 0 || maxRows <= 0 {
 		return maxCols, maxRows
 	}
-	// Cell aspect: each cell is ~2x taller than wide in pixels
-	// So 1 row ≈ 2 cols in pixel height
-	aspectW := float64(imgW)
-	aspectH := float64(imgH) / 2.0 // convert pixel height to cell-equivalent width
-
-	scaleW := float64(maxCols) / aspectW
-	scaleH := float64(maxRows) / aspectH
-	scale := scaleW
-	if scaleH < scale {
-		scale = scaleH
-	}
-
-	cols = int(aspectW * scale)
-	rows = int(aspectH * scale)
-	if cols < 1 {
-		cols = 1
-	}
-	if rows < 1 {
-		rows = 1
-	}
-	if cols > maxCols {
-		cols = maxCols
-	}
-	if rows > maxRows {
-		rows = maxRows
-	}
-	return cols, rows
+	return tk.Fit(imgW, imgH, maxCols, maxRows, 0, 0)
 }
 
-// DisplayImage returns Kitty graphics protocol escape sequences to display
-// an image from a file path at the given terminal cell position and size.
-// Uses file path transfer mode (t=f) so the terminal reads directly from disk.
-// Returns empty string if the file doesn't exist.
+// DisplayImage returns the sequences that transmit the image at path (the
+// terminal reads the file) and place it at the cursor in cols x rows cells.
+// Returns "" when unsupported or the file does not exist.
 func DisplayImage(path string, cols, rows int) string {
+	c := Current()
+	if !c.Supported {
+		return ""
+	}
 	if _, err := os.Stat(path); err != nil {
 		return ""
 	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(path))
-	// a=T: transmit and display
-	// t=f: file path transfer
-	// f=100: auto-detect format
-	// c=cols, r=rows: display size in cells
-	seq := fmt.Sprintf("\x1b_Ga=T,t=f,f=100,c=%d,r=%d;%s\x1b\\", cols, rows, encoded)
-	return wrapForTmux(seq)
+	return c.TransmitFile(imageID, path, tk.TransmitOpts{}) + c.Place(imageID, 0, cols, rows, tk.PlaceOpts{})
 }
 
-// ClearImages returns Kitty graphics protocol escape sequence to clear all
-// images from the screen. Should be called when leaving image display context.
+// ClearImages returns the sequence that removes every image from the
+// screen; "" when unsupported.
 func ClearImages() string {
-	return wrapForTmux("\x1b_Ga=d;\x1b\\")
+	return Current().DeleteAll()
 }
 
-var (
-	cachedPaneTop  int
-	cachedPaneLeft int
-	paneOffsetOnce sync.Once
-)
-
-// PaneOffset returns the tmux pane's top-left position in the terminal.
-// Returns (0, 0) if not inside tmux or if the query fails.
-// Cached after first call; call InvalidatePaneOffset() on resize.
-func PaneOffset() (top, left int) {
-	if os.Getenv("TMUX") == "" {
-		return 0, 0
-	}
-	paneOffsetOnce.Do(fetchPaneOffset)
-	return cachedPaneTop, cachedPaneLeft
-}
-
-// PaneVisible reports whether our tmux pane is currently on-screen. This is
-// true when the pane belongs to the active window; moving focus between
-// panes within the same window keeps the pane visible, so Kitty graphics
-// should NOT be cleared in that case. When not running inside tmux we
-// optimistically assume the pane is visible.
-//
-// The check is a `tmux display-message -t $TMUX_PANE` query. It MUST target
-// our own pane by id, otherwise tmux resolves the default target against the
-// client's current pane — which, right after a window switch, lives in the
-// new window and reports `window_active=1` even though WE are now hidden.
-func PaneVisible() bool {
-	paneID := os.Getenv("TMUX_PANE")
-	if os.Getenv("TMUX") == "" || paneID == "" {
-		return true
-	}
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{window_active}").Output()
-	if err != nil {
-		// On query failure default to "visible" to avoid spurious clears
-		// when tmux returns transient errors during window switches.
-		return true
-	}
-	return strings.TrimSpace(string(out)) == "1"
-}
-
-// InvalidatePaneOffset forces re-query of tmux pane position on next call.
-func InvalidatePaneOffset() {
-	paneOffsetOnce = sync.Once{}
-}
-
-func fetchPaneOffset() {
-	// Target our own pane for the same reason PaneVisible does: the default
-	// target follows the client's focus, not us.
-	args := []string{"display-message", "-p"}
-	if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
-		args = append(args, "-t", paneID)
-	}
-	args = append(args, "#{pane_top} #{pane_left}")
-	out, err := exec.Command("tmux", args...).Output()
-	if err != nil {
-		return
-	}
-	parts := strings.Fields(strings.TrimSpace(string(out)))
-	if len(parts) != 2 {
-		return
-	}
-	fmt.Sscanf(parts[0], "%d", &cachedPaneTop)
-	fmt.Sscanf(parts[1], "%d", &cachedPaneLeft)
-}
-
-// PlaceImage returns escape sequences to move the cursor to (row, col) and
-// then display an image there. Row and col are 1-based coordinates relative
-// to the application pane. Inside tmux, the cursor move and image draw are
-// both sent through DCS passthrough with absolute terminal coordinates.
+// PlaceImage returns the sequences that draw the image at path with its top
+// left at (row, col), 1-based and relative to ccx's pane. Inside tmux the
+// cursor move goes through the same passthrough, offset by the pane's
+// position from the last pane query.
 func PlaceImage(path string, row, col, cols, rows int) string {
-	if path == "" {
+	c := Current()
+	if !c.Supported || path == "" {
 		return ""
 	}
-	img := DisplayImage(path, cols, rows)
-	if img == "" {
+	if _, err := os.Stat(path); err != nil {
 		return ""
 	}
-	if inTmux() {
-		// Inside tmux: cursor move + image must both go through passthrough
-		// with absolute terminal coordinates
-		top, left := PaneOffset()
-		absRow := row + top
-		absCol := col + left
-		cursor := fmt.Sprintf("\x1b[%d;%dH", absRow, absCol)
-		raw := cursor + fmt.Sprintf("\x1b_Ga=T,t=f,f=100,c=%d,r=%d;%s\x1b\\", cols, rows,
-			base64.StdEncoding.EncodeToString([]byte(path)))
-		return wrapForTmux(raw)
+	o := tk.PlaceOpts{MoveTo: true, Row: row - 1, Col: col - 1}
+	if c.InTmux {
+		p := Pane()
+		o.PaneTop, o.PaneLeft = p.Top, p.Left
 	}
-	// Not in tmux: simple cursor move + image
-	cursor := fmt.Sprintf("\x1b[%d;%dH", row, col)
-	return cursor + img
-}
-
-// inTmux returns true if running inside tmux.
-func inTmux() bool {
-	return os.Getenv("TMUX") != ""
-}
-
-// wrapForTmux wraps Kitty escape sequences for tmux passthrough.
-// tmux requires DCS passthrough: \ePtmux;\e<seq>\e\\
-func wrapForTmux(seq string) string {
-	if !inTmux() {
-		return seq
-	}
-	// Double all ESC bytes inside the sequence for tmux passthrough
-	inner := strings.ReplaceAll(seq, "\x1b", "\x1b\x1b")
-	return "\x1bPtmux;" + inner + "\x1b\\"
+	return c.TransmitFile(imageID, path, tk.TransmitOpts{}) + c.Place(imageID, 0, cols, rows, o)
 }

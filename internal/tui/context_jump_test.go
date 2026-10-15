@@ -12,8 +12,8 @@ func TestOpenRelatedContextNodeNoTarget(t *testing.T) {
 	if m != app || cmd != nil {
 		t.Fatalf("expected no-op openRelatedContextNode")
 	}
-	if app.copiedMsg != "No related destination" {
-		t.Fatalf("unexpected message: %q", app.copiedMsg)
+	if app.flashText() != "No related destination" {
+		t.Fatalf("unexpected message: %q", app.flashText())
 	}
 }
 
@@ -49,8 +49,8 @@ func TestOpenSelectedContextNodeUsesCursor(t *testing.T) {
 	}
 	app.sessCtxCursor = 0
 	app.openSelectedContextNode()
-	if app.copiedMsg != "No related destination" {
-		t.Fatalf("cursor 0 (no target) msg = %q", app.copiedMsg)
+	if app.flashText() != "No related destination" {
+		t.Fatalf("cursor 0 (no target) msg = %q", app.flashText())
 	}
 	// Out-of-range cursor is a safe no-op.
 	app.sessCtxCursor = 99

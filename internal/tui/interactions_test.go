@@ -47,7 +47,7 @@ func TestConversationHelpUsesConfigurablePreviewCopyBinding(t *testing.T) {
 	app.updateConvPreview()
 
 	help := stripANSI(app.convHelpLine(""))
-	if !strings.Contains(help, "ctrl+c:copy") {
+	if !strings.Contains(help, "ctrl+c copy") {
 		t.Fatalf("expected custom preview copy binding in help, got %q", help)
 	}
 }
@@ -61,10 +61,10 @@ func TestZoomedInspectorHelpUsesConfigurableActionBinding(t *testing.T) {
 	app.width = 400
 
 	help := stripANSI(app.convHelpLine(""))
-	if !strings.Contains(help, "A:actions") {
+	if !strings.Contains(help, "A actions") {
 		t.Fatalf("expected configurable actions binding in inspector help, got %q", help)
 	}
-	if !strings.Contains(help, "z:zoom") {
+	if !strings.Contains(help, "z zoom") {
 		t.Fatalf("expected zoom control in inspector help, got %q", help)
 	}
 }
@@ -161,8 +161,8 @@ func TestHandleConvActionsMenuCopyCopiesRenderedFacet(t *testing.T) {
 	if strings.Contains(copied, "delegate image inspection") {
 		t.Fatalf("action copy payload leaked selected message: %q", copied)
 	}
-	if app.copiedMsg != "Copied inspector!" {
-		t.Fatalf("copy confirmation = %q", app.copiedMsg)
+	if app.flashText() != "Copied inspector!" {
+		t.Fatalf("copy confirmation = %q", app.flashText())
 	}
 }
 
@@ -231,15 +231,15 @@ func TestHandleConvActionsMenuCopyCopiesSelectedBlock(t *testing.T) {
 		t.Fatal("expected fold state after preview update")
 	}
 	app.conv.split.Folds.BlockCursor = 0
-	app.copiedMsg = ""
+	app.flash("")
 
 	m, _ := app.handleConvActionsMenu("c")
 	app = m.(*App)
 	if app.convActionsMenu {
 		t.Fatal("expected actions menu to close after handling copy")
 	}
-	if !strings.Contains(app.copiedMsg, "Copied") {
-		t.Fatalf("expected copy confirmation, got %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "Copied") {
+		t.Fatalf("expected copy confirmation, got %q", app.flashText())
 	}
 }
 
@@ -265,8 +265,8 @@ func TestHandleSessionPreviewActionsMenuCopyCopiesPreviewMessage(t *testing.T) {
 	if app.actionsMenu {
 		t.Fatal("expected actions menu to close after copy")
 	}
-	if !strings.Contains(app.copiedMsg, "Copied message") {
-		t.Fatalf("expected preview copy confirmation, got %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "Copied message") {
+		t.Fatalf("expected preview copy confirmation, got %q", app.flashText())
 	}
 }
 
@@ -310,8 +310,8 @@ func TestHandleBulkActionsMenuCopyCopiesSelectedSessionPaths(t *testing.T) {
 	if app.actionsMenu {
 		t.Fatal("expected bulk actions menu to close after copy")
 	}
-	if !strings.Contains(app.copiedMsg, "Copied 2 session paths") {
-		t.Fatalf("expected bulk copy confirmation, got %q", app.copiedMsg)
+	if !strings.Contains(app.flashText(), "Copied 2 session paths") {
+		t.Fatalf("expected bulk copy confirmation, got %q", app.flashText())
 	}
 }
 

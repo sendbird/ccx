@@ -358,9 +358,9 @@ func (a *App) runOutputAction(row outputActionRow, key string) (tea.Model, tea.C
 		switch act.kind {
 		case outputActionOpenURL:
 			if err := a.openInBrowser(row.out.URL); err != nil {
-				a.copiedMsg = "Open failed: " + err.Error()
+				a.flash("Open failed: " + err.Error())
 			} else {
-				a.copiedMsg = "Opened " + row.out.Title
+				a.flash("Opened " + row.out.Title)
 			}
 			return a, nil
 		case outputActionJump:
@@ -383,7 +383,7 @@ func (a *App) runOutputAction(row outputActionRow, key string) (tea.Model, tea.C
 				target = row.out.Path
 			}
 			copyToClipboard(target)
-			a.copiedMsg = "Copied " + row.out.Title
+			a.flash("Copied " + row.out.Title)
 			return a, nil
 		}
 	}
@@ -490,9 +490,9 @@ func (a *App) openSelectedOutput() (tea.Model, tea.Cmd, bool) {
 	}
 	if o.URL != "" {
 		if err := a.openInBrowser(o.URL); err != nil {
-			a.copiedMsg = "Open failed: " + err.Error()
+			a.flash("Open failed: " + err.Error())
 		} else {
-			a.copiedMsg = "Opened " + o.Title
+			a.flash("Opened " + o.Title)
 		}
 		return a, nil, true
 	}
@@ -500,7 +500,7 @@ func (a *App) openSelectedOutput() (tea.Model, tea.Cmd, bool) {
 		// Discovered on disk (scratchpad, a memory note with no recorded write):
 		// there is no transcript entry to jump to, so surface the path instead
 		// of silently doing nothing.
-		a.copiedMsg = o.Path
+		a.flash(o.Path)
 		return a, nil, true
 	}
 	// Jump against the session the digest is tracking, not whatever the list
@@ -523,6 +523,6 @@ func (a *App) copySelectedOutput() (tea.Model, tea.Cmd, bool) {
 		return a, nil, true
 	}
 	copyToClipboard(target)
-	a.copiedMsg = "Copied " + o.Title
+	a.flash("Copied " + o.Title)
 	return a, nil, true
 }
