@@ -1,8 +1,13 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"testing"
+
+	tk "github.com/keyolk/tuikit/tmux"
+
+	"github.com/sendbird/ccx/internal/tmux"
 )
 
 // TestMain isolates the whole package from the developer's real
@@ -41,6 +46,11 @@ func TestMain(m *testing.M) {
 	// it may be on a developer machine.
 	os.Setenv("XDG_STATE_HOME", home+"/.local/state")
 	persistUIState = false
+	// No test may reach the real tmux server or process table, even when
+	// the suite runs inside tmux: an unscripted Fake fails every call, and
+	// the ps snapshot is empty. Tests that need answers install their own.
+	tmux.SetClient(tk.Client{Runner: tk.NewFake()})
+	tmux.SetProcSource(func(context.Context) ([]byte, error) { return nil, nil })
 
 	code := m.Run()
 

@@ -65,7 +65,7 @@ func RunPickSessionTUI(claudeDir, search string, multi bool) PickSessionExitCode
 	})
 
 	// Detect Kitty graphics once, before the program: it may query tmux.
-	kitty.Init()
+	kitty.Init(tmux.Client())
 	p := tea.NewProgram(app,
 		tea.WithAltScreen(),
 		tea.WithOutput(os.Stderr),

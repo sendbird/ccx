@@ -146,9 +146,11 @@ func (a *App) runDebouncedPreview() tea.Cmd {
 // captureAfterKeyCmd sends a key to the tmux pane, waits briefly for tmux to
 // process it, then captures the pane content. This gives responsive feedback
 // on keypress without constant polling.
-func captureAfterKeyCmd(p tmux.Pane, key string) tea.Cmd {
+func captureAfterKeyCmd(p tmux.Pane, key tea.KeyMsg) tea.Cmd {
 	return func() tea.Msg {
-		tmux.SendSingleKey(p, key)
+		if err := tmux.SendKeyMsg(p, key); err != nil {
+			return liveCaptureMsg{failed: true}
+		}
 		time.Sleep(30 * time.Millisecond)
 		content, err := tmux.CapturePane(p)
 		if err != nil || !tmux.HasClaude(p.PID) {
@@ -162,7 +164,9 @@ func captureAfterKeyCmd(p tmux.Pane, key string) tea.Cmd {
 // input) to the tmux pane, then captures the pane content.
 func captureAfterLiteralCmd(p tmux.Pane, text string) tea.Cmd {
 	return func() tea.Msg {
-		tmux.SendLiteralKeys(p, text)
+		if err := tmux.SendLiteralKeys(p, text); err != nil {
+			return liveCaptureMsg{failed: true}
+		}
 		time.Sleep(30 * time.Millisecond)
 		content, err := tmux.CapturePane(p)
 		if err != nil || !tmux.HasClaude(p.PID) {
@@ -1264,6 +1268,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case configTestDoneMsg:
 		os.RemoveAll(msg.tmpDir)
+		if msg.err != nil {
+			a.flash("Test popup failed: " + msg.err.Error())
+		}
 		a.clearCfgSelection()
 		if a.state == viewConfig {
 			a.refreshConfigExplorer()
@@ -1272,6 +1279,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pluginTestDoneMsg:
 		os.RemoveAll(msg.tmpDir)
+		if msg.err != nil {
+			a.flash("Test popup failed: " + msg.err.Error())
+		}
 		a.clearPlgSelection()
 		return a, nil
 
@@ -1687,7 +1697,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts = toast.OnKey(a.toasts)
 		// Pane proxy focused: forward ctrl+c to tmux pane instead of quitting
 		if msg.String() == "ctrl+c" && a.isPaneProxyFocused() {
-			return a, captureAfterKeyCmd(a.paneProxy.pane, "ctrl+c")
+			return a, captureAfterKeyCmd(a.paneProxy.pane, msg)
 		}
 		if msg.String() == "ctrl+c" {
 			return a.quit()
@@ -2269,9 +2279,9 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Send backslash + enter for multi-line input in Claude
 			return a, a.liveNewlineCmd()
 		case "left":
-			return a, captureAfterKeyCmd(a.paneProxy.pane, "left")
+			return a, captureAfterKeyCmd(a.paneProxy.pane, msg)
 		}
-		return a.handlePaneProxyKey(key)
+		return a.handlePaneProxyKey(msg)
 	}
 
 	// View-specific keys. Resolved here, past the text-input and pane-proxy
@@ -2759,7 +2769,7 @@ func (a *App) skipHeaderInDirection(oldIdx, newIdx int) {
 
 // handlePaneProxyKey forwards a key to the tmux pane and captures the result.
 // Uses captureAfterKeyCmd to send key + capture in one Cmd (no polling needed).
-func (a *App) handlePaneProxyKey(key string) (tea.Model, tea.Cmd) {
+func (a *App) handlePaneProxyKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, captureAfterKeyCmd(a.paneProxy.pane, key)
 }
 
@@ -4776,7 +4786,9 @@ func (a *App) handleLiveInputKey(key string) (tea.Model, tea.Cmd) {
 				editor = "vim"
 			}
 			cmd := fmt.Sprintf("cd %s && %s %s", shellescape(projDir), editor, tmpFile.Name())
-			exec.Command("tmux", "display-popup", "-E", "-w", "80%", "-h", "70%", cmd).Run()
+			if err := tmux.DisplayPopup("80%", "70%", cmd); err != nil {
+				return liveInputSentMsg{err: err}
+			}
 
 			content, readErr := os.ReadFile(tmpFile.Name())
 			if readErr != nil || len(strings.TrimSpace(string(content))) == 0 {

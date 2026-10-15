@@ -20,6 +20,7 @@ import (
 	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/session"
+	"github.com/sendbird/ccx/internal/tmux"
 	"github.com/sendbird/ccx/internal/tui"
 )
 
@@ -1447,7 +1448,7 @@ func RunPicker(kind string, items []PickerItem, openerCfg opener.Config, ctx pic
 	if len(items) == 0 {
 		return nil, fmt.Errorf("no %s found in session", kind)
 	}
-	kitty.Init()
+	kitty.Init(tmux.Client())
 	model := newPickerModel(kind, items, openerCfg, ctx)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()

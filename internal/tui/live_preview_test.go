@@ -6,7 +6,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sendbird/ccx/internal/session"
-	"github.com/sendbird/ccx/internal/tmux"
 )
 
 func init() {
@@ -259,32 +258,6 @@ func TestLiveTickSchedulesTick(t *testing.T) {
 
 	if cmd == nil {
 		t.Error("liveTickMsg should schedule next tick when in live preview mode")
-	}
-}
-
-// TestTeaKeyToTmux verifies key mapping from Bubble Tea to tmux.
-func TestTeaKeyToTmux(t *testing.T) {
-	tests := []struct {
-		input   string
-		tmuxKey string
-		literal bool
-	}{
-		{"enter", "Enter", false},
-		{"backspace", "BSpace", false},
-		{"tab", "Tab", false},
-		{"up", "Up", false},
-		{"ctrl+c", "C-c", false},
-		{"a", "a", true},
-		{"1", "1", true},
-		{"space", "Space", false},
-		{" ", "Space", false},
-		{"unknown-key", "", false},
-	}
-	for _, tt := range tests {
-		key, literal := tmux.TeaKeyToTmux(tt.input)
-		if key != tt.tmuxKey || literal != tt.literal {
-			t.Errorf("tmux.TeaKeyToTmux(%q) = (%q, %v), want (%q, %v)", tt.input, key, literal, tt.tmuxKey, tt.literal)
-		}
 	}
 }
 

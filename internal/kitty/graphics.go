@@ -44,10 +44,11 @@ var (
 	inits sync.Once
 )
 
-// Init detects the terminal with the real environment and tmux. CCX_KITTY
-// ("1"/"0") forces the answer, as before. Call it from main before the
-// program starts; later calls are no-ops.
-func Init() {
+// Init detects the terminal with the real environment, asking tmux through
+// q (ccx passes its tuikit/tmux Client, which satisfies tk.TmuxQuerier).
+// CCX_KITTY ("1"/"0") forces the answer, as before. Call it from main before
+// the program starts; later calls are no-ops.
+func Init(q tk.TmuxQuerier) {
 	inits.Do(func() {
 		env := func(k string) string {
 			if k == tk.OverrideEnv {
@@ -55,7 +56,7 @@ func Init() {
 			}
 			return os.Getenv(k)
 		}
-		SetCaps(tk.Detect(env, tk.ExecTmux{}), tk.ExecTmux{})
+		SetCaps(tk.Detect(env, q), q)
 	})
 }
 

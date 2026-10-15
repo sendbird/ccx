@@ -1119,12 +1119,15 @@ func (a *App) launchConfigTest() (tea.Model, tea.Cmd) {
 	a.flash(fmt.Sprintf("Testing %d configs…", len(items)))
 
 	return a, func() tea.Msg {
-		env.RunPopup(script)
-		return configTestDoneMsg{tmpDir: env.HomeDir}
+		err := env.RunPopup(script)
+		return configTestDoneMsg{tmpDir: env.HomeDir, err: err}
 	}
 }
 
-type configTestDoneMsg struct{ tmpDir string }
+type configTestDoneMsg struct {
+	tmpDir string
+	err    error
+}
 
 // --- Category filter ---
 

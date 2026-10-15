@@ -1,7 +1,6 @@
 package tmux
 
 import (
-	"os/exec"
 	"strings"
 
 	"github.com/sendbird/ccx/internal/claudecmd"
@@ -29,11 +28,15 @@ func NormalizeWindowName(s string) string {
 // CurrentSessionName returns the tmux session the client is attached to, or ""
 // when not inside tmux / on error.
 func CurrentSessionName() string {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
+	loc, err := Client().Current(bg())
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	out, err := Client().DisplayMessage(bg(), loc.PaneID, "#{session_name}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // isShell reports whether cmd is an interactive shell (pane at a prompt) rather

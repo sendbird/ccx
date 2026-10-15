@@ -1,10 +1,9 @@
 package tmux
 
 import (
-	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
+
+	tk "github.com/keyolk/tuikit/tmux"
 
 	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/session"
@@ -80,9 +79,9 @@ func MarkLiveSessions(sessions []session.Session) {
 			panePIDToPane[p.PID] = p
 			panePIDs[p.PID] = true
 		}
-		ppidOf := batchPPIDMap()
+		procs, _ := loadProcs()
 		for _, l := range live {
-			if shellPID := walkToPane(l.PID, panePIDs, ppidOf); shellPID != 0 {
+			if shellPID := walkToPane(l.PID, panePIDs, procs); shellPID != 0 {
 				paneByLivePID[l.PID] = panePIDToPane[shellPID]
 			}
 		}
@@ -108,47 +107,8 @@ func MarkLiveSessions(sessions []session.Session) {
 
 // walkToPane walks from startPID up the PPID chain to a tmux pane PID.
 // Returns 0 if no pane is reached (orphaned/wrapped beyond the visible
-// process tree). Bounded against cycles in a corrupt ppid map.
-func walkToPane(startPID int, panePIDs map[int]bool, ppidOf map[int]int) int {
-	cur := startPID
-	steps := len(ppidOf) + 4
-	for range steps {
-		if cur <= 1 {
-			return 0
-		}
-		if panePIDs[cur] {
-			return cur
-		}
-		next, ok := ppidOf[cur]
-		if !ok {
-			return 0
-		}
-		cur = next
-	}
-	return 0
-}
-
-// batchPPIDMap returns a pid → ppid map for every process visible to ps.
-// Used by walkToPane to skip past wrappers (ccproxy / tee / sudo) when
-// resolving the pane that owns a live claude. Empty map on failure —
-// callers degrade to "no pane attribution" rather than crashing.
-func batchPPIDMap() map[int]int {
-	out, err := exec.Command("ps", "-e", "-o", "pid=,ppid=").Output()
-	if err != nil {
-		return map[int]int{}
-	}
-	m := make(map[int]int)
-	for line := range strings.SplitSeq(string(out), "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) < 2 {
-			continue
-		}
-		pid, err1 := strconv.Atoi(fields[0])
-		ppid, err2 := strconv.Atoi(fields[1])
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		m[pid] = ppid
-	}
-	return m
+// process tree). Bounded against cycles in a corrupt table (tuikit/tmux
+// Procs.WalkTo); a nil snapshot attributes nothing.
+func walkToPane(startPID int, panePIDs map[int]bool, procs tk.Procs) int {
+	return procs.WalkTo(startPID, panePIDs)
 }

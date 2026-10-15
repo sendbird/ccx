@@ -24,7 +24,7 @@ func stubTmux(t *testing.T, found bool, sendErr error) (finds, sends *int) {
 		return tmux.Pane{Session: "s", Window: "1", Pane: "0", PID: 42}, found
 	}
 	paneHasClaude = func(int) bool { return true }
-	sendInterruptK = func(string) error {
+	sendInterruptK = func(tmux.Pane) error {
 		*sends++
 		return sendErr
 	}

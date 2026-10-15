@@ -1,8 +1,11 @@
 package tmux
 
 import (
+	"context"
 	"os"
 	"testing"
+
+	tk "github.com/keyolk/tuikit/tmux"
 
 	"github.com/sendbird/ccx/internal/clauderegistry"
 )
@@ -20,6 +23,13 @@ func TestProbeLiveWindowAttribution(t *testing.T) {
 		t.Fatalf("CCX_PROBE_WINDOW=%q, want <session>:<window>", target)
 	}
 
+	// Opt-in diagnostic: the one test allowed to talk to the real tmux.
+	SetClient(tk.New(nil))
+	SetProcSource(nil)
+	t.Cleanup(func() {
+		SetClient(tk.Client{Runner: tk.NewFake()})
+		SetProcSource(func(context.Context) ([]byte, error) { return nil, nil })
+	})
 	panes, err := ListPanes()
 	if err != nil {
 		t.Fatalf("ListPanes: %v", err)
@@ -34,8 +44,16 @@ func TestProbeLiveWindowAttribution(t *testing.T) {
 			t.Logf("pane %s.%s pid=%d cwd=%s", p.Window, p.Pane, p.PID, p.Path)
 		}
 	}
-	ids := claudeSessionsInWindow(panes, live, sessionName, windowIdx, batchPPIDMap())
+	ids := claudeSessionsInWindow(panes, live, sessionName, windowIdx, mustProcs(t))
 	t.Logf("attributed session IDs (%d): %v", len(ids), ids)
+}
+
+func mustProcs(t *testing.T) tk.Procs {
+	p, ok := loadProcs()
+	if !ok {
+		t.Fatal("ps snapshot failed")
+	}
+	return p
 }
 
 func splitTarget(s string) (session, window string, ok bool) {

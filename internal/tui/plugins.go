@@ -1491,7 +1491,10 @@ func (a *App) plgSearchNext(dir int) {
 
 // --- Plugin selection & test ---
 
-type pluginTestDoneMsg struct{ tmpDir string }
+type pluginTestDoneMsg struct {
+	tmpDir string
+	err    error
+}
 
 func (a *App) plgHasSelection() bool {
 	return len(a.plgSelectedSet) > 0
@@ -1810,8 +1813,8 @@ func (a *App) launchPluginTest() (tea.Model, tea.Cmd) {
 	a.flash(fmt.Sprintf("Testing %d plugins…", len(plugins)))
 
 	return a, func() tea.Msg {
-		env.RunPopup(script)
-		return pluginTestDoneMsg{tmpDir: env.HomeDir}
+		err := env.RunPopup(script)
+		return pluginTestDoneMsg{tmpDir: env.HomeDir, err: err}
 	}
 }
 
