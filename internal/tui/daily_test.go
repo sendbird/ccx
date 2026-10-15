@@ -718,6 +718,9 @@ func TestDayRollupFillsFromExtractAlone(t *testing.T) {
 // A day with hundreds of outputs re-renders on every cursor keypress. Measure
 // that a keypress stays well inside a frame budget.
 func TestDayCursorMoveCost(t *testing.T) {
+	if raceEnabled {
+		t.Skip("wall-clock frame budget is meaningless under -race")
+	}
 	var refs []session.SessionRef
 	for i := 0; i < 500; i++ {
 		refs = append(refs, session.SessionRef{

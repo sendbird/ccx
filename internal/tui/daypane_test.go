@@ -1120,6 +1120,9 @@ func TestDayScratchpadStaysBoundedAndCompletes(t *testing.T) {
 // sessions have no scratchpad, so it never exercises this path. Cursor movement
 // must stay inside the frame budget once the rows are actually there.
 func TestDayCursorMoveCostWithScratchpad(t *testing.T) {
+	if raceEnabled {
+		t.Skip("wall-clock frame budget is meaningless under -race")
+	}
 	base := t.TempDir()
 	t.Cleanup(session.SetScratchpadBaseOverride(base))
 
