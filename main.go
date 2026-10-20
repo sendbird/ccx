@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/mouse"
 	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/cli"
 	"github.com/sendbird/ccx/internal/kitty"
@@ -340,7 +341,7 @@ func main() {
 	})
 	// Detect Kitty graphics once, before the program: it may query tmux.
 	kitty.Init(tmux.Client())
-	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(app, append([]tea.ProgramOption{tea.WithAltScreen()}, mouse.ProgramOptions()...)...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

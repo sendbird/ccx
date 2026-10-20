@@ -1,18 +1,21 @@
 package tui
 
 import (
-	"time"
-
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/mouse"
 )
 
-const doubleClickThreshold = 400 * time.Millisecond
-
-const mouseScrollLines = 1
+// mouseScrollLines is one wheel notch. It is the fleet-wide step (tuikit
+// mouse.WheelRows) so ccx scrolls like every other keyboard-first TUI.
+const mouseScrollLines = mouse.WheelRows
 
 func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Overlays own the mouse while open: nothing below may see the event.
+	if m, cmd, handled := a.handleOverlayMouse(msg); handled {
+		return m, cmd
+	}
 	// In copy mode, only allow scroll on the focused inspector viewport.
 	if a.copyModeActive {
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
@@ -127,7 +130,9 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if up {
 			key = "up"
 		}
-		a.handleExecutionRailKey(key)
+		for range mouseScrollLines {
+			a.handleExecutionRailKey(key)
+		}
 		return a, nil
 	}
 	sp := a.activeSplitPane()
@@ -231,27 +236,16 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Double-click detection: same Y within threshold
-	now := time.Now()
-	isDoubleClick := msg.Y == a.lastClickY && now.Sub(a.lastClickTime) < doubleClickThreshold
-	a.lastClickTime = now
-	a.lastClickY = msg.Y
-
-	if isDoubleClick {
-		// Double-click in preview → toggle fold.
-		sp := a.activeSplitPane()
-		if sp != nil && sp.HandleMouseDoubleClick(msg.X, a.width, a.splitRatio) {
-			return a, a.refreshActivePreview()
-		}
-		// A zoomed preview has no list target behind it.
-		if sp != nil && sp.PreviewOnly {
-			return a, nil
-		}
-		// Double-click in list → enter.
-		enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
-		return a.Update(enterMsg)
+	m, cmd := a.selectByClick(msg)
+	if a.registerClick(msg) {
+		return a.activateClicked(msg, cmd)
 	}
+	return m, cmd
+}
 
+// selectByClick is the single-click half of handleMouseClick: focus the pane
+// under the pointer and select the row there. It never activates anything.
+func (a *App) selectByClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	contentY := msg.Y - 1 // adjust for title bar
 	sp := a.activeSplitPane()
 	clickedPreview := sp != nil && sp.Show && (sp.PreviewOnly || msg.X > sp.ListWidth(a.width, a.splitRatio))
@@ -346,19 +340,7 @@ func mouseScrollList(l *list.Model, up bool) {
 // All list chrome (status bar, filter bar, pagination) is disabled,
 // so items start at Y=0 within the list widget.
 func mouseClickList(l *list.Model, contentY int, itemHeight int) {
-	if contentY < 0 || itemHeight < 1 {
-		return
-	}
-
-	visible := l.VisibleItems()
-	if len(visible) == 0 {
-		return
-	}
-
-	clickOffset := contentY / itemHeight
-	pageStart := l.Paginator.Page * l.Paginator.PerPage
-	target := pageStart + clickOffset
-	if target >= 0 && target < len(visible) {
+	if target, ok := listRowAt(l, contentY, itemHeight); ok {
 		l.Select(target)
 	}
 }

@@ -303,8 +303,7 @@ type App struct {
 
 	// Mouse state
 	dragResizing   bool
-	lastClickTime  time.Time
-	lastClickY     int
+	clicks         mouseClickState
 	breadcrumbSegs []breadcrumbSegment
 
 	// Global stats view

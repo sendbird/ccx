@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/mouse"
 	"github.com/sendbird/ccx/internal/clauderegistry"
 	"github.com/sendbird/ccx/internal/kitty"
 	"github.com/sendbird/ccx/internal/session"
@@ -66,11 +67,10 @@ func RunPickSessionTUI(claudeDir, search string, multi bool) PickSessionExitCode
 
 	// Detect Kitty graphics once, before the program: it may query tmux.
 	kitty.Init(tmux.Client())
-	p := tea.NewProgram(app,
+	p := tea.NewProgram(app, append([]tea.ProgramOption{
 		tea.WithAltScreen(),
 		tea.WithOutput(os.Stderr),
-		tea.WithMouseCellMotion(),
-	)
+	}, mouse.ProgramOptions()...)...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ccx: picker failed: %v\n", err)
 		return PickSessionError

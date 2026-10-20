@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	tk "github.com/keyolk/tuikit/kitty"
+	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/render"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/extract"
@@ -117,6 +118,10 @@ type pickerModel struct {
 	// ctx is what the picker needs to re-extract its items on `R` (refresh):
 	// the subcommand and the session file to reload.
 	ctx pickerContext
+
+	// clicks remembers the last row press so a second press on the same row
+	// is Enter.
+	clicks pickerClicks
 
 	// langmap maps CJK jamo/letters to the Latin key at the same physical
 	// position, so picker shortcuts fire under a CJK input source.
@@ -276,6 +281,8 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.FocusMsg:
 		m.termFocused = true
 		return m, kittyPaneCmd(kitty.PaneCmd(), false)
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			m.quit = true
@@ -869,37 +876,17 @@ func (m pickerModel) renderListRow(item PickerItem, cursored bool, check string,
 	return lipgloss.NewStyle().MaxWidth(listW).Render(row)
 }
 
-func (m pickerModel) View() string {
-	if m.width == 0 || m.height == 0 {
-		return ""
-	}
-
-	listW := m.listWidth()
-	pw := m.previewWidth()
-	contentH := m.height - 2
-
-	sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
-	cat := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366F1")).Bold(true)
-
+// renderListLines draws the list rows that fit in a pane of contentH rows and
+// reports how many lines each drawn item took. View and the mouse hit test both
+// read it, so a click lands on the row the user sees.
+func (m pickerModel) renderListLines(contentH, listW int, sel, dim, cat lipgloss.Style) (lines []string, heights []int) {
 	maxListLines := contentH - 2 // reserve for scrollInfo
 	if maxListLines < 3 {
 		maxListLines = 3
 	}
 
-	// For conversation mode, estimate items per page from actual line budget
-	var visMax int
-	if m.kind == "conversation" {
-		visMax = max(maxListLines/3, 1)
-	} else {
-		visMax = maxListLines
-	}
-	start := 0
-	if m.cursor >= start+visMax {
-		start = m.cursor - visMax + 1
-	}
+	start := m.listFirstVisible(contentH)
 
-	var listLines []string
 	for i := start; i < len(m.items); i++ {
 		item := m.items[i]
 		ri := m.realIndex(i)
@@ -913,17 +900,50 @@ func (m pickerModel) View() string {
 				source = item.Source
 			}
 			rows := renderConversationListRow(item, i == m.cursor, check, "  ", "", listW, sel, dim, source)
-			if len(listLines)+len(rows) > maxListLines && len(listLines) > 0 {
+			if len(lines)+len(rows) > maxListLines && len(lines) > 0 {
 				break
 			}
-			listLines = append(listLines, rows...)
+			lines = append(lines, rows...)
+			heights = append(heights, len(rows))
 			continue
 		}
-		if len(listLines) >= maxListLines {
+		if len(lines) >= maxListLines {
 			break
 		}
-		listLines = append(listLines, m.renderListRow(item, i == m.cursor, check, listW, sel, dim, cat))
+		lines = append(lines, m.renderListRow(item, i == m.cursor, check, listW, sel, dim, cat))
+		heights = append(heights, 1)
 	}
+	return lines, heights
+}
+
+// listFirstVisible is the index of the first item renderListLines draws. For
+// conversation mode items per page are estimated from the line budget.
+func (m pickerModel) listFirstVisible(contentH int) int {
+	maxListLines := max(contentH-2, 3)
+	visMax := maxListLines
+	if m.kind == "conversation" {
+		visMax = max(maxListLines/3, 1)
+	}
+	if m.cursor >= visMax {
+		return m.cursor - visMax + 1
+	}
+	return 0
+}
+
+func (m pickerModel) View() string {
+	if m.width == 0 || m.height == 0 {
+		return ""
+	}
+
+	listW := m.listWidth()
+	pw := m.previewWidth()
+	contentH := m.height - 2
+
+	sel := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8")).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+	cat := lipgloss.NewStyle().Foreground(lipgloss.Color("#6366F1")).Bold(true)
+
+	listLines, _ := m.renderListLines(contentH, listW, sel, dim, cat)
 
 	// The search line and counter share the list pane, so they get the same
 	// per-line clamp as the rows: lipgloss wraps before it truncates, so an
@@ -1450,7 +1470,7 @@ func RunPicker(kind string, items []PickerItem, openerCfg opener.Config, ctx pic
 	}
 	kitty.Init(tmux.Client())
 	model := newPickerModel(kind, items, openerCfg, ctx)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithAltScreen()}, mouse.ProgramOptions()...)...)
 	finalModel, err := p.Run()
 	// Clear any Kitty inline images before returning so they don't linger
 	// in the main shell screen.
