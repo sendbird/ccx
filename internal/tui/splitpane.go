@@ -488,10 +488,12 @@ func (sp *SplitPane) HandleMouseScroll(mouseX int, up bool, totalW, splitRatio i
 	if sp.Show && (sp.PreviewOnly || mouseX > sp.ListWidth(totalW, splitRatio)) {
 		// Preview side: move block cursor for fold-aware panes, scroll for simple
 		if sp.Folds != nil && sp.Focus && len(sp.Folds.BlockStarts) > 0 {
+			key := "down"
 			if up {
-				sp.Folds.HandleKey("up")
-			} else {
-				sp.Folds.HandleKey("down")
+				key = "up"
+			}
+			for range mouseScrollLines {
+				sp.Folds.HandleKey(key)
 			}
 			sp.ScrollToBlock()
 		} else {

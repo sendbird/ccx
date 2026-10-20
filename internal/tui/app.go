@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	tk "github.com/keyolk/tuikit/kitty"
+	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/prefs"
 	"github.com/keyolk/tuikit/toast"
 	"github.com/sendbird/ccx/internal/claudecmd"
@@ -303,8 +304,7 @@ type App struct {
 
 	// Mouse state
 	dragResizing   bool
-	lastClickTime  time.Time
-	lastClickY     int
+	clicks         mouseClickState
 	breadcrumbSegs []breadcrumbSegment
 
 	// Global stats view
@@ -1692,6 +1692,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleMouse(msg)
 
 	case tea.KeyMsg:
+		// A key between two clicks breaks the pair: click, move away and back
+		// by keyboard, click again must not count as a double click.
+		a.clicks.clicks = mouse.Clicks{}
 		// A key acknowledges a sticky error toast; info toasts expire on
 		// their own tick (tuikit/toast).
 		a.toasts = toast.OnKey(a.toasts)

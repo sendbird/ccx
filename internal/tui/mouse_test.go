@@ -37,10 +37,13 @@ func TestZoomedInspectorMouseTreatsFullWidthAsPreview(t *testing.T) {
 		t.Fatalf("left-side zoom scroll changed hidden list: focus=%t selected=%d want=%d", app.conv.split.Focus, app.convList.Index(), selected)
 	}
 
-	app.lastClickY = 6
-	app.lastClickTime = time.Now()
-	m, _ = app.handleMouseClick(tea.MouseMsg{X: 1, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	app = m.(*App)
+	clock := fixedClock(time.Now())
+	app.clicks.now = clock.now
+	for range 2 {
+		m, _ = app.handleMouseClick(tea.MouseMsg{X: 1, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+		app = m.(*App)
+		clock.advance(50 * time.Millisecond)
+	}
 	if app.convList.Index() != selected || !app.conv.inspector.Zoom {
 		t.Fatalf("zoom double-click escaped to hidden list: selected=%d want=%d zoom=%t", app.convList.Index(), selected, app.conv.inspector.Zoom)
 	}
@@ -108,5 +111,42 @@ func TestSessionSingleClickSelectsVisibleFilteredItem(t *testing.T) {
 	}
 	if sess.ProjectName != "proj-b" {
 		t.Fatalf("expected clicked filtered session proj-b, got %q", sess.ProjectName)
+	}
+}
+
+func TestWheelScrollsFocusedPreviewByThreeLines(t *testing.T) {
+	app, _ := newMouseApp(t, 6)
+	app.sessSplit.Show = true
+	app = send(app, tea.WindowSizeMsg{Width: 160, Height: 30})
+	var sb strings.Builder
+	for i := range 100 {
+		sb.WriteString(strings.Repeat("x", 10) + string(rune('a'+i%26)) + "\n")
+	}
+	app.sessSplit.Preview.SetContent(sb.String())
+	app.sessSplit.Preview.GotoTop()
+	px := app.sessSplit.ListWidth(app.width, app.splitRatio) + 5
+	app = send(app, wheel(px, 5, true))
+	if got := app.sessSplit.Preview.YOffset; got != 3 {
+		t.Fatalf("preview offset = %d after one notch, want 3", got)
+	}
+}
+
+func TestDragOnSplitBorderStillResizes(t *testing.T) {
+	app, _ := newMouseApp(t, 6)
+	app.sessSplit.Show = true
+	app = send(app, tea.WindowSizeMsg{Width: 160, Height: 30})
+	border := app.sessSplit.ListWidth(app.width, app.splitRatio)
+	before := app.splitRatio
+	app = send(app, press(border, 5))
+	if !app.dragResizing {
+		t.Fatal("press on the divider did not start a drag")
+	}
+	app = send(app, tea.MouseMsg{X: border + 20, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	if app.splitRatio <= before {
+		t.Fatalf("drag right left ratio at %d (was %d)", app.splitRatio, before)
+	}
+	app = send(app, tea.MouseMsg{X: border + 20, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	if app.dragResizing {
+		t.Fatal("release did not end the drag")
 	}
 }
