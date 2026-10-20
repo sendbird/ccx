@@ -214,3 +214,17 @@ func TestPickerClickRespectsScrollOffset(t *testing.T) {
 		t.Fatalf("click on link-40 in a scrolled list selected %d", m.cursor)
 	}
 }
+
+func TestPickerKeyBetweenClicksBreaksTheDoubleClick(t *testing.T) {
+	m, clock := mousePicker(t, "urls", linkItems(10), 100, 24)
+	x, y := where(t, m, "link-04")
+	m = feed(m, click(x, y))
+	clock.t = clock.t.Add(50 * time.Millisecond)
+	m = feed(m, tea.KeyMsg{Type: tea.KeyDown})
+	m = feed(m, tea.KeyMsg{Type: tea.KeyUp})
+	clock.t = clock.t.Add(50 * time.Millisecond)
+	m = feed(m, click(x, y))
+	if m.cursor != 4 || m.result != nil {
+		t.Fatalf("click, down, up, click: cursor=%d result=%v; a key between clicks must break the pair", m.cursor, m.result)
+	}
+}

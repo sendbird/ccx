@@ -41,7 +41,8 @@ func (a *App) registerClick(msg tea.MouseMsg) bool {
 // clickTargetKey identifies the item under a press in a way that is stable
 // across the two presses of a double click: view, pane side, and the item the
 // press selected. Sessions use their ID; other lists fall back to the cursor
-// index, which cannot change between two presses 400ms apart. ok is false when
+// index, which only a key press could change between the two presses, and a
+// key press resets the pair (Update's KeyMsg arm). ok is false when
 // the press hit no item.
 func (a *App) clickTargetKey(msg tea.MouseMsg) (key string, ok bool) {
 	sp := a.activeSplitPane()

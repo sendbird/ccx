@@ -178,3 +178,17 @@ func TestClickOnSecondPageSelectsThatRow(t *testing.T) {
 		t.Fatalf("click on %s selected %q", want, got)
 	}
 }
+
+func TestKeyBetweenClicksBreaksTheDoubleClick(t *testing.T) {
+	app, clock := newMouseApp(t, 6)
+	x, y := find(t, app, "proj-s03")
+	app = send(app, press(x, y))
+	clock.advance(50 * time.Millisecond)
+	app = send(app, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	app = send(app, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	clock.advance(50 * time.Millisecond)
+	app = send(app, press(x, y))
+	if app.state != viewSessions || selectedID(t, app) != "s03" {
+		t.Fatalf("click, j, k, click: state=%d selected=%s; a key between clicks must break the pair", app.state, selectedID(t, app))
+	}
+}

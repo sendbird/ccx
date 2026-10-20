@@ -284,6 +284,9 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 	case tea.KeyMsg:
+		// A key between two clicks breaks the pair: click, move away and back
+		// by keyboard, click again must not count as a double click.
+		m.clicks.clicks = mouse.Clicks{}
 		if msg.String() == "ctrl+c" {
 			m.quit = true
 			return m, tea.Quit
