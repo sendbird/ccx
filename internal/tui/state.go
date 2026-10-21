@@ -363,6 +363,9 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if a.URLs == "" {
 		a.URLs = d.Actions.URLs
 	}
+	if a.OpenLink == "" {
+		a.OpenLink = d.Actions.OpenLink
+	}
 	if a.Files == "" {
 		a.Files = d.Actions.Files
 	}

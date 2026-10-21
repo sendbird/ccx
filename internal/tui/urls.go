@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/keyolk/tuikit/link"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ func (a *App) handleConvActionsMenu(key string) (tea.Model, tea.Cmd) {
 	switch {
 	case interactionKeyMatches(actions, key, interactionActionURLs):
 		a.openInspector(inspectorRefs, a.conv.inspector.Scope, false)
+	case interactionKeyMatches(actions, key, interactionActionOpenLink):
+		return a, a.openConversationLink()
 	case interactionKeyMatches(actions, key, interactionActionFiles):
 		a.openInspector(inspectorFiles, a.conv.inspector.Scope, false)
 	case interactionKeyMatches(actions, key, interactionActionChanges):
@@ -292,6 +295,15 @@ func (a *App) handleURLMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.flash(fmt.Sprintf("Opened %d URL(s)", opened))
 		return a, nil
+	case "o":
+		// The fleet's open-link key: the row under the cursor only, kept open
+		// so the next one can follow (enter opens the selection and closes).
+		// File rows carry paths, which OpenFirst refuses as "no link here".
+		var urls []string
+		if a.urlCursor >= 0 && a.urlCursor < len(a.urlItems) {
+			urls = []string{a.urlItems[a.urlCursor].URL}
+		}
+		return a, link.OpenFirst(urls)
 	case "y":
 		urls := a.selectedURLs()
 		if len(urls) == 0 {
@@ -515,10 +527,12 @@ func (a *App) renderURLMenu() string {
 		if item.Category != "change" && !item.Timestamp.IsZero() {
 			ts = "  " + dimStyle.Render(timeAgo(item.Timestamp))
 		}
+		// The label is often a PR key or a cut URL: link it to the full URL
+		// (file rows carry a path, which link.Wrap leaves as text).
 		if i == cursor {
-			lines = append(lines, sel.Render(">")+check+badge+" "+sel.Render(label)+status+ts)
+			lines = append(lines, sel.Render(">")+check+badge+" "+link.Wrap(item.URL, sel.Render(label))+status+ts)
 		} else {
-			lines = append(lines, " "+check+badge+" "+hl.Render(label)+status+ts)
+			lines = append(lines, " "+check+badge+" "+link.Wrap(item.URL, hl.Render(label))+status+ts)
 		}
 	}
 
@@ -538,7 +552,7 @@ func (a *App) renderURLMenu() string {
 	} else if isFiles {
 		lines = append(lines, d.Render("↵:edit  y:copy  space:select  /:search  esc:close"))
 	} else {
-		lines = append(lines, d.Render("↵:open  y:copy  space:select  /:search  esc:close"))
+		lines = append(lines, d.Render("↵:open  o:open-link  y:copy  space:select  /:search  esc:close"))
 	}
 
 	listBody := strings.Join(lines, "\n")

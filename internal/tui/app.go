@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	tk "github.com/keyolk/tuikit/kitty"
+	"github.com/keyolk/tuikit/link"
 	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/prefs"
 	"github.com/keyolk/tuikit/selection"
@@ -1693,8 +1694,16 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return a.handleMouse(msg)
 
+	case selection.AutoScrollMsg:
+		cmd, _ := a.handleSelectionMouse(msg)
+		return a, cmd
+
 	case selection.CopiedMsg:
 		a.reportCopied(msg)
+		return a, nil
+
+	case link.OpenedMsg:
+		a.reportOpened(msg)
 		return a, nil
 
 	case tea.KeyMsg:
@@ -3103,6 +3112,11 @@ func (a *App) copySelectedRefs() (tea.Model, tea.Cmd, bool) {
 // falling back to the OS default). a.openURL overrides it so tests can intercept
 // the call instead of spawning a real process.
 func (a *App) openInBrowser(url string) error {
+	// URLs come from transcripts; only http(s) ones are handed to an opener
+	// (a file: or custom-scheme URL is not something a key should launch).
+	if !link.Valid(url) {
+		return link.ErrInvalid
+	}
 	if a.openURL != nil {
 		return a.openURL(url)
 	}
@@ -4149,6 +4163,8 @@ func (a *App) handleActionsMenu(key string) (tea.Model, tea.Cmd) {
 		return a, ti.Cursor.BlinkCmd()
 	case akm.URLs:
 		return a.openURLMenuFromItems(extract.SessionURLs(sess.FilePath), "session")
+	case akm.OpenLink:
+		return a, openSessionLink(sess)
 	case akm.Files:
 		return a.openURLMenuFromItems(extract.SessionFilePaths(sess.FilePath), "session files")
 	case akm.Changes:
@@ -6950,7 +6966,8 @@ func refLine(r session.SessionRef, width int, selected, checked bool) string {
 	if checked {
 		mark = lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true).Render("* ")
 	}
-	line := cursor + mark + dot + " " + label
+	// OSC 8 on the label only: the PR or issue key hides its URL.
+	line := cursor + mark + dot + " " + link.Wrap(r.URL, label)
 
 	var detail string
 	switch r.Kind {
@@ -7866,7 +7883,7 @@ func (a *App) renderActionsHintBox() string {
 	} else {
 		lines = append(lines, a.actionLine("delete", "move", "resume", "copy", "copy_path"))
 	}
-	second := []string{"edit", "worktree", "urls", "files", "changes", "tags"}
+	second := []string{"edit", "worktree", "urls", "open_link", "files", "changes", "tags"}
 	if sess.HasMemory {
 		second = append(second, "remove_mem")
 	}

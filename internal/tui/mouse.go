@@ -18,6 +18,13 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if consumed {
 		return a, selCmd
 	}
+	m, cmd := a.handleAppMouse(msg)
+	return m, tea.Batch(selCmd, cmd)
+}
+
+// handleAppMouse is ccx's own click, wheel and resize handling, for events the
+// drag selection did not consume.
+func (a *App) handleAppMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Overlays own the mouse while open: nothing below may see the event.
 	if m, cmd, handled := a.handleOverlayMouse(msg); handled {
 		return m, cmd

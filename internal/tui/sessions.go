@@ -1792,6 +1792,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{regionNavHelpKeys(km), "Move between regions"},
 			{displayKey(km.Conversation.JumpToTree), "Jump to origin turn"},
 			{displayKey(km.Conversation.Actions), "Actions"},
+			{displayKey(km.Conversation.Actions) + " " + displayKey(km.Actions.OpenLink), "Open the first link in the selected message"},
 			{displayKey(km.Conversation.SwitchRegion), "Switch region"},
 			{displayKey(km.Conversation.ExecutionContexts), "Execution rail"},
 			{displayKey(km.Conversation.Edit), "Edit"},
