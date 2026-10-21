@@ -2,30 +2,14 @@ package tui
 
 import (
 	"fmt"
-	"io"
 	"time"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/selection"
-	"github.com/muesli/termenv"
 	"github.com/sendbird/ccx/internal/kitty"
 )
-
-// selectionStyle is reverse video rather than a theme color, on a renderer
-// pinned to the ANSI profile: the default renderer picks the Ascii profile
-// under NO_COLOR and drops every SGR, reverse included, which would make the
-// selection invisible.
-var selectionStyle = func() lipgloss.Style {
-	// SetColorProfile, not termenv.WithProfile: the renderer re-detects the
-	// profile from the environment unless it is set explicitly.
-	r := lipgloss.NewRenderer(io.Discard)
-	r.SetColorProfile(termenv.ANSI)
-	return r.NewStyle().Reverse(true)
-}()
 
 // View is the frame plus the drag-selection highlight and the Kitty image
 // layer. The highlight is drawn last over the text so it lands on exactly the
@@ -34,7 +18,7 @@ var selectionStyle = func() lipgloss.Style {
 func (a *App) View() string {
 	screen := a.renderScreen()
 	if a.sel.Active() {
-		screen = a.sel.Render(screen, a.selectionPanes(), selectionStyle)
+		screen = a.sel.Render(screen, a.selectionPanes(), selection.DefaultStyle())
 	}
 	if kitty.Supported() {
 		screen += a.kittyImageLayer()
@@ -143,23 +127,16 @@ func (a *App) selectionPanes() []selection.Pane {
 	return nil
 }
 
-// handleSelectionMouse feeds a mouse event to the drag selection before the
-// app's own mouse handling. done is true when the selection owns the event and
-// the app must not also treat it as a click; a press that does not move stays
-// the app's click.
-func (a *App) handleSelectionMouse(msg tea.MouseMsg) (cmd tea.Cmd, done bool) {
-	// Only a left press, or motion/release during a drag, can change the
-	// selection; skip building the frame for wheel and stray motion.
-	if !mouse.IsLeftPress(msg) && !a.sel.Dragging() {
-		return nil, false
-	}
-	panes := a.selectionPanes()
-	r := a.sel.Mouse(msg, panes, a.renderScreen(), a.selectionNow())
+// handleSelectionMouse feeds a mouse event, or the auto-scroll tick of a drag
+// resting past a pane's edge, to the drag selection before the app's own mouse
+// handling. done is true when the selection owns the event and the app must
+// not also treat it as a click; a press that does not move stays the app's
+// click. cmd carries the copy and the next auto-scroll tick. A press on the
+// split divider never reaches here: handleMouse gives it to the split first.
+func (a *App) handleSelectionMouse(msg tea.Msg) (cmd tea.Cmd, done bool) {
+	r, cmd := a.sel.Update(msg, a.selectionPanes, a.renderScreen, a.selectionNow())
 	if r.Scroll != 0 {
-		a.scrollSelectionPane(r.ScrollPane, r.Scroll)
-	}
-	if r.Copy != "" {
-		cmd = selection.Copy(r.Copy)
+		a.setSelectionPaneOffset(r.ScrollPane, r.Offset)
 	}
 	return cmd, r.Consumed
 }
@@ -173,9 +150,11 @@ func (a *App) selectionNow() time.Time {
 	return time.Now()
 }
 
-// scrollSelectionPane scrolls the pane a drag went past by n lines, through
-// the same viewport scroll the wheel uses for plain previews.
-func (a *App) scrollSelectionPane(id string, n int) {
+// setSelectionPaneOffset moves the pane a drag went past to offset, the
+// selection's own Pane.Offset+Scroll. Setting it, rather than scrolling by
+// Scroll, keeps an offset the app stored past the last page from swallowing
+// the first lines of an upward drag.
+func (a *App) setSelectionPaneOffset(id string, offset int) {
 	var vp *viewport.Model
 	switch id {
 	case "stats":
@@ -198,11 +177,7 @@ func (a *App) scrollSelectionPane(id string, n int) {
 	if vp == nil {
 		return
 	}
-	if n < 0 {
-		vp.ScrollUp(-n)
-	} else {
-		vp.ScrollDown(n)
-	}
+	vp.SetYOffset(offset)
 	if id == "sessions/preview" {
 		a.sessPreviewPinned = !a.sessPreviewAtBottom()
 	}
@@ -220,11 +195,8 @@ func (a *App) selectionPrefix() string {
 	return fmt.Sprintf("v%d", a.state)
 }
 
-// reportCopied shows the result of a selection copy in the footer toast.
+// reportCopied shows the result of a selection copy in the footer toast, in
+// ccx's capitalized toast wording.
 func (a *App) reportCopied(msg selection.CopiedMsg) {
-	if msg.Err != nil {
-		a.flash("Copy failed: " + msg.Err.Error())
-		return
-	}
-	a.flash(fmt.Sprintf("Copied %d chars", utf8.RuneCountInString(msg.Text)))
+	a.flash(msg.NoteWith("Copied %d chars", "Copy failed: %s"))
 }

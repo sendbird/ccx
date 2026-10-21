@@ -67,6 +67,7 @@ var bindingTable = []bindingSpec{
 	{"actions", "input", "input", "Send input to the live pane"},
 	{"actions", "jump", "jump", "Jump to the live tmux pane"},
 	{"actions", "urls", "urls", "URLs"},
+	{"actions", "open_link", "open-link", "Open the item's link in the browser"},
 	{"actions", "files", "files", "Files"},
 	{"actions", "changes", "changes", "Changes"},
 	{"actions", "copy", "copy", "Copy"},
@@ -363,6 +364,9 @@ func (a *App) sessionsListHelpRows() []helpRow {
 			r := a.helpRowFor("session", "actions")
 			r.desc += " (" + displayKey(km.Actions.Delete) + "/" + displayKey(km.Actions.Resume) + "/" + displayKey(km.Actions.CopyPath) + "/…)"
 			rows = append(rows, r)
+			if km.Actions.OpenLink != "" {
+				rows = append(rows, helpRow{displayKey(km.Session.Actions) + " " + displayKey(km.Actions.OpenLink), "Open the session's PR / Jira link"})
+			}
 			continue
 		case "resize_grow":
 			continue // shown with resize_shrink

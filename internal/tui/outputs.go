@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/keyolk/tuikit/link"
 	"os"
 	"strings"
 
@@ -241,7 +242,8 @@ func outputLine(o session.SessionOutput, width int, selected bool) string {
 		cursor = lipgloss.NewStyle().Foreground(colorBorderFocused).Bold(true).Render("> ")
 		titleStyle = titleStyle.Foreground(colorBorderFocused)
 	}
-	head := cursor + outputGlyph(o) + " " + titleStyle.Render(o.Title)
+	// A PR/Jira/artifact title hides its URL: link the title, not the cursor.
+	head := cursor + outputGlyph(o) + " " + link.Wrap(o.URL, titleStyle.Render(o.Title))
 
 	suffix := ""
 	if o.Count > 1 {
