@@ -364,7 +364,7 @@ func (a *App) refreshDayPreviewLayout(di dayItem) {
 }
 
 func (a *App) updateDayPreviewWith(di dayItem, dispatch bool) tea.Cmd {
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 
 	// Reset the cursor when the day changes so it never points past a shorter
@@ -413,7 +413,7 @@ func (a *App) refreshDayProjectPreviewLayout(pi projectItem) {
 }
 
 func (a *App) updateDayProjectPreviewWith(pi projectItem, dispatch bool) tea.Cmd {
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 
 	cacheID := pi.dayKey + "|" + pi.basePath

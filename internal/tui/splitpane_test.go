@@ -43,7 +43,7 @@ func TestRenderFixedSplit_DividerAligned_ASCII(t *testing.T) {
 	right := "right side\ncontent here\nbar"
 	listW, previewW, contentH := 30, 50, 5
 
-	out := renderFixedSplit(left, right, listW, previewW, contentH, colorDim)
+	out := renderFixedSplit(left, right, listW, previewW, contentH, dividerCell(newSplitModel(), colorDim))
 	cols := findBorderCHAColumns(out)
 
 	if len(cols) != contentH {
@@ -61,7 +61,7 @@ func TestRenderFixedSplit_DividerAligned_Korean(t *testing.T) {
 	right := "오른쪽 패널\n내용입니다\n세번째"
 	listW, previewW, contentH := 40, 60, 5
 
-	out := renderFixedSplit(left, right, listW, previewW, contentH, colorDim)
+	out := renderFixedSplit(left, right, listW, previewW, contentH, dividerCell(newSplitModel(), colorDim))
 	cols := findBorderCHAColumns(out)
 
 	if len(cols) != contentH {
@@ -80,7 +80,7 @@ func TestRenderFixedSplit_DividerAligned_AmbiguousWidth(t *testing.T) {
 	right := "detail\nmore detail\nfinal"
 	listW, previewW, contentH := 30, 40, 6
 
-	out := renderFixedSplit(left, right, listW, previewW, contentH, colorDim)
+	out := renderFixedSplit(left, right, listW, previewW, contentH, dividerCell(newSplitModel(), colorDim))
 	cols := findBorderCHAColumns(out)
 
 	if len(cols) != contentH {
@@ -104,7 +104,7 @@ func TestRenderFixedSplit_DividerAligned_StyledContent(t *testing.T) {
 	right := "preview content\nsecond line\nthird"
 	listW, previewW, contentH := 45, 55, 5
 
-	out := renderFixedSplit(left, right, listW, previewW, contentH, colorDim)
+	out := renderFixedSplit(left, right, listW, previewW, contentH, dividerCell(newSplitModel(), colorDim))
 	cols := findBorderCHAColumns(out)
 
 	if len(cols) != contentH {
@@ -124,7 +124,7 @@ func TestRenderFixedSplit_DividerAligned_LongOverflow(t *testing.T) {
 	right := strings.Repeat("오른쪽 내용 ", 20)
 	listW, previewW, contentH := 35, 45, 4
 
-	out := renderFixedSplit(left, right, listW, previewW, contentH, colorDim)
+	out := renderFixedSplit(left, right, listW, previewW, contentH, dividerCell(newSplitModel(), colorDim))
 	cols := findBorderCHAColumns(out)
 
 	if len(cols) != contentH {
@@ -147,7 +147,7 @@ func TestRenderFixedSplit_DividerAligned_Resize(t *testing.T) {
 		previewW := totalW - listW - 1
 		contentH := 6
 
-		out := renderFixedSplit(left, right, listW, previewW, contentH, colorDim)
+		out := renderFixedSplit(left, right, listW, previewW, contentH, dividerCell(newSplitModel(), colorDim))
 		cols := findBorderCHAColumns(out)
 
 		if len(cols) != contentH {
@@ -162,7 +162,7 @@ func TestRenderFixedSplit_DividerAligned_Resize(t *testing.T) {
 }
 
 func TestRenderFixedSplit_DividerAligned_EmptyPanes(t *testing.T) {
-	out := renderFixedSplit("", "", 30, 50, 3, colorDim)
+	out := renderFixedSplit("", "", 30, 50, 3, dividerCell(newSplitModel(), colorDim))
 	cols := findBorderCHAColumns(out)
 
 	if len(cols) != 3 {

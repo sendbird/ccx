@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -370,5 +371,53 @@ func TestURLMenuFileRowHasNoLink(t *testing.T) {
 	}
 	if got := toastText(t, app); got != "No link here" {
 		t.Fatalf("toast = %q", got)
+	}
+}
+
+// A linked digest title fits its detail into the preview the split draws, not
+// a fixed half: with the divider moved left the preview is wider than half
+// the screen, and with it moved right narrower. In both, the row ends inside
+// the preview with the detail's own ellipsis (not clipped by the pane), and
+// the link still covers exactly the title.
+func TestOutputsDigestLinkedRowFitsMovedSplit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sess := session.Session{
+		ID: "maker", ShortID: "maker", ProjectPath: "/tmp/repo-a", ProjectName: "repo-a", ModTime: dayOf(0),
+		RefsResolved: true,
+	}
+	for _, ratio := range []float64{0.3, 0.7} {
+		app := newTestApp([]session.Session{sess})
+		app.sessionList.Select(0)
+		app.sessPreviewMode = sessPreviewOutputs
+		app.sessSplit.Show = true
+		app.sessSplit.Focus = true
+		app.split = app.split.Set(ratio, splitBody(app.width, app.splitLayoutHeight()))
+		app.sessOutputsCacheID = sess.ID
+		app.sessOutputs = []session.SessionOutput{{
+			Kind: session.OutputPR, Title: "sendbird/ccx#5", URL: prURL,
+			Detail: strings.Repeat("long detail ", 30),
+		}}
+		app.sessOutputsCollected = fmt.Sprintf("%s:%d", sess.ID, sess.ModTime.UnixNano())
+		_ = app.updateSessionPreview()
+
+		_, preview := app.splitRects(&app.sessSplit, app.height)
+		var row string
+		for _, line := range strings.Split(app.sessOutputsCache, "\n") {
+			if strings.Contains(ansi.Strip(line), "sendbird/ccx#5") {
+				row = line
+			}
+		}
+		if row == "" {
+			t.Fatalf("ratio %v: no digest row for the PR:\n%s", ratio, ansi.Strip(app.sessOutputsCache))
+		}
+		if w := ansi.StringWidth(row); w > preview.W || !strings.HasSuffix(strings.TrimRight(ansi.Strip(row), " "), "...") {
+			t.Fatalf("ratio %v: row is %d cells for a %d-cell preview (want it to end in the detail's ellipsis): %q",
+				ratio, w, preview.W, ansi.Strip(row))
+		}
+		frame := app.View()
+		if l, ok := linkTo(frame, prURL); !ok || l.Text != "sendbird/ccx#5" {
+			t.Fatalf("ratio %v: link = %+v (found %t); want exactly the title", ratio, l, ok)
+		}
+		assertRowsFit(t, app)
 	}
 }

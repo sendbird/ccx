@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/keyolk/tuikit/prefs"
+	"github.com/keyolk/tuikit/split"
 )
 
 // prefsApp names ccx's state file: $XDG_STATE_HOME/ccx/ui.json.
@@ -25,16 +26,20 @@ var persistUIState = true
 // used to be re-marshalled into config.yaml synchronously on quit, so a crash
 // lost it and every quit rewrote the user's config file.
 type uiState struct {
-	GroupMode       string   `json:"group_mode,omitempty"`
-	PrevGroupMode   string   `json:"prev_group_mode,omitempty"`
-	PreviewMode     string   `json:"preview_mode,omitempty"`
-	ViewMode        string   `json:"view_mode,omitempty"`
-	ConvDetailLevel int      `json:"conv_detail_level,omitempty"`
-	SplitRatio      int      `json:"split_ratio,omitempty"`
-	HiddenBadges    []string `json:"hidden_badges,omitempty"`
-	FilterTerm      string   `json:"filter_term,omitempty"`
-	EditorInput     bool     `json:"editor_input,omitempty"`
-	FoldedGroups    []string `json:"folded_groups,omitempty"`
+	GroupMode       string `json:"group_mode,omitempty"`
+	PrevGroupMode   string `json:"prev_group_mode,omitempty"`
+	PreviewMode     string `json:"preview_mode,omitempty"`
+	ViewMode        string `json:"view_mode,omitempty"`
+	ConvDetailLevel int    `json:"conv_detail_level,omitempty"`
+	// SplitRatio is the list's percentage an older build saved. It is only
+	// read (restoreSplit migrates it); capturePreferences never sets it, so
+	// the next save drops it in favor of Split.
+	SplitRatio   int         `json:"split_ratio,omitempty"`
+	Split        split.State `json:"split"`
+	HiddenBadges []string    `json:"hidden_badges,omitempty"`
+	FilterTerm   string      `json:"filter_term,omitempty"`
+	EditorInput  bool        `json:"editor_input,omitempty"`
+	FoldedGroups []string    `json:"folded_groups,omitempty"`
 }
 
 // uiStateOf extracts the state fields. Slices are sorted: they come from map
@@ -47,6 +52,7 @@ func uiStateOf(p Preferences) uiState {
 		ViewMode:        p.ViewMode,
 		ConvDetailLevel: p.ConvDetailLevel,
 		SplitRatio:      p.SplitRatio,
+		Split:           p.Split,
 		HiddenBadges:    slices.Sorted(slices.Values(p.HiddenBadges)),
 		FilterTerm:      p.FilterTerm,
 		EditorInput:     p.EditorInput,
@@ -63,6 +69,7 @@ func (s uiState) applyTo(p *Preferences) {
 	p.ViewMode = s.ViewMode
 	p.ConvDetailLevel = s.ConvDetailLevel
 	p.SplitRatio = s.SplitRatio
+	p.Split = s.Split
 	p.HiddenBadges = s.HiddenBadges
 	p.FilterTerm = s.FilterTerm
 	p.EditorInput = s.EditorInput
@@ -72,7 +79,7 @@ func (s uiState) applyTo(p *Preferences) {
 func (s uiState) equal(o uiState) bool {
 	return s.GroupMode == o.GroupMode && s.PrevGroupMode == o.PrevGroupMode &&
 		s.PreviewMode == o.PreviewMode && s.ViewMode == o.ViewMode &&
-		s.ConvDetailLevel == o.ConvDetailLevel && s.SplitRatio == o.SplitRatio &&
+		s.ConvDetailLevel == o.ConvDetailLevel && s.SplitRatio == o.SplitRatio && s.Split == o.Split &&
 		slices.Equal(s.HiddenBadges, o.HiddenBadges) && s.FilterTerm == o.FilterTerm &&
 		s.EditorInput == o.EditorInput && slices.Equal(s.FoldedGroups, o.FoldedGroups)
 }

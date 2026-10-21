@@ -255,7 +255,7 @@ func (a *App) copyConvSelection() {
 		}
 		a.flashAppend("!")
 		fs.Selected = nil
-		sp.RefreshFoldPreview(a.width, a.splitRatio)
+		sp.RefreshFoldPreview(a.width, a.split)
 		return
 	}
 	if fs.BlockCursor >= 0 && fs.BlockCursor < len(fs.Entry.Content) {

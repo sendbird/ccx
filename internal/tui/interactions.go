@@ -125,7 +125,8 @@ func interactionKeyMatches(actions []interactionAction, key string, id interacti
 }
 
 func resizeHelpAction(a *App) interactionAction {
-	return labelAction("", displayKey(a.keymap.Session.ResizeShrink)+displayKey(a.keymap.Session.ResizeGrow), "resize")
+	h := a.resizeHint()
+	return labelAction("", h.key, h.label)
 }
 
 func foldAllHelpAction(a *App) interactionAction {

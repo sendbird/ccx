@@ -13,7 +13,7 @@ func newSessionKeybindingApp() *App {
 	app.sessSplit.Show = false
 	app.sessSplit.Focus = false
 	contentH := ContentHeight(app.height)
-	app.sessionList = newSessionList(app.sessions, app.sessSplit.ListWidth(app.width, app.splitRatio), contentH, app.sessGroupMode, app.selectedSet, app.hiddenBadges, app.sessFolded, app.sessionRowCache, app.config.WorktreeDir)
+	app.sessionList = newSessionList(app.sessions, app.sessSplit.ListWidth(app.width, app.split), contentH, app.sessGroupMode, app.selectedSet, app.hiddenBadges, app.sessFolded, app.sessionRowCache, app.config.WorktreeDir)
 	app.sessionList.ResetFilter()
 	app.sessSplit.List = &app.sessionList
 	return app

@@ -311,7 +311,7 @@ func (a *App) restoreInspectorFrame(frame inspectorNavFrame) {
 	a.updateConvPreview()
 	if sp.Folds != nil && frame.blockCursor >= 0 && frame.blockCursor < len(sp.Folds.Entry.Content) {
 		sp.Folds.BlockCursor = frame.blockCursor
-		sp.RefreshFoldCursor(a.width, a.splitRatio)
+		sp.RefreshFoldCursor(a.width, a.split)
 	}
 	maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
 	sp.Preview.YOffset = min(max(frame.previewOffset, 0), maxOffset)
@@ -352,7 +352,7 @@ func (a *App) updateConvHeader() {
 		sp.HeaderHeight = 0
 		return
 	}
-	width := sp.ListWidth(a.width, a.splitRatio)
+	width := sp.ListWidth(a.width, a.split)
 	lines := []string{convRegionHeader("RESOURCES", a.conv.contextActive, width)}
 	for i, item := range a.conv.contextItems {
 		var row strings.Builder
@@ -573,7 +573,7 @@ func (a *App) popNavFrame() (tea.Model, tea.Cmd) {
 	a.updateConvPreview()
 	if a.conv.split.Folds != nil && frame.blockCursor >= 0 && frame.blockCursor < len(a.conv.split.Folds.Entry.Content) {
 		a.conv.split.Folds.BlockCursor = frame.blockCursor
-		a.conv.split.RefreshFoldCursor(a.width, a.splitRatio)
+		a.conv.split.RefreshFoldCursor(a.width, a.split)
 	}
 	maxOffset := max(a.conv.split.Preview.TotalLineCount()-a.conv.split.Preview.Height, 0)
 	a.conv.split.Preview.YOffset = min(max(frame.previewOffset, 0), maxOffset)

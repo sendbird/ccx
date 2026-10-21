@@ -163,7 +163,7 @@ func (a *App) openConfigExplorer() (tea.Model, tea.Cmd) {
 	a.cfgPluginsPage = false
 	items := buildConfigItemsFiltered(tree, a.cfgFilterCat, a.cfgSearchTerm)
 	contentH := ContentHeight(a.height)
-	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
+	listW := a.cfgSplit.ListWidth(a.width, a.split)
 	a.cfgList = newConfigList(items, listW, contentH)
 	a.cfgSplit.Show = true
 	a.cfgSplit.Focus = false
@@ -402,16 +402,7 @@ func (a *App) handleConfigKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Split pane navigation
-	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, func(delta int) {
-		newRatio := a.splitRatio + delta
-		if newRatio < 20 {
-			newRatio = 20
-		}
-		if newRatio > 80 {
-			newRatio = 80
-		}
-		a.splitRatio = newRatio
-	})
+	result := sp.HandleSplitKey(key, a.width, a.height, a.split, a.splitActionFor(a.height))
 	switch result {
 	case splitKeyClosed:
 		// esc in split closes preview but stays in config view
@@ -496,7 +487,7 @@ func (a *App) updateConfigPreview() {
 	}
 
 	// Word-wrap to preview width
-	previewW := sp.PreviewWidth(a.width, a.splitRatio)
+	previewW := sp.PreviewWidth(a.width, a.split)
 	wrapped := wordWrap(content, previewW)
 
 	// Highlight search matches in preview and scroll to first match
@@ -765,7 +756,7 @@ func (a *App) renderConfigSplit() string {
 		return ""
 	}
 	clampPaginator(&a.cfgList)
-	return a.cfgSplit.Render(a.width, a.height, a.splitRatio)
+	return a.cfgSplit.Render(a.width, a.height, a.split)
 }
 
 // --- Config search (custom, not bubbles filter) ---
@@ -1249,7 +1240,7 @@ func (a *App) rebuildCfgList() {
 	}
 	items := buildConfigItemsFiltered(a.cfgTree, a.cfgFilterCat, a.cfgSearchTerm)
 	contentH := ContentHeight(a.height)
-	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
+	listW := a.cfgSplit.ListWidth(a.width, a.split)
 	a.cfgList = newConfigList(items, listW, contentH)
 	a.applyCfgDelegate()
 
@@ -1292,7 +1283,7 @@ func (a *App) enterCfgSkillBrowser(ci cfgItem) (tea.Model, tea.Cmd) {
 
 	items := buildSkillFileItems(dir, ci.item.Name, "")
 	contentH := ContentHeight(a.height)
-	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
+	listW := a.cfgSplit.ListWidth(a.width, a.split)
 	a.cfgList = newConfigList(items, listW, contentH)
 	a.applyCfgDelegate()
 	a.cfgSplit.Show = true
@@ -1308,7 +1299,7 @@ func (a *App) enterCfgSkillBrowser(ci cfgItem) (tea.Model, tea.Cmd) {
 func (a *App) rebuildSkillBrowserList() {
 	items := buildSkillFileItems(a.cfgSkillDir, a.cfgSkillName, a.cfgSearchTerm)
 	contentH := ContentHeight(a.height)
-	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
+	listW := a.cfgSplit.ListWidth(a.width, a.split)
 	a.cfgList = newConfigList(items, listW, contentH)
 	a.applyCfgDelegate()
 	a.cfgSearchMatch = nil
@@ -2283,7 +2274,7 @@ func (a *App) switchCfgProject(projectPath string) (tea.Model, tea.Cmd) {
 	a.cfgSelectedSet = make(map[string]bool)
 	items := buildConfigItemsFiltered(tree, a.cfgFilterCat, a.cfgSearchTerm)
 	contentH := ContentHeight(a.height)
-	listW := a.cfgSplit.ListWidth(a.width, a.splitRatio)
+	listW := a.cfgSplit.ListWidth(a.width, a.split)
 	a.cfgList = newConfigList(items, listW, contentH)
 	a.cfgSplit.CacheKey = ""
 	a.updateConfigPreview()

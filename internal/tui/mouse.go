@@ -12,7 +12,12 @@ import (
 const mouseScrollLines = mouse.WheelRows
 
 func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// Drag selection sees the event first, so a drag inside an overlay or a
+	// The split divider sees the event before selection: a press on it
+	// starts a resize, and must never start a text selection or a click.
+	if cmd, consumed := a.handleSplitMouse(msg); consumed {
+		return a, cmd
+	}
+	// Drag selection sees the event next, so a drag inside an overlay or a
 	// pane selects text instead of reaching the click handlers below.
 	selCmd, consumed := a.handleSelectionMouse(msg)
 	if consumed {
@@ -39,72 +44,13 @@ func (a *App) handleAppMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Handle drag-to-resize: motion while dragging
-	if a.dragResizing && msg.Action == tea.MouseActionMotion {
-		return a.handleDragResize(msg)
-	}
-	// End drag on release
-	if a.dragResizing && msg.Action == tea.MouseActionRelease {
-		a.dragResizing = false
-		return a, nil
-	}
-
 	switch msg.Button {
 	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 		return a.handleMouseScroll(msg)
 	case tea.MouseButtonLeft:
 		switch msg.Action {
 		case tea.MouseActionPress:
-			// Check if clicking on the split border to start resize
-			if a.tryStartDragResize(msg) {
-				return a, nil
-			}
 			return a.handleMouseClick(msg)
-		}
-	}
-	return a, nil
-}
-
-// tryStartDragResize checks if the click is on the split pane border and starts drag.
-func (a *App) tryStartDragResize(msg tea.MouseMsg) bool {
-	if a.state == viewConversation && a.mouseInExecutionRail(msg.Y) {
-		return false
-	}
-	sp := a.activeSplitPane()
-	if sp == nil || !sp.Show || sp.PreviewOnly {
-		return false
-	}
-	borderX := sp.ListWidth(a.width, a.splitRatio)
-	// Allow 1px tolerance on each side of the border
-	if msg.X >= borderX-1 && msg.X <= borderX+1 {
-		a.dragResizing = true
-		return true
-	}
-	return false
-}
-
-// handleDragResize updates the split ratio based on mouse X position during drag.
-func (a *App) handleDragResize(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if a.width <= 0 {
-		return a, nil
-	}
-	// Clamp to 20%-80% range
-	newRatio := msg.X * 100 / a.width
-	if newRatio < 20 {
-		newRatio = 20
-	}
-	if newRatio > 80 {
-		newRatio = 80
-	}
-	if newRatio != a.splitRatio {
-		a.splitRatio = newRatio
-		sp := a.activeSplitPane()
-		if sp != nil {
-			height := a.height
-			if a.state == viewConversation {
-				height = a.conversationLayoutHeight()
-			}
-			sp.Resize(a.width, height, a.splitRatio)
 		}
 	}
 	return a, nil
@@ -149,7 +95,7 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	sp := a.activeSplitPane()
-	scrolledPreview := sp != nil && sp.Show && (sp.PreviewOnly || msg.X > sp.ListWidth(a.width, a.splitRatio))
+	scrolledPreview := sp != nil && sp.inPreview(msg.X, a.width, a.split)
 
 	// previewCmd carries async preview work (the conversation transcript read)
 	// out to the runtime; dropping it would leave the pane on "(loading…)".
@@ -161,7 +107,7 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if scrolledPreview && a.sessPreviewMode == sessPreviewLive && a.paneProxy != nil {
 			return a, nil
 		}
-		a.sessSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+		a.sessSplit.HandleMouseScroll(msg.X, up, a.width, a.split)
 		if scrolledPreview {
 			a.sessPreviewPinned = !a.sessPreviewAtBottom()
 		} else {
@@ -178,7 +124,7 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		}
-		a.conv.split.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+		a.conv.split.HandleMouseScroll(msg.X, up, a.width, a.split)
 		if !scrolledPreview {
 			a.conv.contextActive = false
 			a.updateConvHeader()
@@ -190,18 +136,18 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case viewConfig:
 		if a.cfgPluginsPage {
 			if a.plgDetailActive {
-				a.plgDetailSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+				a.plgDetailSplit.HandleMouseScroll(msg.X, up, a.width, a.split)
 				if !scrolledPreview {
 					a.updatePluginDetailPreview()
 				}
 			} else {
-				a.plgSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+				a.plgSplit.HandleMouseScroll(msg.X, up, a.width, a.split)
 				if !scrolledPreview {
 					a.updatePluginPreview()
 				}
 			}
 		} else {
-			a.cfgSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+			a.cfgSplit.HandleMouseScroll(msg.X, up, a.width, a.split)
 			if !scrolledPreview {
 				a.updateConfigPreview()
 			}
@@ -209,12 +155,12 @@ func (a *App) handleMouseScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	case viewPlugins:
 		if a.plgDetailActive {
-			a.plgDetailSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+			a.plgDetailSplit.HandleMouseScroll(msg.X, up, a.width, a.split)
 			if !scrolledPreview {
 				a.updatePluginDetailPreview()
 			}
 		} else {
-			a.plgSplit.HandleMouseScroll(msg.X, up, a.width, a.splitRatio)
+			a.plgSplit.HandleMouseScroll(msg.X, up, a.width, a.split)
 			if !scrolledPreview {
 				a.updatePluginPreview()
 			}
@@ -261,12 +207,12 @@ func (a *App) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 func (a *App) selectByClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	contentY := msg.Y - 1 // adjust for title bar
 	sp := a.activeSplitPane()
-	clickedPreview := sp != nil && sp.Show && (sp.PreviewOnly || msg.X > sp.ListWidth(a.width, a.splitRatio))
+	clickedPreview := sp != nil && sp.inPreview(msg.X, a.width, a.split)
 
 	var previewCmd tea.Cmd
 	switch a.state {
 	case viewSessions:
-		a.sessSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+		a.sessSplit.HandleMouseClick(msg.X, contentY, a.width, a.split)
 		previewCmd = a.updateSessionPreview()
 
 	case viewConversation:
@@ -283,7 +229,7 @@ func (a *App) selectByClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 			a.conv.split.Focus = false
 		} else {
-			a.conv.split.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+			a.conv.split.HandleMouseClick(msg.X, contentY, a.width, a.split)
 			if !clickedPreview {
 				a.conv.contextActive = false
 				a.updateConvHeader()
@@ -296,23 +242,23 @@ func (a *App) selectByClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case viewConfig:
 		if a.cfgPluginsPage {
 			if a.plgDetailActive {
-				a.plgDetailSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+				a.plgDetailSplit.HandleMouseClick(msg.X, contentY, a.width, a.split)
 				a.updatePluginDetailPreview()
 			} else {
-				a.plgSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+				a.plgSplit.HandleMouseClick(msg.X, contentY, a.width, a.split)
 				a.updatePluginPreview()
 			}
 		} else {
-			a.cfgSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+			a.cfgSplit.HandleMouseClick(msg.X, contentY, a.width, a.split)
 			a.updateConfigPreview()
 		}
 
 	case viewPlugins:
 		if a.plgDetailActive {
-			a.plgDetailSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+			a.plgDetailSplit.HandleMouseClick(msg.X, contentY, a.width, a.split)
 			a.updatePluginDetailPreview()
 		} else {
-			a.plgSplit.HandleMouseClick(msg.X, contentY, a.width, a.splitRatio)
+			a.plgSplit.HandleMouseClick(msg.X, contentY, a.width, a.split)
 			a.updatePluginPreview()
 		}
 	}

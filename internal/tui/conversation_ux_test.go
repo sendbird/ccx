@@ -125,7 +125,7 @@ func setupConvApp(t *testing.T, entries []session.Entry, width, height int) *App
 	contentH := ContentHeight(height)
 	app.conv.split.Focus = false
 	app.conv.split.CacheKey = ""
-	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(width, app.splitRatio), contentH)
+	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(width, app.split), contentH)
 	app.conv.split.List = &app.convList
 	app.state = viewConversation
 
@@ -428,7 +428,7 @@ func TestLiveTailTracksNewMessages(t *testing.T) {
 	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
 
 	contentH := ContentHeight(app.height)
-	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
+	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.split), contentH)
 	app.conv.split.List = &app.convList
 
 	newCount := len(app.convList.Items())
@@ -572,7 +572,7 @@ func TestLiveTailAlwaysSelectsLastItem(t *testing.T) {
 	// so rebuild manually)
 	app.conv.items = buildConvItems(app.conv.sess, app.conv.merged, nil, nil, nil)
 	contentH := ContentHeight(app.height)
-	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
+	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.split), contentH)
 	app.conv.split.List = &app.convList
 	visItems := app.convList.Items()
 	if len(visItems) > 0 {
@@ -640,7 +640,7 @@ func TestLiveTailRefreshNoCachePoisoning(t *testing.T) {
 	// Simulate what refreshConversation does (minus LoadMessages I/O)
 	oldIdx := app.convList.Index()
 	contentH := ContentHeight(app.height)
-	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
+	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.split), contentH)
 	app.conv.split.List = &app.convList
 	if oldIdx < len(app.convList.Items()) {
 		app.convList.Select(oldIdx)
@@ -957,7 +957,7 @@ func TestModeSwitchPreservesNearestSelection(t *testing.T) {
 		t.Fatal("expected file artifact block in standard preview")
 	}
 	app.conv.split.Folds.BlockCursor = artifactIdx
-	app.conv.split.RefreshFoldPreview(app.width, app.splitRatio)
+	app.conv.split.RefreshFoldPreview(app.width, app.split)
 
 	app.setConvDetailLevel(previewText)
 	if app.conv.split.Folds == nil || len(app.conv.split.Folds.Entry.Content) == 0 {
@@ -1043,7 +1043,7 @@ func TestModeCyclePreservesOriginalSelection(t *testing.T) {
 		t.Fatalf("expected compact preview to contain marker pqr3, blocks=%+v", app.conv.split.Folds.Entry.Content)
 	}
 	app.conv.split.Folds.BlockCursor = target
-	app.conv.split.RefreshFoldPreview(app.width, app.splitRatio)
+	app.conv.split.RefreshFoldPreview(app.width, app.split)
 
 	// Cycle: compact -> standard -> verbose -> compact. At every step the
 	// selected block must remain the "pqr3" marker block — across modes the
@@ -1131,7 +1131,7 @@ func TestStandardToVerbosePreservesToolOnlyTurn(t *testing.T) {
 		t.Fatalf("expected standard preview to summarize TaskUpdate turn; blocks=%+v", app.conv.split.Folds.Entry.Content)
 	}
 	app.conv.split.Folds.BlockCursor = target
-	app.conv.split.RefreshFoldPreview(app.width, app.splitRatio)
+	app.conv.split.RefreshFoldPreview(app.width, app.split)
 
 	app.setConvDetailLevel(previewHook)
 
@@ -1200,7 +1200,7 @@ func TestVerboseToolToCompactFallsBackToPrecedingText(t *testing.T) {
 		t.Fatalf("expected verbose preview to contain TaskUpdate tool_use; blocks=%+v", app.conv.split.Folds.Entry.Content)
 	}
 	app.conv.split.Folds.BlockCursor = target
-	app.conv.split.RefreshFoldPreview(app.width, app.splitRatio)
+	app.conv.split.RefreshFoldPreview(app.width, app.split)
 
 	app.setConvDetailLevel(previewText)
 
@@ -1952,7 +1952,7 @@ func TestLiveTailSelectsLastMessageNotAgentOrTask(t *testing.T) {
 	})
 
 	contentH := ContentHeight(app.height)
-	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.splitRatio), contentH)
+	app.convList = newConvList(app.conv.items, app.conv.split.ListWidth(app.width, app.split), contentH)
 	app.conv.split.List = &app.convList
 
 	// Simulate handleLiveTail's selection logic

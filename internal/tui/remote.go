@@ -1425,7 +1425,7 @@ func (a *App) installRemoteSession(sess *remote.Session, steps <-chan remote.Set
 	if !a.sessSplit.Show {
 		a.sessSplit.Show = true
 		contentH := max(a.height-3, 1)
-		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
+		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.split), contentH)
 	}
 	a.sessSplit.CacheKey = "remote:" + virtualID
 	a.sessSplit.Preview.SetContent(a.remoteContent)

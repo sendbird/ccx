@@ -16,12 +16,12 @@ func TestZoomedInspectorMouseTreatsFullWidthAsPreview(t *testing.T) {
 	})
 	app.openInspector(inspectorConversation, session.ScopeNode, true)
 	selected := app.convList.Index()
-	borderX := app.conv.split.ListWidth(app.width, app.splitRatio)
+	borderX := app.conv.split.ListWidth(app.width, app.split)
 
-	if app.tryStartDragResize(tea.MouseMsg{X: borderX, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}) {
+	if _, consumed := app.handleSplitMouse(tea.MouseMsg{X: borderX, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}); consumed {
 		t.Fatal("zoomed inspector started hidden divider resize")
 	}
-	if app.dragResizing {
+	if app.split.Dragging() {
 		t.Fatal("zoomed inspector left drag resize active")
 	}
 
@@ -124,7 +124,7 @@ func TestWheelScrollsFocusedPreviewByThreeLines(t *testing.T) {
 	}
 	app.sessSplit.Preview.SetContent(sb.String())
 	app.sessSplit.Preview.GotoTop()
-	px := app.sessSplit.ListWidth(app.width, app.splitRatio) + 5
+	px := app.sessSplit.ListWidth(app.width, app.split) + 5
 	app = send(app, wheel(px, 5, true))
 	if got := app.sessSplit.Preview.YOffset; got != 3 {
 		t.Fatalf("preview offset = %d after one notch, want 3", got)
@@ -135,18 +135,18 @@ func TestDragOnSplitBorderStillResizes(t *testing.T) {
 	app, _ := newMouseApp(t, 6)
 	app.sessSplit.Show = true
 	app = send(app, tea.WindowSizeMsg{Width: 160, Height: 30})
-	border := app.sessSplit.ListWidth(app.width, app.splitRatio)
-	before := app.splitRatio
+	border := app.sessSplit.ListWidth(app.width, app.split)
+	before := app.split.Ratio()
 	app = send(app, press(border, 5))
-	if !app.dragResizing {
+	if !app.split.Dragging() {
 		t.Fatal("press on the divider did not start a drag")
 	}
 	app = send(app, tea.MouseMsg{X: border + 20, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
-	if app.splitRatio <= before {
-		t.Fatalf("drag right left ratio at %d (was %d)", app.splitRatio, before)
+	if app.split.Ratio() <= before {
+		t.Fatalf("drag right left ratio at %v (was %v)", app.split.Ratio(), before)
 	}
 	app = send(app, tea.MouseMsg{X: border + 20, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
-	if app.dragResizing {
+	if app.split.Dragging() {
 		t.Fatal("release did not end the drag")
 	}
 }

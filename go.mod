@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
-	github.com/keyolk/tuikit v0.0.0-20261021080153-b0beaa45b719
+	github.com/keyolk/tuikit v0.0.0-20261021151546-5b7fabea432c
 	github.com/mattn/go-runewidth v0.0.19
 	golang.org/x/term v0.41.0
 	gopkg.in/yaml.v3 v3.0.1

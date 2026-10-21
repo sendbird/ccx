@@ -162,7 +162,7 @@ func (a *App) metaMemoryDrillEntries(note session.MemoryNote) []metaEntry {
 		head.WriteString(dimStyle.Render("  · J: jump to last write"))
 	}
 
-	previewW := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+	previewW := max(a.conv.split.PreviewWidth(a.width, a.split)-4, 20)
 	body := renderMarkdownText(note.Body, previewW)
 
 	return []metaEntry{
@@ -189,7 +189,7 @@ func (a *App) metaMemorySearchEntries(query string) []metaEntry {
 	}
 	notes := session.LoadMemoryNotes(sess.ProjectPath, homeDir())
 	q := strings.ToLower(strings.TrimSpace(query))
-	previewW := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+	previewW := max(a.conv.split.PreviewWidth(a.width, a.split)-4, 20)
 	// Reserve room for the cursor indicator, the "L<n>  " line-number prefix,
 	// and the renderMarkdownText wrap margin so the styled snippet stays on one
 	// rendered line (wrapText would split ANSI and break the highlight).
@@ -716,7 +716,7 @@ func (a *App) focusFirstActionableMetaTarget() {
 			continue
 		}
 		sp.Folds.BlockCursor = i
-		sp.RefreshFoldCursor(a.width, a.splitRatio)
+		sp.RefreshFoldCursor(a.width, a.split)
 		sp.ScrollToBlock()
 		return
 	}
@@ -1052,7 +1052,7 @@ func (a *App) metaPlanDrillEntries(art session.Artifact) []metaEntry {
 	if body == "" {
 		body = dimStyle.Render("(plan data unavailable)")
 	} else {
-		previewW := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+		previewW := max(a.conv.split.PreviewWidth(a.width, a.split)-4, 20)
 		body = strings.TrimRight(renderMarkdownText(body, previewW), "\n")
 	}
 	return []metaEntry{
