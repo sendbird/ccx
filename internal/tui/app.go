@@ -19,6 +19,7 @@ import (
 	tk "github.com/keyolk/tuikit/kitty"
 	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/prefs"
+	"github.com/keyolk/tuikit/selection"
 	"github.com/keyolk/tuikit/toast"
 	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/clauderegistry"
@@ -305,6 +306,7 @@ type App struct {
 	// Mouse state
 	dragResizing   bool
 	clicks         mouseClickState
+	sel            selection.Selection // drag selection; see drag_selection.go
 	breadcrumbSegs []breadcrumbSegment
 
 	// Global stats view
@@ -1691,10 +1693,16 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return a.handleMouse(msg)
 
+	case selection.CopiedMsg:
+		a.reportCopied(msg)
+		return a, nil
+
 	case tea.KeyMsg:
 		// A key between two clicks breaks the pair: click, move away and back
 		// by keyboard, click again must not count as a double click.
 		a.clicks.clicks = mouse.Clicks{}
+		// A key is the "next action" that ends a drag selection's highlight.
+		a.sel.Clear()
 		// A key acknowledges a sticky error toast; info toasts expire on
 		// their own tick (tuikit/toast).
 		a.toasts = toast.OnKey(a.toasts)
@@ -1870,7 +1878,10 @@ func (a *App) activeDividerCol() int {
 	return 0
 }
 
-func (a *App) View() string {
+// renderScreen draws the whole frame without the drag-selection highlight and
+// the Kitty image layer; View adds both. Mouse code hit-tests against this
+// frame (selection, overlayRect), so it must not call View and recurse.
+func (a *App) renderScreen() string {
 	if a.width == 0 || a.height == 0 {
 		return "Loading..."
 	}
@@ -2160,11 +2171,6 @@ func (a *App) View() string {
 	// Cross-session search overlays everything as a centered modal
 	if a.searchActive {
 		screen = a.renderSearchModal(screen)
-	}
-
-	// Kitty inline image layer: draw or clear images each frame.
-	if kitty.Supported() {
-		screen += a.kittyImageLayer()
 	}
 
 	return screen
