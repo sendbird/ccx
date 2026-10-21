@@ -42,22 +42,12 @@ func (a *App) View() string {
 	return screen
 }
 
-// splitRects is the geometry a SplitPane is drawn with: the same ListWidth,
-// PreviewWidth, ContentHeight and narrow-terminal fallback SplitPane.Render
-// and renderSessionSplit use, offset by the title row. preview is empty when
-// the preview is not drawn; list is empty when the zoomed preview hides it.
+// splitRects is the geometry a SplitPane is drawn with (SplitPane.layout,
+// which Render and renderSessionSplit also cut by). preview is empty when the
+// preview is not drawn; list is empty when the zoomed preview hides it.
 func (a *App) splitRects(sp *SplitPane, layoutH int) (list, preview mouse.Rect) {
-	contentH := ContentHeight(layoutH)
-	if sp.Show && sp.PreviewOnly {
-		return mouse.Rect{}, mouse.Rect{X: 0, Y: 1, W: max(a.width, 1), H: contentH}
-	}
-	listW := sp.ListWidth(a.width, a.splitRatio)
-	list = mouse.Rect{X: 0, Y: 1, W: listW, H: contentH}
-	if !sp.Show || a.width < 40 || layoutH < 10 {
-		return list, mouse.Rect{}
-	}
-	// One border column sits between the list and the preview.
-	return list, mouse.Rect{X: listW + 1, Y: 1, W: sp.PreviewWidth(a.width, a.splitRatio), H: contentH}
+	list, _, preview = sp.layout(a.width, layoutH, a.split)
+	return list, preview
 }
 
 // viewportLines is every line of vp's content, as the viewport would draw it.
@@ -161,12 +151,6 @@ func (a *App) handleSelectionMouse(msg tea.MouseMsg) (cmd tea.Cmd, done bool) {
 	// Only a left press, or motion/release during a drag, can change the
 	// selection; skip building the frame for wheel and stray motion.
 	if !mouse.IsLeftPress(msg) && !a.sel.Dragging() {
-		return nil, false
-	}
-	// A press in the divider's grab zone (which reaches one cell into each
-	// pane) starts a resize after this returns; the motion that follows
-	// belongs to the resize, never to a selection.
-	if a.dragResizing {
 		return nil, false
 	}
 	panes := a.selectionPanes()

@@ -46,6 +46,9 @@ var bindingTable = []bindingSpec{
 	{"session", "right", "focus", "Open / focus preview"},
 	{"session", "resize_shrink", "shrink", "Shrink list"},
 	{"session", "resize_grow", "grow", "Grow list"},
+	{"session", "split_shrink", "shrink", "Shrink list"},
+	{"session", "split_grow", "grow", "Grow list"},
+	{"session", "split_reset", "reset", "Reset split"},
 	{"session", "command", "cmd", "Command palette (full actions)"},
 	{"session", "pick", "pick", "Pick (pick mode)"},
 	{"session", "fold_all", "fold", "Fold all groups"},
@@ -213,6 +216,9 @@ func (km *Keymap) resolveSplitKey(key string) string {
 		{km.Session.Right, "right"},
 		{km.Session.ResizeShrink, "["},
 		{km.Session.ResizeGrow, "]"},
+		{km.Session.SplitShrink, "<"},
+		{km.Session.SplitGrow, ">"},
+		{km.Session.SplitReset, "="},
 	} {
 		if m.configured != "" && m.configured != m.canonical && key == m.configured {
 			return m.canonical
@@ -362,6 +368,11 @@ func (a *App) sessionsListHelpRows() []helpRow {
 			continue // shown with resize_shrink
 		case "resize_shrink":
 			rows = append(rows, helpRow{displayKey(km.Session.ResizeShrink) + " / " + displayKey(km.Session.ResizeGrow), "Resize split"})
+			continue
+		case "split_shrink", "split_grow":
+			continue // shown with split_reset
+		case "split_reset":
+			rows = append(rows, a.splitHelpRow())
 			continue
 		case "page_menu":
 			rows = append(rows, a.helpRowFor("session", "page_menu"), helpRow{displayKey(km.Session.PageMenu) + " → l", "Live preview (page menu → live)"})

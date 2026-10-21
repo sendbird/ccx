@@ -1784,6 +1784,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 				{"z", "Zoom"},
 				{displayKey(km.Preview.CopyMode), "Copy mode"},
 				{"←", "Unfocus"},
+				a.splitHelpRow(),
 			}
 		}
 		return "Conversation", []helpRow{
@@ -1797,6 +1798,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{displayKey(km.Conversation.Edit), "Edit"},
 			{displayKey(km.Conversation.Input), "Live input (tmux)"},
 			{"tab", "Toggle inspector"},
+			a.splitHelpRow(),
 		}
 	case viewGlobalStats:
 		return "Global stats", []helpRow{
@@ -1814,6 +1816,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{"[ / ] / p / tab", "Cycle page"},
 			{"1-9", "Jump to section"},
 			{"esc / ←", "Back / close"},
+			a.splitHelpRow(),
 		}
 	case viewPlugins:
 		return "Plugins", []helpRow{
@@ -1822,6 +1825,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 			{displayKey(km.Session.Search), "Search"},
 			{displayKey(km.Session.Actions), "Actions"},
 			{"esc / ←", "Back / close"},
+			a.splitHelpRow(),
 		}
 	default: // viewSessions
 		if a.sessSplit.Show && a.sessSplit.Focus {
@@ -1834,7 +1838,7 @@ func (a *App) helpModalContextRows() (title string, rows []helpRow) {
 // sessionsPreviewContextRows returns the key rows for the focused sessions
 // preview, specialized by the active preview mode.
 func (a *App) sessionsPreviewContextRows() []helpRow {
-	base := []helpRow{{"↑↓ / jk", "Scroll / navigate"}, {"←", "Unfocus"}, {"tab", "Cycle mode"}, {displayKey(a.keymap.Session.PageMenu), "Page menu"}}
+	base := []helpRow{{"↑↓ / jk", "Scroll / navigate"}, {"←", "Unfocus"}, {"tab", "Cycle mode"}, {displayKey(a.keymap.Session.PageMenu), "Page menu"}, a.splitHelpRow()}
 	// A date row owns the preview regardless of the selected mode.
 	if _, ok := a.selectedDay(); ok {
 		return []helpRow{

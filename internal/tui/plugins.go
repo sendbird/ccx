@@ -256,7 +256,7 @@ func (a *App) openPluginExplorer() (tea.Model, tea.Cmd) {
 	a.plgTree = tree
 	items := buildPluginItems(tree)
 	contentH := ContentHeight(a.height)
-	listW := a.plgSplit.ListWidth(a.width, a.splitRatio)
+	listW := a.plgSplit.ListWidth(a.width, a.split)
 	a.plgList = newPluginList(items, listW, contentH)
 	a.plgSplit.Show = true
 	a.plgSplit.Focus = false
@@ -301,16 +301,7 @@ func (a *App) handlePluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Split pane navigation
-	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, func(delta int) {
-		newRatio := a.splitRatio + delta
-		if newRatio < 20 {
-			newRatio = 20
-		}
-		if newRatio > 80 {
-			newRatio = 80
-		}
-		a.splitRatio = newRatio
-	})
+	result := sp.HandleSplitKey(key, a.width, a.height, a.split, a.splitActionFor(a.height))
 	switch result {
 	case splitKeyClosed:
 		if a.plgSearchTerm != "" {
@@ -437,16 +428,7 @@ func (a *App) handleCfgPluginKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleViewsMenu(key)
 	}
 
-	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, func(delta int) {
-		newRatio := a.splitRatio + delta
-		if newRatio < 20 {
-			newRatio = 20
-		}
-		if newRatio > 80 {
-			newRatio = 80
-		}
-		a.splitRatio = newRatio
-	})
+	result := sp.HandleSplitKey(key, a.width, a.height, a.split, a.splitActionFor(a.height))
 	switch result {
 	case splitKeyClosed:
 		if a.plgSearchTerm != "" {
@@ -547,7 +529,7 @@ func (a *App) renderPluginSplit() string {
 		return ""
 	}
 	clampPaginator(&a.plgList)
-	return a.plgSplit.Render(a.width, a.height, a.splitRatio)
+	return a.plgSplit.Render(a.width, a.height, a.split)
 }
 
 func (a *App) updatePluginPreview() {
@@ -588,7 +570,7 @@ func (a *App) updatePluginPreview() {
 		return
 	}
 
-	previewW := sp.PreviewWidth(a.width, a.splitRatio)
+	previewW := sp.PreviewWidth(a.width, a.split)
 	content := renderPluginDetail(pi.plugin, previewW)
 	sp.Preview.SetContent(content)
 	sp.Preview.GotoTop()
@@ -923,7 +905,7 @@ func (a *App) openPluginDetail(p session.Plugin) (tea.Model, tea.Cmd) {
 
 	items := buildComponentItems(p)
 	contentH := ContentHeight(a.height)
-	listW := a.plgDetailSplit.ListWidth(a.width, a.splitRatio)
+	listW := a.plgDetailSplit.ListWidth(a.width, a.split)
 
 	l := list.New(items, plgCompDelegate{selectedSet: a.plgCompSelectedSet}, listW, contentH)
 	initListBase(&l)
@@ -1018,16 +1000,7 @@ func (a *App) handlePluginDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Split pane navigation
-	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, func(delta int) {
-		newRatio := a.splitRatio + delta
-		if newRatio < 20 {
-			newRatio = 20
-		}
-		if newRatio > 80 {
-			newRatio = 80
-		}
-		a.splitRatio = newRatio
-	})
+	result := sp.HandleSplitKey(key, a.width, a.height, a.split, a.splitActionFor(a.height))
 	switch result {
 	case splitKeyClosed:
 		if a.plgCompHasSelection() {
@@ -1224,7 +1197,7 @@ func (a *App) renderPluginDetailSplit() string {
 		return ""
 	}
 	clampPaginator(&a.plgDetailList)
-	return a.plgDetailSplit.Render(a.width, a.height, a.splitRatio)
+	return a.plgDetailSplit.Render(a.width, a.height, a.split)
 }
 
 func (a *App) updatePluginDetailPreview() {
@@ -1236,7 +1209,7 @@ func (a *App) updatePluginDetailPreview() {
 	ci, ok := a.plgDetailList.SelectedItem().(plgCompItem)
 	if !ok {
 		// No items (empty component list) — show plugin metadata
-		previewW := sp.PreviewWidth(a.width, a.splitRatio)
+		previewW := sp.PreviewWidth(a.width, a.split)
 		if sp.CacheKey != "plugin-meta" {
 			sp.CacheKey = "plugin-meta"
 			sp.Preview.SetContent(renderPluginDetail(a.plgDetailPlugin, previewW))
@@ -1261,7 +1234,7 @@ func (a *App) updatePluginDetailPreview() {
 		return
 	}
 
-	previewW := sp.PreviewWidth(a.width, a.splitRatio)
+	previewW := sp.PreviewWidth(a.width, a.split)
 
 	// Sub-plugin entry: show description + its components
 	if sp := ci.subPlugin; sp != nil {
@@ -1363,7 +1336,7 @@ func (a *App) rebuildPlgList() {
 		items = filterPluginItems(items, a.plgSearchTerm)
 	}
 	contentH := ContentHeight(a.height)
-	listW := a.plgSplit.ListWidth(a.width, a.splitRatio)
+	listW := a.plgSplit.ListWidth(a.width, a.split)
 	a.plgList = newPluginList(items, listW, contentH)
 	a.applyPlgDelegate()
 	a.plgSplit.CacheKey = ""

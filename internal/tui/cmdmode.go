@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -417,7 +418,7 @@ func (a *App) setSessPreviewMode(mode sessPreview) tea.Cmd {
 		idx := a.sessionList.Index()
 		a.sessSplit.Show = true
 		contentH := max(a.height-3, 1)
-		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
+		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.split), contentH)
 		a.sessionList.Select(idx)
 	}
 	return a.updateSessionPreview()
@@ -728,18 +729,8 @@ func (a *App) executeCmdSetRatio(input string) (tea.Model, tea.Cmd) {
 		a.flash("Invalid ratio: " + valStr)
 		return a, nil
 	}
-	if n < 15 {
-		n = 15
-	}
-	if n > 85 {
-		n = 85
-	}
-	a.splitRatio = n
-	if a.sessSplit.Show {
-		contentH := max(a.height-3, 1)
-		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
-	}
-	a.flash(fmt.Sprintf("Ratio: %d%%", n))
+	a.setSplitPercent(n)
+	a.flash(fmt.Sprintf("Ratio: %d%%", int(math.Round(a.split.Ratio()*100))))
 	return a, nil
 }
 

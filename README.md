@@ -403,7 +403,7 @@ Multi-select plugin components and press `t` to launch an isolated Claude sessio
 | `Shift+Tab` | Reverse cycle preview |
 | `→` | Open/focus preview |
 | `←` | Close/unfocus preview |
-| `[` / `]` | Adjust split ratio |
+| `<` / `>` / `=` | Shrink / grow the list, reset the split (`[` / `]` also resize where they do not cycle tabs or pages; drag the divider with the mouse, double-click it to reset) |
 | `Space` | Multi-select toggle |
 | `1-9` | Number key shortcuts (configurable) |
 | `p` | Preview-mode menu (works from the list *and* the focused preview) |
@@ -514,7 +514,7 @@ preferences:
   preview_mode: stats       # conv|stats|mem|tasks|live
   view_mode: sessions       # sessions|config|plugins|stats
   conv_detail_level: 1      # 0=text, 1=tool, 2=hook
-  split_ratio: 35           # 15-85
+  split_ratio: 35           # 15-85; read once by older-version migration, ui.json keeps {"split": {"ratio": 0.35}}
   worktree_dir: .worktree   # git worktree subdirectory name
   hidden_badges: [DONE, STUCK]  # hide specific badges
   filter_term: "is:live"    # last applied session filter

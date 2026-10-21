@@ -49,7 +49,7 @@ func (a *App) clickTargetKey(msg tea.MouseMsg) (key string, ok bool) {
 	if sp == nil {
 		return "", false
 	}
-	if sp.Show && (sp.PreviewOnly || msg.X > sp.ListWidth(a.width, a.splitRatio)) {
+	if sp.inPreview(msg.X, a.width, a.split) {
 		if sp.Folds != nil && len(sp.Folds.BlockStarts) > 0 {
 			return fmt.Sprintf("v%d:preview:block%d", a.state, sp.Folds.BlockCursor), true
 		}
@@ -106,7 +106,7 @@ func listRowAt(l *list.Model, contentY, itemHeight int) (int, bool) {
 func (a *App) activateClicked(msg tea.MouseMsg, selectCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	sp := a.activeSplitPane()
 	// Double-click in preview toggles the block fold.
-	if sp != nil && sp.HandleMouseDoubleClick(msg.X, a.width, a.splitRatio) {
+	if sp != nil && sp.HandleMouseDoubleClick(msg.X, a.width, a.split) {
 		return a, tea.Batch(selectCmd, a.refreshActivePreview())
 	}
 	// A zoomed preview has no list target behind it.

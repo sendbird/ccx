@@ -20,6 +20,7 @@ import (
 	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/prefs"
 	"github.com/keyolk/tuikit/selection"
+	"github.com/keyolk/tuikit/split"
 	"github.com/keyolk/tuikit/toast"
 	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/clauderegistry"
@@ -261,8 +262,9 @@ type App struct {
 	// Session-specific: pinned scroll state
 	sessPreviewPinned bool
 
-	// Split pane ratio (list width as % of terminal width)
-	splitRatio int
+	// split is the one list|preview divider every split view shares (see
+	// split_layout.go): one ratio, so moving it in one view moves it in all.
+	split split.Model
 
 	// Preview debounce: rapid list navigation skips expensive preview renders
 	// until the user pauses. Counter increments on each navigation; the delayed
@@ -304,7 +306,6 @@ type App struct {
 	sessPendingG    bool // sessions view: first 'g' of a possible gg top-jump
 
 	// Mouse state
-	dragResizing   bool
 	clicks         mouseClickState
 	sel            selection.Selection // drag selection; see drag_selection.go
 	breadcrumbSegs []breadcrumbSegment
@@ -974,7 +975,7 @@ func NewApp(sessions []session.Session, cfg Config) *App {
 		sessionsLoading:        true, // always true — full scan happens async
 		config:                 cfg,
 		keymap:                 km,
-		splitRatio:             35,
+		split:                  newSplitModel(),
 		selectedSet:            make(map[string]bool),
 		hiddenBadges:           make(map[string]bool),
 		refsInFlight:           make(map[string]bool),
@@ -1481,7 +1482,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Build/rebuild session list
 		if a.width > 0 && a.height > 0 {
 			contentH := a.height - 3
-			sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
+			sessW := a.sessSplit.ListWidth(a.width, a.split)
 			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 			a.sessSplit.CacheKey = ""
 			a.applyStartupFilter()
@@ -1848,31 +1849,31 @@ func (a *App) activeDividerCol() int {
 	switch a.state {
 	case viewSessions:
 		if a.sessSplit.Show {
-			return a.sessSplit.ListWidth(a.width, a.splitRatio)
+			return a.sessSplit.ListWidth(a.width, a.split)
 		}
 	case viewConversation:
 		if a.conv.split.Show {
-			return a.conv.split.ListWidth(a.width, a.splitRatio)
+			return a.conv.split.ListWidth(a.width, a.split)
 		}
 	case viewConfig:
 		if a.cfgPluginsPage {
 			if a.plgDetailActive && a.plgDetailSplit.Show {
-				return a.plgDetailSplit.ListWidth(a.width, a.splitRatio)
+				return a.plgDetailSplit.ListWidth(a.width, a.split)
 			}
 			if a.plgSplit.Show {
-				return a.plgSplit.ListWidth(a.width, a.splitRatio)
+				return a.plgSplit.ListWidth(a.width, a.split)
 			}
 			return 0
 		}
 		if a.cfgSplit.Show {
-			return a.cfgSplit.ListWidth(a.width, a.splitRatio)
+			return a.cfgSplit.ListWidth(a.width, a.split)
 		}
 	case viewPlugins:
 		if a.plgDetailActive && a.plgDetailSplit.Show {
-			return a.plgDetailSplit.ListWidth(a.width, a.splitRatio)
+			return a.plgDetailSplit.ListWidth(a.width, a.split)
 		}
 		if a.plgSplit.Show {
-			return a.plgSplit.ListWidth(a.width, a.splitRatio)
+			return a.plgSplit.ListWidth(a.width, a.split)
 		}
 	}
 	return 0
@@ -2342,7 +2343,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			sp.Show = false
 			sp.Focus = false
 			contentH := max(a.height-3, 1)
-			a.sessionList.SetSize(sp.ListWidth(a.width, a.splitRatio), contentH)
+			a.sessionList.SetSize(sp.ListWidth(a.width, a.split), contentH)
 			a.sessionList.Select(idx)
 			return a, nil
 		}
@@ -2665,7 +2666,7 @@ func (a *App) handleSessionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Shared split-pane semantics for left/right/tab/esc/resize.
-	result := sp.HandleSplitKey(key, a.width, a.height, a.splitRatio, a.adjustSplitRatio)
+	result := sp.HandleSplitKey(key, a.width, a.height, a.split, a.splitActionFor(a.height))
 	switch result {
 	case splitKeyClosed:
 		return a, nil
@@ -2915,7 +2916,7 @@ func (a *App) handleWorkflowsPreviewKeys(sp *SplitPane, key string) (tea.Model, 
 	switch HandleFlatCursorNav(&a.sessWfCursor, len(a.sessWfAgents), key) {
 	case NavCursorMoved:
 		if sess, ok := a.selectedSession(); ok {
-			previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+			previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 			sp.Preview.SetContent(a.buildWorkflowsPreviewContent(sess, previewW))
 		}
 		if key == "up" || key == "k" {
@@ -3199,7 +3200,7 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 		}
 	case "up":
 		if a.sessConvCursor > 0 {
-			previewW := max(a.width-sp.ListWidth(a.width, a.splitRatio)-1, 1)
+			previewW := sp.PreviewWidth(a.width, a.split)
 			curLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
 			vpTop := sp.Preview.YOffset
 			vpBottom := vpTop + sp.Preview.Height
@@ -3224,7 +3225,7 @@ func (a *App) handleConvPreviewKeys(sp *SplitPane, key string) (tea.Model, tea.C
 		return a, nil, true
 	case "down":
 		if a.sessConvCursor < len(visible)-1 {
-			previewW := max(a.width-sp.ListWidth(a.width, a.splitRatio)-1, 1)
+			previewW := sp.PreviewWidth(a.width, a.split)
 			curLine := convCursorLine(visible, a.sessConvCursor, a.sessConvExpanded, previewW)
 			vpTop := sp.Preview.YOffset
 			vpBottom := vpTop + sp.Preview.Height
@@ -5129,7 +5130,7 @@ func (a *App) refreshActivePreview() tea.Cmd {
 			a.conv.split.CacheKey = "" // force re-render
 			a.updateConvPreview()
 		} else {
-			a.conv.split.RefreshFoldPreview(a.width, a.splitRatio)
+			a.conv.split.RefreshFoldPreview(a.width, a.split)
 		}
 	}
 	return nil
@@ -5167,13 +5168,12 @@ func (a *App) syncSessionSplitLayout() {
 		return
 	}
 	clampPaginator(&a.sessionList)
-	if !a.sessSplit.Show || a.width < 40 || a.height < 10 {
+	listR, _, previewR := a.sessSplit.layout(a.width, a.height, a.split)
+	if previewR.W == 0 {
 		return
 	}
 
-	listW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-	previewW := max(a.width-listW-1, 1)
-	contentH := max(a.height-3, 1)
+	listW, previewW, contentH := listR.W, previewR.W, listR.H
 
 	if a.sessionList.Width() > 0 && (a.sessionList.Width() != listW || a.sessionList.Height() != contentH) {
 		idx := a.sessionList.Index()
@@ -5264,13 +5264,11 @@ func (a *App) renderSessionSplit() string {
 	if a.sessionList.Width() == 0 {
 		return ""
 	}
-	if !a.sessSplit.Show || a.width < 40 || a.height < 10 {
+	listR, _, previewR := a.sessSplit.layout(a.width, a.height, a.split)
+	if previewR.W == 0 {
 		return a.sessionList.View()
 	}
-
-	listW := a.sessSplit.ListWidth(a.width, a.splitRatio)
-	previewW := max(a.width-listW-1, 1)
-	contentH := max(a.height-3, 1)
+	listW, previewW, contentH := listR.W, previewR.W, listR.H
 
 	borderColor := colorBorderDim
 	if a.sessSplit.Focus {
@@ -5280,7 +5278,7 @@ func (a *App) renderSessionSplit() string {
 	left := a.sessionList.View()
 	right := a.sessSplit.Preview.View()
 
-	return renderFixedSplit(left, right, listW, previewW, contentH, borderColor)
+	return renderFixedSplit(left, right, listW, previewW, contentH, dividerCell(a.split, borderColor))
 }
 
 // toggleSessionPreviewMode switches session preview to the given mode,
@@ -5291,7 +5289,7 @@ func (a *App) toggleSessionPreviewMode(mode sessPreview) {
 		a.sessSplit.Show = true
 		a.sessSplit.CacheKey = ""
 		contentH := max(a.height-3, 1)
-		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.splitRatio), contentH)
+		a.sessionList.SetSize(a.sessSplit.ListWidth(a.width, a.split), contentH)
 		a.sessionList.Select(idx)
 	}
 	if a.sessPreviewMode == mode {
@@ -5642,7 +5640,7 @@ func (a *App) applyConvPreviewLoad(msg convPreviewLoadedMsg) {
 		a.sessConvCursor = 0
 	}
 
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	rendered, _, _, _, _ := renderConversationPreviewWindowed(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, a.convPreviewRowCache, sess.IsLive)
 
@@ -5680,7 +5678,7 @@ func (a *App) refreshConvPreview() {
 		a.sessSplit.Preview.SetContent(dimStyle.Render("(no matches)"))
 		return
 	}
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	content, renderedVisible, localCursor, localExpanded, windowed := renderConversationPreviewWindowed(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, a.convPreviewRowCache, isLive)
 	if sess, ok2 := a.selectedSession(); ok2 {
 		content = a.prependConvHeaders(sess, content, previewW)
@@ -6087,7 +6085,7 @@ func (a *App) applyStatsPreviewLoad(msg statsPreviewLoadedMsg) {
 }
 
 func (a *App) renderSessionStatsPreview(stats session.SessionStats) {
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	content := renderSessionStats(stats, previewW)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
@@ -6095,7 +6093,7 @@ func (a *App) renderSessionStatsPreview(stats session.SessionStats) {
 }
 
 func (a *App) updateProjectPreview(pi projectItem) {
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	var sb strings.Builder
 
@@ -6216,7 +6214,7 @@ func (a *App) updateSessionMemoryPreview(sess session.Session) {
 		a.sessMemoryCacheKey = sess.ID
 	}
 
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessMemoryCache)
@@ -6238,7 +6236,7 @@ func (a *App) updateSessionScratchpadPreview(sess session.Session) tea.Cmd {
 		}
 	}
 
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessScratchpadCache)
@@ -6251,7 +6249,7 @@ func (a *App) updateSessionTasksPlanPreview(sess session.Session) {
 		a.sessTasksCacheKey = sess.ID
 	}
 
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessTasksCache)
@@ -6259,7 +6257,7 @@ func (a *App) updateSessionTasksPlanPreview(sess session.Session) {
 
 func (a *App) updateSessionAgentsPreview(sess session.Session) tea.Cmd {
 	cmd := a.adoptPreviewLoad(sessPreviewAgents, sess)
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	if _, loaded := a.previewLoads.Get(previewLoadKey(sessPreviewAgents, sess)); !loaded {
@@ -6280,7 +6278,7 @@ func (a *App) updateSessionWorkflowsPreview(sess session.Session) tea.Cmd {
 		a.sessWorkflowsCacheKey = ""
 	}
 	cmd := a.adoptPreviewLoad(sessPreviewWorkflows, sess)
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	if _, loaded := a.previewLoads.Get(previewLoadKey(sessPreviewWorkflows, sess)); !loaded {
@@ -6476,7 +6474,7 @@ func (a *App) updateSessionShellsPreview(sess session.Session) tea.Cmd {
 			a.sessShellsCache = dimStyle.Render("(loading shells…)")
 		}
 	}
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	a.sessSplit.Preview = viewport.New(previewW, contentH)
 	a.sessSplit.Preview.SetContent(a.sessShellsCache)
@@ -6488,7 +6486,7 @@ func (a *App) updateSessionShellsPreview(sess session.Session) tea.Cmd {
 // session+mtime; only the render below is keyed by cursor/width/focus, so
 // moving the highlight inside the pane no longer re-reads the transcript.
 func (a *App) updateSessionContextsPreview(sess session.Session) tea.Cmd {
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 	// Reset the cursor when the selected session changes so we don't carry a
 	// stale index into a different tree.
@@ -6764,7 +6762,7 @@ func (a *App) updateSessionRefsPreview(sess session.Session) tea.Cmd {
 		sess = fresh
 	}
 
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 
 	// Reset the cursor when the selected session changes so it never points past
@@ -7501,7 +7499,7 @@ func (a *App) buildScratchpadContent(sess session.Session, files []session.Scrat
 		return dimStyle.Render("No scratchpad files.")
 	}
 
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 20)
+	previewW := max(a.sessSplit.PreviewWidth(a.width, a.split), 20)
 	var sb strings.Builder
 	sb.WriteString(dimStyle.Render("── Scratchpad ──") + "\n\n")
 	for _, f := range files {
@@ -7589,7 +7587,7 @@ func (a *App) buildMemoryContent(sess session.Session) string {
 	}
 
 	// Memory notes — parsed with frontmatter (name/description/type), index first.
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 20)
+	previewW := max(a.sessSplit.PreviewWidth(a.width, a.split), 20)
 	notes := session.LoadMemoryNotes(sess.ProjectPath, home)
 	for _, note := range notes {
 		sb.WriteString(a.renderMemoryNote(note, previewW))
@@ -7640,28 +7638,6 @@ func (a *App) renderMemoryNote(note session.MemoryNote, width int) string {
 	body := renderMarkdownText(note.Body, max(width-2, 20))
 	sb.WriteString(strings.TrimRight(body, "\n") + "\n\n")
 	return sb.String()
-}
-
-// --- Agent split pane ---
-
-func (a *App) adjustSplitRatio(delta int) {
-	a.splitRatio += delta
-	if a.splitRatio < 15 {
-		a.splitRatio = 15
-	}
-	if a.splitRatio > 85 {
-		a.splitRatio = 85
-	}
-	// Ensure minimum widths: list >= 30, preview >= 20
-	listW := a.width * a.splitRatio / 100
-	previewW := a.width - listW - 1
-	if listW < 30 {
-		a.splitRatio = (30*100 + a.width - 1) / a.width
-	}
-	if previewW < 20 {
-		a.splitRatio = ((a.width - 21) * 100) / a.width
-	}
-	a.resizeAll()
 }
 
 // --- Helpers ---
@@ -7808,7 +7784,7 @@ func (a *App) applyConvLiveReload(msg convLiveReloadedMsg) {
 		}
 	}
 
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	content, _, _, _, _ := renderConversationPreviewWindowed(visible, previewW, a.sessConvCursor, a.sessConvExpanded, a.sessConvFilterTerm, a.convPreviewRowCache, true)
 	a.sessSplit.Preview.SetContent(content)
 	if !a.sessPreviewPinned {
@@ -8428,7 +8404,7 @@ func (a *App) resizeAll() tea.Cmd {
 	contentH := a.height - 3
 	var cmd tea.Cmd
 
-	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
+	sessW := a.sessSplit.ListWidth(a.width, a.split)
 	if a.sessionList.Width() == 0 {
 		if len(a.sessions) > 0 {
 			a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
@@ -8481,13 +8457,13 @@ func (a *App) resizeAll() tea.Cmd {
 	if a.convList.Width() > 0 {
 		selectedID := a.selectedConversationItemID()
 		a.updateConvHeader()
-		a.conv.split.Resize(a.width, a.conversationLayoutHeight(), a.splitRatio)
+		a.conv.split.Resize(a.width, a.conversationLayoutHeight(), a.split)
 		a.restoreConvSelection(selectedID)
 		// Re-render preview content at new dimensions (preserves folds/scroll)
 		if a.conv.split.Show {
 			a.conv.split.cachedRP = nil
 			if a.conv.split.Folds != nil && len(a.conv.split.Folds.Entry.Content) > 0 {
-				a.conv.split.RefreshFoldPreview(a.width, a.splitRatio)
+				a.conv.split.RefreshFoldPreview(a.width, a.split)
 			}
 		}
 	}
@@ -8495,20 +8471,20 @@ func (a *App) resizeAll() tea.Cmd {
 	// Config explorer view
 	if a.cfgList.Width() > 0 {
 		idx := a.cfgList.Index()
-		a.cfgList.SetSize(a.cfgSplit.ListWidth(a.width, a.splitRatio), contentH)
+		a.cfgList.SetSize(a.cfgSplit.ListWidth(a.width, a.split), contentH)
 		a.cfgList.Select(idx)
 		a.cfgSplit.CacheKey = "" // force preview re-render at new size
 	}
 	// Plugin explorer view
 	if a.plgList.Width() > 0 {
 		idx := a.plgList.Index()
-		a.plgList.SetSize(a.plgSplit.ListWidth(a.width, a.splitRatio), contentH)
+		a.plgList.SetSize(a.plgSplit.ListWidth(a.width, a.split), contentH)
 		a.plgList.Select(idx)
 		a.plgSplit.CacheKey = ""
 	}
 	if a.plgDetailList.Width() > 0 {
 		idx := a.plgDetailList.Index()
-		a.plgDetailList.SetSize(a.plgDetailSplit.ListWidth(a.width, a.splitRatio), contentH)
+		a.plgDetailList.SetSize(a.plgDetailSplit.ListWidth(a.width, a.split), contentH)
 		a.plgDetailList.Select(idx)
 		a.plgDetailSplit.CacheKey = ""
 	}
@@ -8542,7 +8518,7 @@ func (a *App) rebuildSessionList() {
 	prevFilterCursor := a.sessionList.FilterInput.Position()
 
 	contentH := max(a.height-3, 1)
-	sessW := a.sessSplit.ListWidth(a.width, a.splitRatio)
+	sessW := a.sessSplit.ListWidth(a.width, a.split)
 	a.sessionList = newSessionList(a.sessions, sessW, contentH, a.sessGroupMode, a.selectedSet, a.hiddenBadges, a.sessFolded, a.sessionRowCache, a.config.WorktreeDir)
 	a.sessSplit.CacheKey = ""
 

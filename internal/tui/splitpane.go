@@ -6,8 +6,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/mouse"
+	"github.com/keyolk/tuikit/split"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -67,20 +68,24 @@ type FoldState struct {
 	BlockSourceIdx []int   // parallel to Entry.Content; -1 = unknown source
 }
 
-// ListWidth returns the list width given total width and split ratio.
-func (sp *SplitPane) ListWidth(totalW, splitRatio int) int {
-	if !sp.Show {
+// ListWidth returns the list width: the split's pane A at totalW, or all of
+// totalW when the preview is closed or the split collapses.
+func (sp *SplitPane) ListWidth(totalW int, sm split.Model) int {
+	if !sp.Show || totalW <= 0 {
 		return totalW
 	}
-	return max(totalW*splitRatio/100, 30)
+	list, _, _ := sm.Layout(mouse.Rect{W: totalW, H: 1})
+	return list.W
 }
 
-// PreviewWidth returns the preview width (totalW - listW - 1 for border).
-func (sp *SplitPane) PreviewWidth(totalW, splitRatio int) int {
+// PreviewWidth returns the preview width: the split's pane B at totalW, all
+// of it when zoomed, and 1 when the preview is not drawn.
+func (sp *SplitPane) PreviewWidth(totalW int, sm split.Model) int {
 	if sp.PreviewOnly {
 		return max(totalW, 1)
 	}
-	return max(totalW-sp.ListWidth(totalW, splitRatio)-1, 1)
+	_, _, preview := sm.Layout(mouse.Rect{W: totalW, H: 1})
+	return max(preview.W, 1)
 }
 
 // ContentHeight returns the usable content height (totalH - 3 for title+help).
@@ -106,24 +111,11 @@ func truncateExact(s string, targetW int) (string, int) {
 	return s, w
 }
 
-// hexToRGB parses a "#RRGGBB" hex color string into RGB components.
-func hexToRGB(hex string) (uint8, uint8, uint8) {
-	hex = strings.TrimPrefix(hex, "#")
-	if len(hex) != 6 {
-		return 128, 128, 128
-	}
-	var r, g, b uint8
-	fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
-	return r, g, b
-}
-
-func renderFixedSplit(left, right string, listW, previewW, contentH int, borderColor lipgloss.Color) string {
+// renderFixedSplit draws listW cells of left, the one-cell divider (drawn by
+// dividerCell) and previewW cells of right, row by row.
+func renderFixedSplit(left, right string, listW, previewW, contentH int, borderCell string) string {
 	leftLines := strings.Split(left, "\n")
 	rightLines := strings.Split(right, "\n")
-	// Build border with raw ANSI to avoid lipgloss wrapping artifacts.
-	// Convert lipgloss.Color hex to ANSI 24-bit color sequence.
-	br, bg, bb := hexToRGB(string(borderColor))
-	borderCell := fmt.Sprintf("\x1b[38;2;%d;%d;%dm│\x1b[0m", br, bg, bb)
 	const reset = "\x1b[0m"
 	// CHA (Cursor Horizontal Absolute) — positions cursor at exact column (1-based)
 	borderCHA := fmt.Sprintf("\x1b[%dG", listW+1)
@@ -200,11 +192,12 @@ func (sp *SplitPane) listView(contentH int) string {
 	return strings.Join(headerLines, "\n") + "\n" + sp.List.View()
 }
 
-// Render draws the split layout: list | border | preview.
-// If Show is false or dimensions too small, returns list-only view.
-func (sp *SplitPane) Render(totalW, totalH, splitRatio int) string {
+// Render draws the split layout: list | border | preview, cut by layout.
+// When the preview is closed or the split collapses, it is the list alone.
+func (sp *SplitPane) Render(totalW, totalH int, sm split.Model) string {
+	contentH := ContentHeight(totalH)
+	listR, _, previewR := sp.layout(totalW, totalH, sm)
 	if sp.PreviewOnly && sp.Show {
-		contentH := ContentHeight(totalH)
 		if sp.Preview.Width != totalW || sp.Preview.Height != contentH {
 			sp.Preview.Width = max(totalW, 1)
 			sp.Preview.Height = max(contentH, 1)
@@ -212,24 +205,16 @@ func (sp *SplitPane) Render(totalW, totalH, splitRatio int) string {
 		}
 		return sp.Preview.View()
 	}
-	contentH := ContentHeight(totalH)
-	if !sp.Show || totalW < 40 || totalH < 10 {
-		listW := sp.ListWidth(totalW, splitRatio)
-		listH := sp.listContentHeight(contentH)
-		if sp.List.Width() > 0 && (sp.List.Width() != listW || sp.List.Height() != listH) {
-			sp.List.SetSize(listW, listH)
-		}
-		return sp.listView(contentH)
-	}
-
-	listW := sp.ListWidth(totalW, splitRatio)
-	previewW := sp.PreviewWidth(totalW, splitRatio)
+	listW := listR.W
 	listH := sp.listContentHeight(contentH)
-
 	if sp.List.Width() > 0 && (sp.List.Width() != listW || sp.List.Height() != listH) {
 		sp.List.SetSize(listW, listH)
 	}
+	if previewR.W == 0 {
+		return sp.listView(contentH)
+	}
 
+	previewW := previewR.W
 	if sp.Preview.Width != previewW || sp.Preview.Height != contentH {
 		sp.Preview.Width = previewW
 		sp.Preview.Height = max(contentH, 1)
@@ -244,7 +229,7 @@ func (sp *SplitPane) Render(totalW, totalH, splitRatio int) string {
 	left := sp.listView(contentH)
 	right := sp.Preview.View()
 
-	return renderFixedSplit(left, right, listW, previewW, contentH, borderColor)
+	return renderFixedSplit(left, right, listW, previewW, contentH, dividerCell(sm, borderColor))
 }
 
 type SplitKeyResult int
@@ -263,8 +248,10 @@ const (
 	splitKeyBoundaryUp                       // block cursor hit top boundary
 )
 
-// HandleSplitKey processes common split pane keys (esc, left, right, tab, shift+tab, [, ]).
-func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, adjustRatio func(int)) SplitKeyResult {
+// HandleSplitKey processes common split pane keys (esc, left, right, tab,
+// shift+tab, and the resize keys [ ] < > =, which it passes to act as split
+// actions).
+func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH int, sm split.Model, act func(string)) SplitKeyResult {
 	switch key {
 	case "esc":
 		if sp.Show {
@@ -273,7 +260,7 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 			sp.Focus = false
 			if sp.List.Width() > 0 {
 				contentH := ContentHeight(totalH)
-				sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
+				sp.List.SetSize(sp.ListWidth(totalW, sm), sp.listContentHeight(contentH))
 				sp.List.Select(idx)
 			}
 			return splitKeyClosed
@@ -292,7 +279,7 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 		sp.Show = true
 		sp.CacheKey = ""
 		contentH := ContentHeight(totalH)
-		sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
+		sp.List.SetSize(sp.ListWidth(totalW, sm), sp.listContentHeight(contentH))
 		sp.List.Select(idx)
 		return splitKeyOpened
 
@@ -311,7 +298,7 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 				sp.Show = false
 				if sp.List.Width() > 0 {
 					contentH := ContentHeight(totalH)
-					sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
+					sp.List.SetSize(sp.ListWidth(totalW, sm), sp.listContentHeight(contentH))
 					sp.List.Select(idx)
 				}
 				return splitKeyClosed
@@ -340,7 +327,7 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 				sp.Show = true
 				sp.CacheKey = ""
 				contentH := ContentHeight(totalH)
-				sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
+				sp.List.SetSize(sp.ListWidth(totalW, sm), sp.listContentHeight(contentH))
 				sp.List.Select(idx)
 			}
 			sp.Focus = true
@@ -356,16 +343,26 @@ func (sp *SplitPane) HandleSplitKey(key string, totalW, totalH, splitRatio int, 
 		}
 		return splitKeyHandled
 
-	case "[":
+	// "[" and "]" are the older resize keys; they stay as aliases of "<"
+	// and ">" here, where they always meant resize. Views that use them for
+	// tabs or pages catch them before calling HandleSplitKey.
+	case "[", "<":
 		if sp.Show {
-			adjustRatio(-5) // [ always shrinks list ratio (list smaller / preview bigger)
+			act(split.ActionShrink) // list smaller / preview bigger
 			return splitKeyHandled
 		}
 		return splitKeyUnhandled
 
-	case "]":
+	case "]", ">":
 		if sp.Show {
-			adjustRatio(5) // ] always grows list ratio (list bigger / preview smaller)
+			act(split.ActionGrow) // list bigger / preview smaller
+			return splitKeyHandled
+		}
+		return splitKeyUnhandled
+
+	case "=":
+		if sp.Show {
+			act(split.ActionReset)
 			return splitKeyHandled
 		}
 		return splitKeyUnhandled
@@ -468,24 +465,24 @@ func (sp *SplitPane) HandleListBoundary(key string) bool {
 
 // Resize adjusts list dimensions after terminal resize.
 // Preserves entry identity (CacheKey) and fold state; only re-renders preview content.
-func (sp *SplitPane) Resize(totalW, totalH, splitRatio int) {
+func (sp *SplitPane) Resize(totalW, totalH int, sm split.Model) {
 	if sp.List.Width() == 0 {
 		return
 	}
 	idx := sp.List.Index()
 	contentH := ContentHeight(totalH)
-	sp.List.SetSize(sp.ListWidth(totalW, splitRatio), sp.listContentHeight(contentH))
+	sp.List.SetSize(sp.ListWidth(totalW, sm), sp.listContentHeight(contentH))
 	sp.List.Select(idx)
 	sp.cachedRP = nil
 	// Re-render preview at new dimensions, preserving fold state and scroll position
 	if sp.Show && sp.Folds != nil && len(sp.Folds.Entry.Content) > 0 {
-		sp.RefreshFoldPreview(totalW, splitRatio)
+		sp.RefreshFoldPreview(totalW, sm)
 	}
 }
 
 // HandleMouseScroll handles mouse wheel events for the split pane.
-func (sp *SplitPane) HandleMouseScroll(mouseX int, up bool, totalW, splitRatio int) {
-	if sp.Show && (sp.PreviewOnly || mouseX > sp.ListWidth(totalW, splitRatio)) {
+func (sp *SplitPane) HandleMouseScroll(mouseX int, up bool, totalW int, sm split.Model) {
+	if sp.inPreview(mouseX, totalW, sm) {
 		// Preview side: move block cursor for fold-aware panes, scroll for simple
 		if sp.Folds != nil && sp.Focus && len(sp.Folds.BlockStarts) > 0 {
 			key := "down"
@@ -505,8 +502,8 @@ func (sp *SplitPane) HandleMouseScroll(mouseX int, up bool, totalW, splitRatio i
 }
 
 // HandleMouseClick handles mouse click to toggle focus between list and preview.
-func (sp *SplitPane) HandleMouseClick(mouseX, contentY int, totalW, splitRatio int) {
-	if sp.Show && (sp.PreviewOnly || mouseX > sp.ListWidth(totalW, splitRatio)) {
+func (sp *SplitPane) HandleMouseClick(mouseX, contentY int, totalW int, sm split.Model) {
+	if sp.inPreview(mouseX, totalW, sm) {
 		sp.Focus = true
 		// For fold-aware panes, move block cursor to clicked block
 		if sp.Folds != nil && len(sp.Folds.BlockStarts) > 0 {
@@ -520,8 +517,8 @@ func (sp *SplitPane) HandleMouseClick(mouseX, contentY int, totalW, splitRatio i
 }
 
 // HandleMouseDoubleClick handles double-click in the preview to toggle fold.
-func (sp *SplitPane) HandleMouseDoubleClick(mouseX int, totalW, splitRatio int) bool {
-	if !sp.Show || (!sp.PreviewOnly && mouseX <= sp.ListWidth(totalW, splitRatio)) {
+func (sp *SplitPane) HandleMouseDoubleClick(mouseX int, totalW int, sm split.Model) bool {
+	if !sp.inPreview(mouseX, totalW, sm) {
 		return false
 	}
 	if sp.Folds == nil || len(sp.Folds.BlockStarts) == 0 {
@@ -538,8 +535,8 @@ func (sp *SplitPane) HandleMouseDoubleClick(mouseX int, totalW, splitRatio int) 
 }
 
 // SetPreviewContent sets the preview viewport content and resets to top.
-func (sp *SplitPane) SetPreviewContent(content string, totalW, totalH, splitRatio int) {
-	previewW := sp.PreviewWidth(totalW, splitRatio)
+func (sp *SplitPane) SetPreviewContent(content string, totalW, totalH int, sm split.Model) {
+	previewW := sp.PreviewWidth(totalW, sm)
 	contentH := ContentHeight(totalH)
 	sp.Preview = viewport.New(previewW, contentH)
 	sp.Preview.SetContent(content)
@@ -549,11 +546,15 @@ func (sp *SplitPane) SetPreviewContent(content string, totalW, totalH, splitRati
 // It clamps the existing YOffset to the new content bounds and scrolls
 // to keep the block cursor visible.  Callers that need proportional
 // scroll preservation (e.g. resize) should do so explicitly afterwards.
-func (sp *SplitPane) RefreshFoldPreview(totalW, splitRatio int) {
+func (sp *SplitPane) RefreshFoldPreview(totalW int, sm split.Model) {
+	sp.refreshFoldPreviewAt(sp.PreviewWidth(totalW, sm))
+}
+
+// refreshFoldPreviewAt is RefreshFoldPreview at a known preview width.
+func (sp *SplitPane) refreshFoldPreviewAt(previewW int) {
 	if sp.Folds == nil || len(sp.Folds.Entry.Content) == 0 {
 		return
 	}
-	previewW := sp.PreviewWidth(totalW, splitRatio)
 	oldOffset := sp.Preview.YOffset
 
 	cursor := sp.Folds.BlockCursor
@@ -598,11 +599,11 @@ func (sp *SplitPane) RefreshFoldPreview(totalW, splitRatio int) {
 
 // RefreshFoldCursor re-renders only the block cursor markers without re-computing
 // wrapped text. Falls back to full RefreshFoldPreview if fold state changed.
-func (sp *SplitPane) RefreshFoldCursor(totalW, splitRatio int) {
+func (sp *SplitPane) RefreshFoldCursor(totalW int, sm split.Model) {
 	if sp.Folds == nil || len(sp.Folds.Entry.Content) == 0 {
 		return
 	}
-	sp.RefreshFoldPreview(totalW, splitRatio)
+	sp.RefreshFoldPreview(totalW, sm)
 }
 
 // ScrollToBlock adjusts the preview viewport to keep the block cursor visible.

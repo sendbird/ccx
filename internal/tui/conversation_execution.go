@@ -324,7 +324,7 @@ func (a *App) restoreExecutionViewState(key string, isMain bool) {
 	a.updateConvPreview()
 	if a.conv.split.Folds != nil && state.BlockCursor >= 0 && state.BlockCursor < len(a.conv.split.Folds.Entry.Content) {
 		a.conv.split.Folds.BlockCursor = state.BlockCursor
-		a.conv.split.RefreshFoldCursor(a.width, a.splitRatio)
+		a.conv.split.RefreshFoldCursor(a.width, a.split)
 	}
 	maxOffset := max(a.conv.split.Preview.TotalLineCount()-a.conv.split.Preview.Height, 0)
 	a.conv.split.Preview.YOffset = min(max(state.PreviewOffset, 0), maxOffset)

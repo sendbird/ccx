@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/prefs"
 )
 
@@ -95,7 +96,7 @@ func TestUIStateSavesOnChange(t *testing.T) {
 	if cmd := a.saveUIState(); cmd != nil {
 		t.Fatal("unchanged state scheduled a save")
 	}
-	a.splitRatio = 40
+	a.split = a.split.Set(0.4, mouse.Rect{})
 	if cmd := a.saveUIState(); cmd == nil {
 		t.Fatal("changed state scheduled no save")
 	}

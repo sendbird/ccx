@@ -51,7 +51,7 @@ func (a *App) buildOutputsPreview(sess session.Session, dispatch bool) tea.Cmd {
 		sess = fresh
 	}
 
-	previewW := max(a.width-a.sessSplit.ListWidth(a.width, a.splitRatio)-1, 1)
+	previewW := a.sessSplit.PreviewWidth(a.width, a.split)
 	contentH := max(a.height-3, 1)
 
 	if a.sessOutputsCacheID != sess.ID {

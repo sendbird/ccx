@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/split"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,6 +31,9 @@ type SessionKeymap struct {
 	Right        string `yaml:"right"`
 	ResizeShrink string `yaml:"resize_shrink"`
 	ResizeGrow   string `yaml:"resize_grow"`
+	SplitShrink  string `yaml:"split_shrink"` // tuikit split keys; see splitKey
+	SplitGrow    string `yaml:"split_grow"`
+	SplitReset   string `yaml:"split_reset"`
 	Command      string `yaml:"command"`
 	Pick         string `yaml:"pick"` // pick mode only (ccx pick session)
 	FoldAll      string `yaml:"fold_all"`
@@ -226,6 +230,9 @@ func DefaultKeymap() Keymap {
 			Right:        "right",
 			ResizeShrink: "[",
 			ResizeGrow:   "]",
+			SplitShrink:  splitKey(split.ActionShrink),
+			SplitGrow:    splitKey(split.ActionGrow),
+			SplitReset:   splitKey(split.ActionReset),
 			Command:      ":",
 			Pick:         "P",
 			// FoldAll/ExpandAll deliberately avoid a Shift-case pair: under a
@@ -413,6 +420,15 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Session.ResizeGrow != "" {
 		dst.Session.ResizeGrow = src.Session.ResizeGrow
+	}
+	if src.Session.SplitShrink != "" {
+		dst.Session.SplitShrink = src.Session.SplitShrink
+	}
+	if src.Session.SplitGrow != "" {
+		dst.Session.SplitGrow = src.Session.SplitGrow
+	}
+	if src.Session.SplitReset != "" {
+		dst.Session.SplitReset = src.Session.SplitReset
 	}
 	if src.Session.Command != "" {
 		dst.Session.Command = src.Session.Command
@@ -678,4 +694,15 @@ func isNavKey(msg tea.KeyMsg) bool {
 // fmtKey returns "displayKey:desc" for use in formatHelp().
 func fmtKey(key, desc string) string {
 	return displayKey(key) + ":" + desc
+}
+
+// splitKey is the kit's default key for a split action (split.Bindings: `<`
+// shrink, `>` grow, `=` reset), so ccx's defaults follow the fleet's.
+func splitKey(action string) string {
+	for _, b := range split.Bindings("session") {
+		if b.Action == action && len(b.Keys) > 0 {
+			return b.Keys[0]
+		}
+	}
+	return ""
 }

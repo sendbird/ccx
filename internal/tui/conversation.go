@@ -194,7 +194,7 @@ func (a *App) openConversationInspectorForEntryWithHistory(m mergedMsg, blockIdx
 			}
 			if renderedBlockIdx >= 0 {
 				a.conv.split.Folds.BlockCursor = renderedBlockIdx
-				a.conv.split.RefreshFoldCursor(a.width, a.splitRatio)
+				a.conv.split.RefreshFoldCursor(a.width, a.split)
 				a.conv.split.ScrollToBlock()
 			}
 		}
@@ -506,7 +506,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if sp.Show {
 			a.clearInspectorHistory()
-			sp.HandleSplitKey("esc", a.width, a.height, a.splitRatio, a.adjustSplitRatio)
+			sp.HandleSplitKey("esc", a.width, a.height, a.split, a.splitActionFor(a.conversationLayoutHeight()))
 			return a, nil
 		}
 		a.liveTail = false
@@ -582,7 +582,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Common split pane keys
-	result := sp.HandleSplitKey(key, a.width, a.conversationLayoutHeight(), a.splitRatio, a.adjustSplitRatio)
+	result := sp.HandleSplitKey(key, a.width, a.conversationLayoutHeight(), a.split, a.splitActionFor(a.conversationLayoutHeight()))
 	switch result {
 	case splitKeyClosed:
 		a.clearInspectorHistory()
@@ -594,7 +594,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case splitKeyHandled:
 		if sp.Focus {
-			sp.RefreshFoldPreview(a.width, a.splitRatio)
+			sp.RefreshFoldPreview(a.width, a.split)
 		}
 		return a, nil
 	case splitKeyUnhandled:
@@ -619,10 +619,10 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if sp.Folds != nil {
 				switch HandleFoldNav(sp.Folds, &sp.Preview, key) {
 				case NavCursorMoved:
-					sp.RefreshFoldCursor(a.width, a.splitRatio)
+					sp.RefreshFoldCursor(a.width, a.split)
 					sp.ScrollToBlock()
 				case NavFoldChanged:
-					sp.RefreshFoldCursor(a.width, a.splitRatio)
+					sp.RefreshFoldCursor(a.width, a.split)
 				case NavBoundaryDown:
 					return a.convPreviewBoundaryCross("down")
 				case NavBoundaryUp:
@@ -647,7 +647,7 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				sp.SyncTypePrefs(true)
 				sp.ScrollToBlock()
-				sp.RefreshFoldPreview(a.width, a.splitRatio)
+				sp.RefreshFoldPreview(a.width, a.split)
 				return a, nil
 			}
 		}
@@ -679,11 +679,11 @@ func (a *App) handleConversationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if key == "up" {
 				a.pauseLiveTail()
 			}
-			sp.RefreshFoldCursor(a.width, a.splitRatio)
+			sp.RefreshFoldCursor(a.width, a.split)
 			sp.ScrollToBlock()
 			return a, nil
 		case splitKeyHandled:
-			sp.RefreshFoldPreview(a.width, a.splitRatio)
+			sp.RefreshFoldPreview(a.width, a.split)
 			return a, nil
 		case splitKeyScrolled:
 			if key == "pgup" || key == "home" {
@@ -765,7 +765,7 @@ func (a *App) convPreviewBoundaryCross(key string) (tea.Model, tea.Cmd) {
 			if block >= 0 {
 				sp.Folds.BlockCursor = block
 			}
-			sp.RefreshFoldCursor(a.width, a.splitRatio)
+			sp.RefreshFoldCursor(a.width, a.split)
 			sp.ScrollToBlock()
 		}
 		return a, nil
@@ -896,7 +896,7 @@ func (a *App) updateConvPreview() {
 		metaEntry = &e
 		metaTargets = targets
 	case convTask:
-		pw := sp.PreviewWidth(a.width, a.splitRatio)
+		pw := sp.PreviewWidth(a.width, a.split)
 		if item.groupTag == "agents" && item.count > 0 {
 			a.setConvPreviewText(a.renderAgentsSummary(pw))
 			return
@@ -968,7 +968,7 @@ func (a *App) updateConvPreview() {
 			sp.Preview.Height = a.conversationContentHeight()
 		}
 		if sp.Preview.Width <= 0 {
-			sp.Preview.Width = sp.PreviewWidth(a.width, a.splitRatio)
+			sp.Preview.Width = sp.PreviewWidth(a.width, a.split)
 		}
 	}
 	if isNewEntry {
@@ -984,7 +984,7 @@ func (a *App) updateConvPreview() {
 				}
 			}
 		}
-		sp.RefreshFoldPreview(a.width, a.splitRatio)
+		sp.RefreshFoldPreview(a.width, a.split)
 		sp.Preview.YOffset = 0
 	} else {
 		oldBC := 0
@@ -997,7 +997,7 @@ func (a *App) updateConvPreview() {
 			sp.Folds.BlockSourceIdx = blockSrcIdx
 			sp.Folds.HideHooks = a.conv.rightPaneMode == previewTool
 		}
-		sp.RefreshFoldPreview(a.width, a.splitRatio)
+		sp.RefreshFoldPreview(a.width, a.split)
 	}
 
 	if !isNewEntry && anchor.baseKey != "" {
@@ -1131,7 +1131,7 @@ func (a *App) renderDecisionInspector(artifact session.Artifact) string {
 // decision surfaces the file's full change history, not just the first edit.
 func (a *App) writeChangeHistory(b *strings.Builder, artifact session.Artifact) {
 	path := strings.TrimPrefix(artifact.Key, "first-change:")
-	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.split)-4, 20)
 	var occs []session.Artifact
 	for _, art := range a.conv.flow.Artifacts(a.conv.flow.RootID, session.ArtifactChange, session.ScopeSession) {
 		if art.Key == path {
@@ -1199,7 +1199,7 @@ func (a *App) writeDecisionRelated(b *strings.Builder, related session.Artifact)
 			fmt.Fprintf(b, " · %s", summary)
 		}
 		b.WriteByte('\n')
-		diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+		diffWidth := max(a.conv.split.PreviewWidth(a.width, a.split)-4, 20)
 		if diff := changeDiff(payload, diffWidth); diff != "" {
 			b.WriteString("\n" + diff + "\n")
 		}
@@ -1466,7 +1466,7 @@ func (a *App) setConvPreviewTextKey(content, cacheKey string) {
 	oldOffset := sp.Preview.YOffset
 	sameKey := sp.CacheKey == cacheKey
 	sp.CacheKey = cacheKey
-	sp.Preview.Width = sp.PreviewWidth(a.width, a.splitRatio)
+	sp.Preview.Width = sp.PreviewWidth(a.width, a.split)
 	sp.Preview.Height = a.conversationContentHeight()
 	sp.Preview.SetContent(content)
 	if sameKey {
@@ -1706,7 +1706,9 @@ func restoreConvPreviewAnchor(sp *SplitPane, anchor convPreviewAnchor) {
 	if best >= 0 {
 		sp.Folds.BlockCursor = best
 	}
-	sp.RefreshFoldPreview(sp.Preview.Width+sp.List.Width()+1, 50)
+	// The preview keeps the width it is drawn at; this function has no App
+	// to lay the split out again.
+	sp.refreshFoldPreviewAt(sp.Preview.Width)
 	if anchor.viewportY > 0 {
 		maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
 		sp.Preview.YOffset = min(anchor.viewportY, maxOffset)
@@ -2283,7 +2285,7 @@ func (a *App) rebuildConversationList(selectIdx int) {
 	contentH := a.conversationContentHeight()
 	a.updateConvHeader()
 	contentH = a.conv.split.listContentHeight(contentH)
-	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH, &a.conv.contextActive)
+	a.convList = newConvList(a.conv.items, a.conv.split.ListWidth(a.width, a.split), contentH, &a.conv.contextActive)
 	a.conv.split.List = &a.convList
 	if selectIdx >= 0 && selectIdx < len(a.convList.VisibleItems()) {
 		a.convList.Select(selectIdx)
@@ -2597,7 +2599,7 @@ func (a *App) toggleConvGroupFold(header convItem) {
 	// Rebuild visible list; find the header's new index.
 	vis := visibleConvItems(items)
 	contentH := a.conv.split.listContentHeight(a.conversationContentHeight())
-	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.splitRatio), contentH, &a.conv.contextActive)
+	a.convList = newConvList(items, a.conv.split.ListWidth(a.width, a.split), contentH, &a.conv.contextActive)
 	a.conv.split.List = &a.convList
 
 	for i, v := range vis {
@@ -2630,7 +2632,7 @@ func (a *App) scrollConvPreviewToTail() {
 		if sp.Folds.BlockCursor != lastBlock {
 			sp.Folds.BlockCursor = lastBlock
 			// Re-render so the cursor marker reflects the new position
-			sp.RefreshFoldCursor(a.width, a.splitRatio)
+			sp.RefreshFoldCursor(a.width, a.split)
 		}
 	}
 	// Scroll viewport to show the very bottom of the preview
@@ -2729,7 +2731,7 @@ func (a *App) kittyImageLayer() string {
 	}
 	sp := &a.conv.split
 
-	listW := sp.ListWidth(a.width, a.splitRatio)
+	listW := sp.ListWidth(a.width, a.split)
 	contentH := a.conversationContentHeight()
 	maxCols := max(listW-1, 10)
 	maxRows := max(contentH-1, 4)
@@ -2743,7 +2745,7 @@ func (a *App) kittyImageLayer() string {
 // renderConvSplit renders the conversation split view.
 func (a *App) renderConvSplit() string {
 	sp := &a.conv.split
-	rendered := sp.Render(a.width, a.conversationLayoutHeight(), a.splitRatio)
+	rendered := sp.Render(a.width, a.conversationLayoutHeight(), a.split)
 
 	// Show tooltip for selected item when list is focused and tooltip is on.
 	// When preview is focused, prefer a tooltip for the focused artifact/block.
@@ -2799,7 +2801,7 @@ func (a *App) convTooltip() string {
 	}
 
 	// Only show tooltip if text is longer than list width (would be truncated)
-	listW := a.conv.split.ListWidth(a.width, a.splitRatio)
+	listW := a.conv.split.ListWidth(a.width, a.split)
 	if len(text) <= listW-15 && !strings.Contains(text, "\n") {
 		return ""
 	}
@@ -3159,7 +3161,7 @@ func (a *App) startBlockFilter() {
 	ti.Prompt = "Filter: "
 	ti.Placeholder = "is:hook is:tool is:mcp tool:Grep tool:mcp* is:error ..."
 	ti.CharLimit = 200
-	ti.Width = a.conv.split.PreviewWidth(a.width, a.splitRatio) - 10
+	ti.Width = a.conv.split.PreviewWidth(a.width, a.split) - 10
 	// Pre-fill with existing filter
 	if a.conv.split.Folds != nil && a.conv.split.Folds.BlockFilter != "" {
 		ti.SetValue(a.conv.split.Folds.BlockFilter)
@@ -3202,7 +3204,7 @@ func (a *App) commitBlockFilter() {
 	}
 
 	sp.CacheKey = "" // force re-render
-	sp.RefreshFoldPreview(a.width, a.splitRatio)
+	sp.RefreshFoldPreview(a.width, a.split)
 	sp.Preview.YOffset = 0
 }
 
@@ -3215,7 +3217,7 @@ func (a *App) clearBlockFilter() {
 	sp.Folds.BlockFilter = ""
 	sp.Folds.BlockVisible = nil
 	sp.CacheKey = "" // force re-render
-	sp.RefreshFoldPreview(a.width, a.splitRatio)
+	sp.RefreshFoldPreview(a.width, a.split)
 }
 
 // --- Memory-pane full-text search ---
@@ -3240,7 +3242,7 @@ func (a *App) startMemorySearch() {
 	ti.Prompt = "Search memory: "
 	ti.Placeholder = "text in any memory note…"
 	ti.CharLimit = 200
-	ti.Width = a.conv.split.PreviewWidth(a.width, a.splitRatio) - 16
+	ti.Width = a.conv.split.PreviewWidth(a.width, a.split) - 16
 	if a.conv.inspector.MemorySearch != "" {
 		ti.SetValue(a.conv.inspector.MemorySearch)
 	}

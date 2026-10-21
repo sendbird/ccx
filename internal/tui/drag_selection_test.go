@@ -124,7 +124,7 @@ func TestDragFromListTowardPreviewStaysInList(t *testing.T) {
 	if !strings.Contains(got, "s00  just now") {
 		t.Fatalf("copy %q lost the list text under the press", got)
 	}
-	listW := app.sessSplit.ListWidth(app.width, app.splitRatio)
+	listW := app.sessSplit.ListWidth(app.width, app.split)
 	frame := app.View()
 	rows := highlighted(frame, mark)
 	if len(rows) == 0 {
@@ -307,7 +307,7 @@ func TestConversationPreviewKeepsFoldDoubleClickAndSelects(t *testing.T) {
 	app.clicks.now = clock.now
 
 	x, y := findCell(t, app, "Block 1:")
-	x += 2 // clear of the divider's resize grab zone
+	x += 2 // inside the block text
 	app = send(app, press(x, y))
 	app = send(app, releaseAt(x, y))
 	clock.advance(100 * time.Millisecond)
@@ -327,20 +327,21 @@ func TestConversationPreviewKeepsFoldDoubleClickAndSelects(t *testing.T) {
 	}
 }
 
-// The divider's resize grab zone reaches one cell into each pane; a press
-// there must stay a resize, not start a selection that swallows the motion.
-func TestDragNextToDividerResizesInsteadOfSelecting(t *testing.T) {
+// The divider's cells are the split's and no pane's: the cell just left of
+// it is the list's (the old resize grabbed it too), so a drag from there
+// selects list text and leaves the ratio alone.
+func TestDragNextToDividerSelectsInsteadOfResizing(t *testing.T) {
 	app, _ := newSelectionApp(t)
 	px, py := findCell(t, app, "doc-003")
 	border := px - 1 // the column drawn just left of the preview text
-	before := app.splitRatio
+	before := app.split.Ratio()
 	app = send(app, press(border-1, py))
 	// Down a row as well: on the press row the selection would clamp the
 	// motion back onto the press cell and never count it as a drag.
 	app = send(app, motionAt(border+15, py+2))
 	app = send(app, releaseAt(border+15, py+2))
-	if app.splitRatio <= before || app.sel.Active() {
-		t.Fatalf("press beside the divider: ratio %d→%d, selection %t; want a resize", before, app.splitRatio, app.sel.Active())
+	if app.split.Ratio() != before || !app.sel.Active() {
+		t.Fatalf("press beside the divider: ratio %v→%v, selection %t; want a selection", before, app.split.Ratio(), app.sel.Active())
 	}
 }
 

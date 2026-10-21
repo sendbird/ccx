@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/split"
 	"github.com/sendbird/ccx/internal/claudecmd"
 	"github.com/sendbird/ccx/internal/opener"
 	"github.com/sendbird/ccx/internal/remote"
@@ -14,18 +15,19 @@ import (
 
 // Preferences holds persisted view preferences that survive restarts.
 type Preferences struct {
-	GroupMode       string   `yaml:"group_mode,omitempty"`        // flat|proj|tree|chain|fork|repo|projects|daily
-	PrevGroupMode   string   `yaml:"prev_group_mode,omitempty"`   // grouping `D` returns to when leaving the daily view
-	PreviewMode     string   `yaml:"preview_mode,omitempty"`      // conv|stats|mem|tasks|agents|shells|contexts|live
-	ViewMode        string   `yaml:"view_mode,omitempty"`         // sessions|config|plugins|stats
-	ConvDetailLevel int      `yaml:"conv_detail_level,omitempty"` // 0=compact,1=standard,2=verbose
-	SplitRatio      int      `yaml:"split_ratio,omitempty"`       // 15-85
-	WorktreeDir     string   `yaml:"worktree_dir,omitempty"`      // worktree subdirectory name
-	InitialFocus    string   `yaml:"initial_focus,omitempty"`     // startup focus strategy: tmux (default) | cwd
-	HiddenBadges    []string `yaml:"hidden_badges,omitempty"`     // badge keys to hide: M,W,T,K,P,A,C,S,X,F
-	FilterTerm      string   `yaml:"filter_term,omitempty"`       // last applied session filter
-	EditorInput     bool     `yaml:"editor_input,omitempty"`      // true = open $EDITOR for live input
-	FoldedGroups    []string `yaml:"folded_groups,omitempty"`     // session group keys collapsed in the list
+	GroupMode       string      `yaml:"group_mode,omitempty"`        // flat|proj|tree|chain|fork|repo|projects|daily
+	PrevGroupMode   string      `yaml:"prev_group_mode,omitempty"`   // grouping `D` returns to when leaving the daily view
+	PreviewMode     string      `yaml:"preview_mode,omitempty"`      // conv|stats|mem|tasks|agents|shells|contexts|live
+	ViewMode        string      `yaml:"view_mode,omitempty"`         // sessions|config|plugins|stats
+	ConvDetailLevel int         `yaml:"conv_detail_level,omitempty"` // 0=compact,1=standard,2=verbose
+	SplitRatio      int         `yaml:"split_ratio,omitempty"`       // 15-85; read once, see restoreSplit
+	Split           split.State `yaml:"-"`                           // ui.json only
+	WorktreeDir     string      `yaml:"worktree_dir,omitempty"`      // worktree subdirectory name
+	InitialFocus    string      `yaml:"initial_focus,omitempty"`     // startup focus strategy: tmux (default) | cwd
+	HiddenBadges    []string    `yaml:"hidden_badges,omitempty"`     // badge keys to hide: M,W,T,K,P,A,C,S,X,F
+	FilterTerm      string      `yaml:"filter_term,omitempty"`       // last applied session filter
+	EditorInput     bool        `yaml:"editor_input,omitempty"`      // true = open $EDITOR for live input
+	FoldedGroups    []string    `yaml:"folded_groups,omitempty"`     // session group keys collapsed in the list
 }
 
 // KeymapsConfig groups all keybinding sections under one key.
@@ -310,6 +312,15 @@ func fillKeymapDefaults(cfg *CCXConfig, d Keymap) {
 	if s.ResizeGrow == "" {
 		s.ResizeGrow = d.Session.ResizeGrow
 	}
+	if s.SplitShrink == "" {
+		s.SplitShrink = d.Session.SplitShrink
+	}
+	if s.SplitGrow == "" {
+		s.SplitGrow = d.Session.SplitGrow
+	}
+	if s.SplitReset == "" {
+		s.SplitReset = d.Session.SplitReset
+	}
 	if s.Command == "" {
 		s.Command = d.Session.Command
 	}
@@ -581,7 +592,7 @@ func (a *App) capturePreferences() Preferences {
 		PreviewMode:     sessPreviewString(a.sessPreviewMode),
 		ViewMode:        viewStateString(a.state),
 		ConvDetailLevel: int(a.conv.rightPaneMode),
-		SplitRatio:      a.splitRatio,
+		Split:           a.split.State(),
 		WorktreeDir:     a.config.WorktreeDir,
 		InitialFocus:    a.config.InitialFocus,
 		HiddenBadges:    hidden,
@@ -611,9 +622,7 @@ func (a *App) applyPreferences(p Preferences) {
 	if p.ConvDetailLevel >= 0 && p.ConvDetailLevel <= 2 {
 		a.conv.rightPaneMode = p.ConvDetailLevel
 	}
-	if p.SplitRatio >= 15 && p.SplitRatio <= 85 {
-		a.splitRatio = p.SplitRatio
-	}
+	a.restoreSplit(p.Split, p.SplitRatio)
 	if p.WorktreeDir != "" && a.config.WorktreeDir == ".worktree" {
 		a.config.WorktreeDir = p.WorktreeDir
 	}

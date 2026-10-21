@@ -394,7 +394,7 @@ func (a *App) setInspectorZoom(zoom bool) {
 	a.updateConvPreview()
 	if sp.Folds != nil && oldCursor >= 0 && oldCursor < len(sp.Folds.Entry.Content) {
 		sp.Folds.BlockCursor = oldCursor
-		sp.RefreshFoldCursor(a.width, a.splitRatio)
+		sp.RefreshFoldCursor(a.width, a.split)
 	}
 	maxOffset := max(sp.Preview.TotalLineCount()-sp.Preview.Height, 0)
 	sp.Preview.YOffset = min(oldOffset, maxOffset)
@@ -595,7 +595,7 @@ func (a *App) renderInspectorChanges(nodeID string) string {
 	if a.conv.inspector.ChangesByFile {
 		return a.renderInspectorChangesByFile(arts)
 	}
-	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.split)-4, 20)
 	var b strings.Builder
 	b.WriteString("# Changes\n")
 	lastOwner := ""
@@ -640,7 +640,7 @@ func changeDiff(data session.ChangeData, width int) string {
 // cumulative net diff from that baseline to the final state. Otherwise it falls
 // back to the per-occurrence diffs so the user still sees every change.
 func (a *App) renderInspectorChangesByFile(arts []session.Artifact) string {
-	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.splitRatio)-4, 20)
+	diffWidth := max(a.conv.split.PreviewWidth(a.width, a.split)-4, 20)
 
 	order := make([]string, 0, len(arts))
 	byFile := make(map[string][]session.Artifact, len(arts))

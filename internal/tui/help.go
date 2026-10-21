@@ -93,10 +93,23 @@ func (a *App) sessHelpLine() string {
 	return a.footer("", hints...)
 }
 
-// resizeHint is the combined shrink/grow hint ("[]:resize").
+// resizeHint is the split's shrink/grow/reset hint ("<>=:resize"). It goes
+// last in a footer, so a narrow footer drops it first; "[ ]" stay aliases
+// and are listed in the "?" overlay.
 func (a *App) resizeHint() footerHint {
-	k := displayKey(a.keymap.Session.ResizeShrink) + displayKey(a.keymap.Session.ResizeGrow)
+	km := a.keymap
+	k := displayKey(km.Session.SplitShrink) + displayKey(km.Session.SplitGrow) + displayKey(km.Session.SplitReset)
 	return footerHint{key: k, label: "resize"}
+}
+
+// splitResizeKeys is the "?" overlay spelling of the split keys ("< / > / =").
+func splitResizeKeys(km Keymap) string {
+	return displayKey(km.Session.SplitShrink) + " / " + displayKey(km.Session.SplitGrow) + " / " + displayKey(km.Session.SplitReset)
+}
+
+// splitHelpRow is the "?" overlay row for the split keys in a split view.
+func (a *App) splitHelpRow() helpRow {
+	return helpRow{splitResizeKeys(a.keymap), "Shrink / grow list, reset split (or drag the divider)"}
 }
 
 // --- Conversation view help ---
