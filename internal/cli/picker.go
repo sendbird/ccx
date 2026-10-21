@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"github.com/keyolk/tuikit/link"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -289,8 +290,11 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, kittyPaneCmd(kitty.PaneCmd(), false)
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+	case selection.AutoScrollMsg:
+		cmd, _ := m.handleSelectionMouse(msg)
+		return m, cmd
 	case selection.CopiedMsg:
-		m.notice = copiedNotice(msg)
+		m.notice = msg.Note()
 		return m, nil
 	case tea.KeyMsg:
 		// A key between two clicks breaks the pair: click, move away and back
@@ -881,7 +885,9 @@ func (m pickerModel) renderListRow(item PickerItem, cursored bool, check string,
 		labelStyle = sel
 		prefixStyled = sel.Render(">")
 	}
-	row := prefixStyled + check + cat.Render(badgePlain) + " " + labelStyle.Render(label) +
+	// The label is a PR key, a title or a cut URL: link it to the full URL.
+	// File rows carry a path, which link.Wrap leaves as plain text.
+	row := prefixStyled + check + cat.Render(badgePlain) + " " + link.Wrap(item.Item.URL, labelStyle.Render(label)) +
 		dim.Render(refBadgePlain) + dim.Render(sourcePlain)
 	if statusPlain != "" {
 		row += "  " + dim.Render(statusPlain)
@@ -945,6 +951,14 @@ func (m pickerModel) listFirstVisible(contentH int) int {
 	return 0
 }
 
+// pickerPreviewFrame is the preview box's border and padding. View draws the
+// box with it and the drag selection insets the box by it, so the two cannot
+// disagree on where the preview's text starts.
+var pickerPreviewFrame = lipgloss.NewStyle().
+	BorderLeft(true).
+	BorderStyle(lipgloss.NormalBorder()).
+	PaddingLeft(1)
+
 // screen draws the picker without the drag-selection highlight; image is the
 // Kitty layer, kept apart because it is cursor-positioned escape output that
 // the highlight must not cut and selection must not read as text.
@@ -1001,12 +1015,9 @@ func (m pickerModel) screen() (frame, image string) {
 	if m.previewFocused {
 		borderColor = lipgloss.Color("#38BDF8")
 	}
-	previewBox := lipgloss.NewStyle().
+	previewBox := pickerPreviewFrame.
 		Width(pw).Height(contentH).
-		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(borderColor).
-		PaddingLeft(1).
 		MaxWidth(pw + 1). // +1 for the border column
 		MaxHeight(contentH).
 		Render(m.preview.View())
@@ -1334,8 +1345,22 @@ func (m pickerModel) refStatusPlain(url string, budget int) string {
 
 func (m pickerModel) openItems(urls []string) {
 	for _, u := range urls {
-		_ = opener.Open(m.opener, u)
+		// URL lists come from transcripts: only http(s) URLs reach the
+		// opener. Other kinds hold local paths, which open as files.
+		if m.listsURLs() && !link.Valid(u) {
+			continue
+		}
+		_ = pickerOpen(m.opener, u)
 	}
+}
+
+// pickerOpen launches a URL or path; tests replace it so no real opener runs.
+var pickerOpen = opener.Open
+
+// listsURLs reports whether the picker's items are web URLs (urls, refs)
+// rather than local paths (files, changes, images).
+func (m pickerModel) listsURLs() bool {
+	return m.kind == "urls" || m.kind == "refs"
 }
 
 func (m pickerModel) editItems(paths []string) {

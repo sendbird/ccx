@@ -63,6 +63,13 @@ func (m pickerModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if consumed {
 		return m, selCmd
 	}
+	mm, cmd := m.handlePickerMouse(msg)
+	return mm, tea.Batch(selCmd, cmd)
+}
+
+// handlePickerMouse is the picker's own click and wheel handling, for events
+// the drag selection did not consume.
+func (m pickerModel) handlePickerMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.width == 0 || m.height == 0 || m.searching {
 		return m, nil
 	}

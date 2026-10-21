@@ -10,10 +10,11 @@ import (
 type interactionActionID string
 
 const (
-	interactionActionURLs    interactionActionID = "urls"
-	interactionActionFiles   interactionActionID = "files"
-	interactionActionChanges interactionActionID = "changes"
-	interactionActionCopy    interactionActionID = "copy"
+	interactionActionURLs     interactionActionID = "urls"
+	interactionActionOpenLink interactionActionID = "open_link"
+	interactionActionFiles    interactionActionID = "files"
+	interactionActionChanges  interactionActionID = "changes"
+	interactionActionCopy     interactionActionID = "copy"
 )
 
 type interactionAction struct {
@@ -279,6 +280,7 @@ func (a *App) conversationPreviewHiddenHelpActions() []interactionAction {
 func (a *App) conversationActionMenuActions() []interactionAction {
 	return []interactionAction{
 		bindAction(interactionActionURLs, a.keymap.Actions.URLs, "urls"),
+		bindAction(interactionActionOpenLink, a.keymap.Actions.OpenLink, "open-link"),
 		bindAction(interactionActionFiles, a.keymap.Actions.Files, "files"),
 		bindAction(interactionActionChanges, a.keymap.Actions.Changes, "changes"),
 		bindAction(interactionActionCopy, a.keymap.Actions.Copy, "copy"),

@@ -1,46 +1,29 @@
 package cli
 
 import (
-	"fmt"
-	"io"
 	"time"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/selection"
-	"github.com/muesli/termenv"
 )
-
-// pickerSelectionStyle is reverse video on a renderer pinned to the ANSI
-// profile: the default renderer drops every SGR under NO_COLOR, reverse
-// included, and the selection would be invisible.
-var pickerSelectionStyle = func() lipgloss.Style {
-	// SetColorProfile, not termenv.WithProfile: the renderer re-detects the
-	// profile from the environment unless it is set explicitly.
-	r := lipgloss.NewRenderer(io.Discard)
-	r.SetColorProfile(termenv.ANSI)
-	return r.NewStyle().Reverse(true)
-}()
 
 // View is the picker frame with the drag-selection highlight drawn last, then
 // the Kitty image layer.
 func (m pickerModel) View() string {
 	frame, image := m.screen()
 	if m.sel.Active() {
-		frame = m.sel.Render(frame, m.selectionPanes(), pickerSelectionStyle)
+		frame = m.sel.Render(frame, m.selectionPanes(), selection.DefaultStyle())
 	}
 	return frame + image
 }
 
 // previewTextRect is the preview's text cells: previewRect minus the border
-// column and the one-cell left padding View draws the preview box with.
+// column and padding the preview box is drawn with, capped at the viewport's
+// height.
 func (m pickerModel) previewTextRect() mouse.Rect {
-	r := m.previewRect()
-	r.X += 2
-	r.W = max(r.W-2, 0)
+	r := m.previewRect().InsetStyle(pickerPreviewFrame)
 	r.H = min(r.H, m.preview.Height)
 	return r
 }
@@ -76,39 +59,22 @@ func viewportLines(vp viewport.Model) []string {
 	return full.GotoBottom()
 }
 
-// handleSelectionMouse feeds the drag selection before the picker's click
-// handling. done means the selection owns the event; a press that does not
-// move stays the picker's click.
-func (m *pickerModel) handleSelectionMouse(msg tea.MouseMsg) (cmd tea.Cmd, done bool) {
-	if !mouse.IsLeftPress(msg) && !m.sel.Dragging() {
-		return nil, false
-	}
-	if mouse.IsLeftPress(msg) {
+// handleSelectionMouse feeds the drag selection, or the auto-scroll tick of a
+// drag resting past the preview's edge, before the picker's click handling.
+// done means the selection owns the event; a press that does not move stays
+// the picker's click.
+func (m *pickerModel) handleSelectionMouse(msg tea.Msg) (cmd tea.Cmd, done bool) {
+	if mm, ok := msg.(tea.MouseMsg); ok && mouse.IsLeftPress(mm) {
 		m.notice = ""
 	}
 	now := time.Now
 	if m.clicks.now != nil {
 		now = m.clicks.now
 	}
-	frame, _ := m.screen()
-	r := m.sel.Mouse(msg, m.selectionPanes(), frame, now())
+	frame := func() string { f, _ := m.screen(); return f }
+	r, cmd := m.sel.Update(msg, m.selectionPanes, frame, now())
 	if r.Scroll != 0 && r.ScrollPane == "preview" {
-		// The same viewport scroll the wheel uses over the preview.
-		if r.Scroll < 0 {
-			m.preview.LineUp(-r.Scroll)
-		} else {
-			m.preview.LineDown(r.Scroll)
-		}
-	}
-	if r.Copy != "" {
-		cmd = selection.Copy(r.Copy)
+		m.preview.SetYOffset(r.Offset)
 	}
 	return cmd, r.Consumed
-}
-
-func copiedNotice(msg selection.CopiedMsg) string {
-	if msg.Err != nil {
-		return "copy failed: " + msg.Err.Error()
-	}
-	return fmt.Sprintf("copied %d chars", utf8.RuneCountInString(msg.Text))
 }

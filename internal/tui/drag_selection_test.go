@@ -2,16 +2,14 @@ package tui
 
 import (
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/keyolk/tuikit/selection"
-	"github.com/muesli/termenv"
+	"github.com/keyolk/tuikit/tuitest"
 	"github.com/sendbird/ccx/internal/session"
 )
 
@@ -28,47 +26,6 @@ func releaseAt(x, y int) tea.MouseMsg {
 func sendCmd(app *App, msg tea.Msg) (*App, tea.Cmd) {
 	m, cmd := app.Update(msg)
 	return m.(*App), cmd
-}
-
-// markSelection swaps the highlight for a style the test can find in the
-// frame: a 256-color background no other ccx style uses, on an ANSI renderer
-// (the default renderer in tests drops all styling).
-func markSelection(t *testing.T) string {
-	t.Helper()
-	r := lipgloss.NewRenderer(io.Discard)
-	r.SetColorProfile(termenv.ANSI256)
-	prev := selectionStyle
-	selectionStyle = r.NewStyle().Background(lipgloss.Color("201"))
-	t.Cleanup(func() { selectionStyle = prev })
-	return "\x1b[48;5;201m"
-}
-
-// highlighted returns, per screen row, the cells drawn with the selection
-// mark and the column the first one starts at.
-func highlighted(frame, mark string) map[int]struct {
-	x    int
-	text string
-} {
-	out := map[int]struct {
-		x    int
-		text string
-	}{}
-	for y, row := range strings.Split(frame, "\n") {
-		i := strings.Index(row, mark)
-		if i < 0 {
-			continue
-		}
-		rest := row[i+len(mark):]
-		end := strings.Index(rest, "\x1b[")
-		if end < 0 {
-			end = len(rest)
-		}
-		out[y] = struct {
-			x    int
-			text string
-		}{ansi.StringWidth(ansi.Strip(row[:i])), rest[:end]}
-	}
-	return out
 }
 
 // newSelectionApp is the sessions view with the preview open on a long plain
@@ -108,7 +65,6 @@ func (a *App) selectedText() string { return a.sel.Text(a.selectionPanes(), a.re
 
 func TestDragFromListTowardPreviewStaysInList(t *testing.T) {
 	app, _ := newSelectionApp(t)
-	mark := markSelection(t)
 	x, y := findCell(t, app, "s00  just now") // the list row, not the title
 	px, py := findCell(t, app, "doc-002")
 	app = send(app, press(x, y))
@@ -124,22 +80,19 @@ func TestDragFromListTowardPreviewStaysInList(t *testing.T) {
 	if !strings.Contains(got, "s00  just now") {
 		t.Fatalf("copy %q lost the list text under the press", got)
 	}
-	listW := app.sessSplit.ListWidth(app.width, app.splitRatio)
-	frame := app.View()
-	rows := highlighted(frame, mark)
-	if len(rows) == 0 {
+	runs := tuitest.Reversed(app.View())
+	if len(runs) == 0 {
 		t.Fatal("no highlight drawn")
 	}
-	for y, h := range rows {
-		if h.x+ansi.StringWidth(h.text) > listW || strings.Contains(h.text, "│") {
-			t.Fatalf("row %d highlight %q at %d crosses the list edge %d", y, h.text, h.x, listW)
+	for _, run := range runs {
+		if strings.Contains(run, "│") || strings.Contains(run, "doc-") {
+			t.Fatalf("highlight %q crosses the list edge into the preview", run)
 		}
 	}
 }
 
 func TestDragFromPreviewTowardListStaysInPreview(t *testing.T) {
 	app, _ := newSelectionApp(t)
-	mark := markSelection(t)
 	px, py := findCell(t, app, "doc-001")
 	lx, _ := findCell(t, app, "s00  just now")
 	// px is the preview's first column, inside the divider's resize grab
@@ -151,10 +104,11 @@ func TestDragFromPreviewTowardListStaysInPreview(t *testing.T) {
 	if got != "alpha ~/src/beta\nd" {
 		t.Fatalf("copy = %q, want the preview columns only", got)
 	}
-	for y, h := range highlighted(app.View(), mark) {
-		if h.x < px || strings.Contains(h.text, "│") || strings.Contains(h.text, "proj") {
-			t.Fatalf("row %d highlight %q at %d leaves the preview (starts at %d)", y, h.text, h.x, px)
-		}
+	// The first row is highlighted to the preview's right edge (the line's
+	// padding included); it must not reach the list on the left.
+	runs := tuitest.Reversed(app.View())
+	if len(runs) != 2 || strings.TrimRight(runs[0], " ") != "alpha ~/src/beta" || runs[1] != "d" {
+		t.Fatalf("highlight %q; want the copied preview cells only", runs)
 	}
 }
 
@@ -232,16 +186,15 @@ func TestPreviewDoubleClickSelectsWordNotEnter(t *testing.T) {
 
 func TestKeyClearsSelection(t *testing.T) {
 	app, _ := newSelectionApp(t)
-	mark := markSelection(t)
 	px, py := findCell(t, app, "alpha")
 	app = send(app, press(px, py))
 	app = send(app, motionAt(px+6, py))
 	app = send(app, releaseAt(px+6, py))
-	if !app.sel.Active() || len(highlighted(app.View(), mark)) == 0 {
+	if !app.sel.Active() || len(tuitest.Reversed(app.View())) == 0 {
 		t.Fatal("drag left no highlight")
 	}
 	app = send(app, tea.KeyMsg{Type: tea.KeyF12})
-	if app.sel.Active() || len(highlighted(app.View(), mark)) != 0 {
+	if app.sel.Active() || len(tuitest.Reversed(app.View())) != 0 {
 		t.Fatal("a key did not clear the selection")
 	}
 }
@@ -375,5 +328,52 @@ func TestDragInScrolledPreviewCopiesWhatIsShown(t *testing.T) {
 	app = send(app, releaseAt(px+6, py+1))
 	if got := app.selectedText(); got != "010 alpha ~/src/beta\ndoc-011" {
 		t.Fatalf("copy in a scrolled preview = %q", got)
+	}
+}
+
+// A drag above the top of a scrolled preview scrolls it up one line per
+// motion, to exactly the offset the selection reports: the copy keeps the
+// lines that scrolled in.
+func TestDragPastPreviewTopScrollsToSelectionOffset(t *testing.T) {
+	app, _ := newSelectionApp(t)
+	app.sessSplit.Preview.SetYOffset(30)
+	px, py := findCell(t, app, "doc-035")
+	app = send(app, press(px+4, py))
+	for range 5 {
+		app = send(app, motionAt(px+4, 0)) // the title row, above the preview
+	}
+	if got := app.sessSplit.Preview.YOffset; got != 25 {
+		t.Fatalf("preview offset after 5 motions above the top = %d, want 25", got)
+	}
+	app = send(app, releaseAt(px+4, 0))
+	if got := app.selectedText(); !strings.HasPrefix(got, "025 alpha") || !strings.Contains(got, "doc-034") {
+		t.Fatalf("copy %q; want line 025 (column of the drag) through the press line", got)
+	}
+}
+
+// A pointer resting below the preview sends no more motion; the selection's
+// auto-scroll tick keeps scrolling, and ccx must route the tick back to it.
+func TestDragRestingPastPreviewBottomAutoScrolls(t *testing.T) {
+	app, _ := newSelectionApp(t)
+	px, py := findCell(t, app, "doc-005")
+	app = send(app, press(px+4, py))
+	app, cmd := sendCmd(app, motionAt(px+4, app.height-1))
+	if cmd == nil {
+		t.Fatal("a drag past the bottom scheduled no auto-scroll tick")
+	}
+	start := app.sessSplit.Preview.YOffset
+	for range 3 {
+		tick, ok := app.sel.NextTick()
+		if !ok {
+			t.Fatal("no auto-scroll tick pending while the pointer rests past the edge")
+		}
+		app = send(app, tick)
+	}
+	if got := app.sessSplit.Preview.YOffset; got != start+3 {
+		t.Fatalf("offset after 3 ticks = %d, want %d", got, start+3)
+	}
+	app = send(app, releaseAt(px+4, app.height-1))
+	if _, ok := app.sel.NextTick(); ok {
+		t.Fatal("the release left an auto-scroll tick pending")
 	}
 }

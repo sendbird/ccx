@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/keyolk/tuikit/link"
 	"sort"
 	"strings"
 	"time"
@@ -589,7 +590,8 @@ func dayOutputLine(r dayOutputRow, day time.Time, width int, selected bool) stri
 		titleStyle = titleStyle.Foreground(colorBorderFocused)
 	}
 	stamp := dimStyle.Render(dayOutputTime(r.when, day, r.whenApprox)) + " "
-	head := cursor + stamp + outputGlyph(r.out) + " " + titleStyle.Render(r.out.Title)
+	// A PR/Jira/artifact title hides its URL: link the title, not the cursor.
+	head := cursor + stamp + outputGlyph(r.out) + " " + link.Wrap(r.out.URL, titleStyle.Render(r.out.Title))
 
 	anchor := dimStyle.Render("  " + r.shortID)
 	if r.sessions > 1 {

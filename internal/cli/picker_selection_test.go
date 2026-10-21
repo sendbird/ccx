@@ -2,16 +2,14 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/keyolk/tuikit/selection"
-	"github.com/muesli/termenv"
+	"github.com/keyolk/tuikit/tuitest"
 )
 
 func drag(x, y int) tea.MouseMsg {
@@ -47,18 +45,6 @@ func (m pickerModel) selText() string {
 	return m.sel.Text(m.selectionPanes(), frame)
 }
 
-// markPickerSelection swaps the highlight for a background the test can find
-// (the default test renderer drops styling).
-func markPickerSelection(t *testing.T) string {
-	t.Helper()
-	r := lipgloss.NewRenderer(io.Discard)
-	r.SetColorProfile(termenv.ANSI256)
-	prev := pickerSelectionStyle
-	pickerSelectionStyle = r.NewStyle().Background(lipgloss.Color("201"))
-	t.Cleanup(func() { pickerSelectionStyle = prev })
-	return "\x1b[48;5;201m"
-}
-
 func previewPicker(t *testing.T) (pickerModel, *pickerClock) {
 	t.Helper()
 	items := linkItems(3)
@@ -72,7 +58,6 @@ func previewPicker(t *testing.T) (pickerModel, *pickerClock) {
 
 func TestPickerDragFromListStopsAtPreview(t *testing.T) {
 	m, _ := previewPicker(t)
-	mark := markPickerSelection(t)
 	x, y := whereCell(t, m, "link-01")
 	px, py := whereCell(t, m, "ctx-03")
 	m = feed(m, click(x, y))
@@ -85,13 +70,13 @@ func TestPickerDragFromListStopsAtPreview(t *testing.T) {
 	if strings.Contains(got, "ctx-") || strings.Contains(got, "│") || !strings.Contains(got, "link-01") {
 		t.Fatalf("list drag copied %q; want list text only", got)
 	}
-	for _, row := range strings.Split(m.View(), "\n") {
-		if i := strings.Index(row, mark); i >= 0 {
-			rest := row[i+len(mark):]
-			cells := rest[:strings.Index(rest, "\x1b[")]
-			if ansi.StringWidth(ansi.Strip(row[:i]))+ansi.StringWidth(cells) > m.listWidth() || strings.Contains(cells, "│") {
-				t.Fatalf("highlight %q crosses the list edge %d", cells, m.listWidth())
-			}
+	runs := tuitest.Reversed(m.View())
+	if len(runs) == 0 {
+		t.Fatal("no highlight drawn")
+	}
+	for _, run := range runs {
+		if strings.Contains(run, "│") || strings.Contains(run, "ctx-") {
+			t.Fatalf("highlight %q crosses the list edge into the preview", run)
 		}
 	}
 }
@@ -224,5 +209,28 @@ func TestPickerHighlightSurvivesNoColor(t *testing.T) {
 	m = feed(m, drag(px+4, py))
 	if !strings.Contains(m.View(), "\x1b[7malpha") {
 		t.Fatal("the picker selection is not drawn in reverse video without color")
+	}
+}
+
+// The picker routes the selection's auto-scroll tick back to it, so a drag
+// resting below the preview keeps scrolling without more motion.
+func TestPickerDragRestingPastPreviewBottomAutoScrolls(t *testing.T) {
+	m, _ := previewPicker(t)
+	px, py := whereCell(t, m, "ctx-04")
+	m = feed(m, click(px, py))
+	m, cmd := feedCmd(m, drag(px+2, m.height-1))
+	if cmd == nil {
+		t.Fatal("a drag past the bottom scheduled no auto-scroll tick")
+	}
+	start := m.preview.YOffset
+	for range 4 {
+		tick, ok := m.sel.NextTick()
+		if !ok {
+			t.Fatal("no auto-scroll tick pending")
+		}
+		m = feed(m, tick)
+	}
+	if got := m.preview.YOffset; got != start+4 {
+		t.Fatalf("offset after 4 ticks = %d, want %d", got, start+4)
 	}
 }

@@ -51,6 +51,7 @@ type ActionsKeymap struct {
 	Input     string `yaml:"input"`
 	Jump      string `yaml:"jump"`
 	URLs      string `yaml:"urls"`
+	OpenLink  string `yaml:"open_link"`
 	Files     string `yaml:"files"`
 	Changes   string `yaml:"changes"`
 	Copy      string `yaml:"copy"`
@@ -251,6 +252,10 @@ func DefaultKeymap() Keymap {
 			Input:    "i",
 			Jump:     "j",
 			URLs:     "u",
+			// "o", the fleet-wide open-link key (tuikit link.Binding); it is
+			// free in the actions menu, unlike the session list (fold group)
+			// and the conversation (jump to origin turn).
+			OpenLink: "o",
 			Files:    "f",
 			Changes:  "g",
 			Copy:     "c",
@@ -466,6 +471,9 @@ func mergeKeymap(dst *Keymap, src Keymap) {
 	}
 	if src.Actions.URLs != "" {
 		dst.Actions.URLs = src.Actions.URLs
+	}
+	if src.Actions.OpenLink != "" {
+		dst.Actions.OpenLink = src.Actions.OpenLink
 	}
 	if src.Actions.Files != "" {
 		dst.Actions.Files = src.Actions.Files
