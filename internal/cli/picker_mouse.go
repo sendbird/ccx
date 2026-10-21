@@ -54,8 +54,15 @@ func (m pickerModel) listItemAt(msg tea.MouseMsg) (int, bool) {
 //     three lines (or move the artifact cursor three, which j/k does).
 //   - ref picker (opened by Enter on a multi-ref item): wheel moves its cursor,
 //     a click outside the preview is its Esc.
+//   - drag: pane-scoped text selection (picker_selection.go), handled first.
 //   - everything else, and anything while the search line owns input: ignored.
 func (m pickerModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Drag selection goes first, also while searching: selecting text never
+	// moves the search cursor or edits the term, it only reads the screen.
+	selCmd, consumed := m.handleSelectionMouse(msg)
+	if consumed {
+		return m, selCmd
+	}
 	if m.width == 0 || m.height == 0 || m.searching {
 		return m, nil
 	}

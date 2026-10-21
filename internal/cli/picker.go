@@ -16,6 +16,7 @@ import (
 	tk "github.com/keyolk/tuikit/kitty"
 	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/render"
+	"github.com/keyolk/tuikit/selection"
 	"github.com/mattn/go-runewidth"
 	"github.com/sendbird/ccx/internal/extract"
 	"github.com/sendbird/ccx/internal/kitty"
@@ -122,6 +123,11 @@ type pickerModel struct {
 	// clicks remembers the last row press so a second press on the same row
 	// is Enter.
 	clicks pickerClicks
+
+	// sel is the drag selection (picker_selection.go); notice is the footer
+	// line reporting its copy, shown until the next key or press.
+	sel    selection.Selection
+	notice string
 
 	// langmap maps CJK jamo/letters to the Latin key at the same physical
 	// position, so picker shortcuts fire under a CJK input source.
@@ -283,10 +289,16 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, kittyPaneCmd(kitty.PaneCmd(), false)
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+	case selection.CopiedMsg:
+		m.notice = copiedNotice(msg)
+		return m, nil
 	case tea.KeyMsg:
 		// A key between two clicks breaks the pair: click, move away and back
 		// by keyboard, click again must not count as a double click.
 		m.clicks.clicks = mouse.Clicks{}
+		// A key also ends a drag selection's highlight and its copy notice.
+		m.sel.Clear()
+		m.notice = ""
 		if msg.String() == "ctrl+c" {
 			m.quit = true
 			return m, tea.Quit
@@ -933,9 +945,12 @@ func (m pickerModel) listFirstVisible(contentH int) int {
 	return 0
 }
 
-func (m pickerModel) View() string {
+// screen draws the picker without the drag-selection highlight; image is the
+// Kitty layer, kept apart because it is cursor-positioned escape output that
+// the highlight must not cut and selection must not read as text.
+func (m pickerModel) screen() (frame, image string) {
 	if m.width == 0 || m.height == 0 {
-		return ""
+		return "", ""
 	}
 
 	listW := m.listWidth()
@@ -1063,7 +1078,11 @@ func (m pickerModel) View() string {
 		))
 	}
 
-	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, listBox, previewBox) + "\n" + footer + m.kittyImageLayer(contentH, listW, pw)
+	if m.notice != "" {
+		footer = dim.Render(truncateWidth(m.notice, m.width))
+	}
+
+	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, listBox, previewBox) + "\n" + footer, m.kittyImageLayer(contentH, listW, pw)
 }
 
 // fitHint returns the first hint variant that fits in width cells, falling back

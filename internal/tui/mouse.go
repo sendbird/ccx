@@ -12,6 +12,12 @@ import (
 const mouseScrollLines = mouse.WheelRows
 
 func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Drag selection sees the event first, so a drag inside an overlay or a
+	// pane selects text instead of reaching the click handlers below.
+	selCmd, consumed := a.handleSelectionMouse(msg)
+	if consumed {
+		return a, selCmd
+	}
 	// Overlays own the mouse while open: nothing below may see the event.
 	if m, cmd, handled := a.handleOverlayMouse(msg); handled {
 		return m, cmd

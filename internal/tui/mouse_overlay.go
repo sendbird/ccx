@@ -101,16 +101,16 @@ func (a *App) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd, bool) {
 
 // overlayRect is the screen rectangle the open overlay covers. Overlays are
 // drawn by a dozen render paths with their own sizing, so rather than repeat
-// that arithmetic it renders View twice, with and without the overlay, and
+// that arithmetic it renders the screen twice, with and without the overlay, and
 // takes the bounding box of the cells that differ. The rows reserved for the
 // title and footer are skipped because overlays rewrite the footer hint.
 func (a *App) overlayRect() mouse.Rect {
-	with := screenCells(a.View())
+	with := screenCells(a.renderScreen())
 	base := *a
 	for _, o := range mouseOverlays {
 		o.close(&base)
 	}
-	without := screenCells(base.View())
+	without := screenCells(base.renderScreen())
 
 	minX, minY, maxX, maxY := -1, -1, -1, -1
 	for y := 1; y < len(with)-1; y++ {
